@@ -288,38 +288,47 @@ pub async fn history_search(
 
     let max_hits = limit.unwrap_or(100).max(1);
     let files = collect_session_files(source.as_deref());
-    let mut hits = Vec::new();
+    let mut hits: Vec<HistorySearchResult> = Vec::new();
 
     for file_ref in files {
-        let detail = match build_session_detail(&file_ref) {
-            Ok(detail) => detail,
-            Err(err) => {
-                debug!(
-                    "history_search skip unreadable file: path={}, err={}",
-                    file_ref.path.to_string_lossy(),
-                    err
-                );
-                continue;
-            }
-        };
+        let computed = get_or_scan_session_computation(&file_ref);
+        let file_path_str = file_ref.path.to_string_lossy().to_string();
+        let title = computed.title.clone();
+        let session_id = computed.session_id.clone();
+        let source_name = file_ref.source.clone();
+        let project_key = file_ref.project_key.clone();
+        let mut local_full = false;
 
-        for msg in detail.messages {
+        let scan_result = iter_session_messages(&file_ref.path, |_, msg| {
             if !msg.content.to_lowercase().contains(&normalized_query) {
-                continue;
+                return true;
             }
             hits.push(HistorySearchResult {
-                session_id: detail.session_id.clone(),
-                source: detail.source.clone(),
-                project_key: detail.project_key.clone(),
-                title: detail.title.clone(),
-                file_path: detail.file_path.clone(),
+                session_id: session_id.clone(),
+                source: source_name.clone(),
+                project_key: project_key.clone(),
+                title: title.clone(),
+                file_path: file_path_str.clone(),
                 role: msg.role,
                 snippet: excerpt(&msg.content, 180),
                 timestamp: msg.timestamp,
             });
             if hits.len() >= max_hits {
-                return Ok(hits);
+                local_full = true;
+                return false;
             }
+            true
+        });
+        if let Err(err) = scan_result {
+            debug!(
+                "history_search skip unreadable file: path={}, err={}",
+                file_ref.path.to_string_lossy(),
+                err
+            );
+            continue;
+        }
+        if local_full {
+            return Ok(hits);
         }
     }
 
@@ -351,7 +360,7 @@ pub async fn history_list_prompts(
         .filter(|q| !q.is_empty());
     let max_items = limit.unwrap_or(200).clamp(1, 2000);
     let files = collect_session_files(source.as_deref());
-    let mut prompts = Vec::new();
+    let mut prompts: Vec<HistoryPromptItem> = Vec::new();
 
     for file_ref in files {
         if let Some(project) = &target_project {
@@ -370,56 +379,56 @@ pub async fn history_list_prompts(
             }
         }
 
-        let detail = match build_session_detail(&file_ref) {
-            Ok(detail) => detail,
-            Err(err) => {
-                debug!(
-                    "history_list_prompts skip unreadable file: path={}, err={}",
-                    file_ref.path.to_string_lossy(),
-                    err
-                );
-                continue;
-            }
-        };
-        let session_id = detail.session_id;
-        let source = detail.source;
-        let project_key = detail.project_key;
-        let file_path = detail.file_path;
-        let session_title = detail.title;
-        let updated_at = detail.updated_at;
+        let computed = get_or_scan_session_computation(&file_ref);
+        let session_id = computed.session_id.clone();
+        let source_name = file_ref.source.clone();
+        let project_key_owned = file_ref.project_key.clone();
+        let file_path_str = file_ref.path.to_string_lossy().to_string();
+        let session_title = computed.title.clone();
+        let updated_at = computed.updated_at;
+        let title_lower = session_title.to_lowercase();
+        let mut local_full = false;
 
-        for (message_index, msg) in detail.messages.into_iter().enumerate() {
+        let scan_result = iter_session_messages(&file_ref.path, |index, msg| {
             if msg.role != "user" {
-                continue;
+                return true;
             }
             let prompt = normalize_text(&msg.content);
             if prompt.is_empty() {
-                continue;
+                return true;
             }
             if let Some(q) = &normalized_query {
                 let prompt_lower = prompt.to_lowercase();
-                let title_lower = session_title.to_lowercase();
                 if !prompt_lower.contains(q) && !title_lower.contains(q) {
-                    continue;
+                    return true;
                 }
             }
             prompts.push(HistoryPromptItem {
                 session_id: session_id.clone(),
-                source: source.clone(),
-                project_key: project_key.clone(),
-                file_path: file_path.clone(),
+                source: source_name.clone(),
+                project_key: project_key_owned.clone(),
+                file_path: file_path_str.clone(),
                 session_title: session_title.clone(),
                 updated_at,
-                message_index,
+                message_index: index,
                 prompt,
                 timestamp: msg.timestamp,
             });
             if prompts.len() >= max_items {
-                break;
+                local_full = true;
+                return false;
             }
+            true
+        });
+        if let Err(err) = scan_result {
+            debug!(
+                "history_list_prompts skip unreadable file: path={}, err={}",
+                file_ref.path.to_string_lossy(),
+                err
+            );
+            continue;
         }
-
-        if prompts.len() >= max_items {
+        if local_full {
             break;
         }
     }
@@ -685,8 +694,7 @@ fn scan_session_computation(
     created_at: i64,
     updated_at: i64,
 ) -> CachedSessionComputation {
-    let summary_scan = scan_session_summary(path);
-    let stats = scan_session_stats(path);
+    let (summary_scan, stats) = scan_session_combined(path);
     let session_id = path
         .file_stem()
         .map(|v| v.to_string_lossy().to_string())
@@ -734,46 +742,18 @@ fn build_session_summary(file_ref: &SessionFileRef) -> HistorySessionSummary {
 }
 
 fn build_session_detail(file_ref: &SessionFileRef) -> Result<HistorySessionDetail, String> {
-    let (created_at, updated_at) = file_timestamps(&file_ref.path);
+    let computed = get_or_scan_session_computation(file_ref);
     let messages = read_session_messages(&file_ref.path)?;
-    let message_count = messages.len();
-    let mut first_user = None;
-    let mut first_any = None;
-
-    for msg in &messages {
-        if first_any.is_none() && !msg.content.trim().is_empty() {
-            first_any = Some(msg.content.clone());
-        }
-        if first_user.is_none() && msg.role == "user" && !msg.content.trim().is_empty() {
-            first_user = Some(msg.content.clone());
-        }
-        if first_any.is_some() && first_user.is_some() {
-            break;
-        }
-    }
-
-    let branch = read_branch_hint(&file_ref.path);
-    let session_id = file_ref
-        .path
-        .file_stem()
-        .map(|v| v.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown-session".to_string());
-    let title = first_user
-        .or(first_any)
-        .map(|text| excerpt(&text, 80))
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| session_id.clone());
-
     Ok(HistorySessionDetail {
-        session_id,
+        session_id: computed.session_id,
         source: file_ref.source.clone(),
         project_key: file_ref.project_key.clone(),
-        title,
+        title: computed.title,
         file_path: file_ref.path.to_string_lossy().to_string(),
-        created_at,
-        updated_at,
-        message_count,
-        branch,
+        created_at: computed.created_at,
+        updated_at: computed.updated_at,
+        message_count: messages.len(),
+        branch: computed.branch,
         messages,
     })
 }
@@ -905,23 +885,30 @@ fn path_to_key(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn scan_session_summary(path: &Path) -> SessionSummaryScan {
+/// Single-pass scan that yields both summary and stats from one read.
+fn scan_session_combined(path: &Path) -> (SessionSummaryScan, SessionStatsScan) {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(_) => {
-            return SessionSummaryScan {
-                message_count: 0,
-                first_user_message: None,
-                first_message: None,
-                branch: None,
-            }
+            return (
+                SessionSummaryScan {
+                    message_count: 0,
+                    first_user_message: None,
+                    first_message: None,
+                    branch: None,
+                },
+                SessionStatsScan::default(),
+            );
         }
     };
 
     let mut message_count = 0usize;
-    let mut first_user_message = None;
-    let mut first_message = None;
-    let mut branch = None;
+    let mut first_user_message: Option<String> = None;
+    let mut first_message: Option<String> = None;
+    let mut branch: Option<String> = None;
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    let mut model_hits: HashMap<String, usize> = HashMap::new();
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let trimmed = line.trim();
@@ -944,71 +931,6 @@ fn scan_session_summary(path: &Path) -> SessionSummaryScan {
                 first_user_message = Some(msg.content);
             }
         }
-    }
-
-    SessionSummaryScan {
-        message_count,
-        first_user_message,
-        first_message,
-        branch,
-    }
-}
-
-fn read_branch_hint(path: &Path) -> Option<String> {
-    let file = File::open(path).ok()?;
-    for line in BufReader::new(file).lines().map_while(Result::ok).take(200) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-        if let Some(branch) = extract_branch(&value) {
-            return Some(branch);
-        }
-    }
-    None
-}
-
-fn read_session_messages(path: &Path) -> Result<Vec<HistoryMessage>, String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
-    let mut messages = Vec::new();
-
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-        if let Some(msg) = parse_message(&value) {
-            messages.push(msg);
-        }
-    }
-
-    Ok(messages)
-}
-
-fn scan_session_stats(path: &Path) -> SessionStatsScan {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(_) => return SessionStatsScan::default(),
-    };
-
-    let mut input_tokens = 0u64;
-    let mut output_tokens = 0u64;
-    let mut model_hits: HashMap<String, usize> = HashMap::new();
-
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
 
         let (input, output) = extract_usage_tokens(&value);
         input_tokens = input_tokens.saturating_add(input);
@@ -1028,11 +950,53 @@ fn scan_session_stats(path: &Path) -> SessionStatsScan {
         })
         .map(|(model, _)| model);
 
-    SessionStatsScan {
-        input_tokens,
-        output_tokens,
-        dominant_model,
+    (
+        SessionSummaryScan {
+            message_count,
+            first_user_message,
+            first_message,
+            branch,
+        },
+        SessionStatsScan {
+            input_tokens,
+            output_tokens,
+            dominant_model,
+        },
+    )
+}
+
+/// Stream parsed messages from a session file. Callback returns `false` to break early.
+fn iter_session_messages<F>(path: &Path, mut callback: F) -> Result<(), String>
+where
+    F: FnMut(usize, HistoryMessage) -> bool,
+{
+    let file = File::open(path).map_err(|err| err.to_string())?;
+    let mut index = 0usize;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if let Some(msg) = parse_message(&value) {
+            if !callback(index, msg) {
+                return Ok(());
+            }
+            index += 1;
+        }
     }
+    Ok(())
+}
+
+fn read_session_messages(path: &Path) -> Result<Vec<HistoryMessage>, String> {
+    let mut messages = Vec::new();
+    iter_session_messages(path, |_, msg| {
+        messages.push(msg);
+        true
+    })?;
+    Ok(messages)
 }
 
 fn extract_usage_tokens(value: &Value) -> (u64, u64) {

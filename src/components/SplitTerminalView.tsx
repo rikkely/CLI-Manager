@@ -37,15 +37,30 @@ export function SplitTerminalView({
 
       const rect = container.getBoundingClientRect();
       const isH = split.direction === "horizontal";
+      let latestRatio = split.ratio;
+      let rafId: number | null = null;
+
+      const flush = () => {
+        rafId = null;
+        setSplitRatio(sessionId, latestRatio);
+      };
 
       const onMove = (ev: MouseEvent) => {
-        const ratio = isH
+        latestRatio = isH
           ? (ev.clientX - rect.left) / rect.width
           : (ev.clientY - rect.top) / rect.height;
-        setSplitRatio(sessionId, ratio);
+        if (rafId === null) {
+          rafId = requestAnimationFrame(flush);
+        }
       };
 
       const onUp = () => {
+        if (rafId !== null) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        // Final commit on release; persists once instead of per-mousemove
+        setSplitRatio(sessionId, latestRatio);
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
         document.body.style.cursor = "";

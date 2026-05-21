@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { HistoryStatsDailySeriesItem } from "../../lib/types";
 
 interface StatsTokenTrendChartProps {
@@ -34,7 +34,9 @@ function linePath(points: TrendPoint[], key: "inputY" | "outputY"): string {
     .join(" ");
 }
 
-export function StatsTokenTrendChart({ items }: StatsTokenTrendChartProps) {
+export const StatsTokenTrendChart = memo(StatsTokenTrendChartImpl);
+
+function StatsTokenTrendChartImpl({ items }: StatsTokenTrendChartProps) {
   const [hoverDayStart, setHoverDayStart] = useState<number | null>(null);
   const chartHeight = 220;
   const paddingX = 18;

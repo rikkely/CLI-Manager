@@ -7,7 +7,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getTerminalTheme, getTerminalBackground } from "../lib/terminalThemes";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
 import { useTerminalStore } from "../stores/terminalStore";
-import type { LightThemePalette, DarkThemePalette } from "../stores/settingsStore";
+import { useSettingsStore, type LightThemePalette, type DarkThemePalette } from "../stores/settingsStore";
+
+const FONT_SIZE_MIN = 8;
+const FONT_SIZE_MAX = 32;
 import { toast } from "sonner";
 import { logError } from "../lib/logger";
 
@@ -31,6 +34,9 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   const isComposingRef = useRef(false);
   const isActiveRef = useRef(isActive);
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const inactiveBufferRef = useRef<string[]>([]);
+  const inactiveBufferSizeRef = useRef(0);
+  const INACTIVE_BUFFER_MAX = 1024 * 1024;
 
   const scheduleFit = (force = false) => {
     if (fitRafRef.current !== null) {
@@ -52,17 +58,31 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     logError("PTY write failed in XTermTerminal", { sessionId, stage, err });
   };
 
-  // Update theme when resolvedTheme or terminalThemeName changes (without recreating terminal)
+  // Hot-update theme / fontSize / fontFamily without recreating the terminal.
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.options.theme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.theme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    const sizeChanged = terminal.options.fontSize !== fontSize || terminal.options.fontFamily !== fontFamily;
+    if (sizeChanged) {
+      terminal.options.fontSize = fontSize;
+      terminal.options.fontFamily = fontFamily;
+      scheduleFit(true);
     }
-  }, [resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette]);
+  }, [fontSize, fontFamily, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette]);
 
   // Refit terminal when tab becomes active
   useEffect(() => {
+    const wasActive = isActiveRef.current;
     isActiveRef.current = isActive;
     if (isActive && fitAddonRef.current && containerRef.current) {
+      // Flush data stashed while this tab was hidden
+      if (!wasActive && inactiveBufferRef.current.length > 0 && terminalRef.current) {
+        const combined = inactiveBufferRef.current.join("");
+        inactiveBufferRef.current = [];
+        inactiveBufferSizeRef.current = 0;
+        terminalRef.current.write(combined);
+      }
       // Wait one frame to ensure display:block has taken effect and layout is stable.
       scheduleFit(true);
       terminalRef.current?.focus();
@@ -87,8 +107,10 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
 
+    let webglAddon: WebglAddon | null = null;
     try {
-      terminal.loadAddon(new WebglAddon());
+      webglAddon = new WebglAddon();
+      terminal.loadAddon(webglAddon);
     } catch {
       // WebGL not supported, fall back to canvas
     }
@@ -174,15 +196,46 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     });
 
     // Listen for PTY output (Base64 encoded to preserve control characters)
+    // Batch chunks per animation frame to keep main thread responsive on high-throughput output.
     let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    let pendingChunks: string[] = [];
+    let writeRafId: number | null = null;
+    const flushPendingWrites = () => {
+      writeRafId = null;
+      if (cancelled || pendingChunks.length === 0) return;
+      const combined = pendingChunks.length === 1 ? pendingChunks[0] : pendingChunks.join("");
+      pendingChunks = [];
+      terminal.write(combined);
+    };
     listen<string>(`pty-output-${sessionId}`, (event) => {
-      // Decode Base64 to Uint8Array, then decode UTF-8 for xterm.js
+      if (cancelled) return;
       const binaryString = atob(event.payload);
       const bytes = Uint8Array.from(binaryString, (c) => c.charCodeAt(0));
       const text = new TextDecoder("utf-8").decode(bytes);
-      terminal.write(text);
+      if (isActiveRef.current) {
+        pendingChunks.push(text);
+        if (writeRafId === null) {
+          writeRafId = requestAnimationFrame(flushPendingWrites);
+        }
+      } else {
+        // Tab hidden — stash to a bounded ring buffer; flush when reactivated
+        inactiveBufferRef.current.push(text);
+        inactiveBufferSizeRef.current += text.length;
+        while (
+          inactiveBufferSizeRef.current > INACTIVE_BUFFER_MAX &&
+          inactiveBufferRef.current.length > 1
+        ) {
+          const removed = inactiveBufferRef.current.shift();
+          if (removed) inactiveBufferSizeRef.current -= removed.length;
+        }
+      }
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
     });
 
     const textarea = containerRef.current.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement | null;
@@ -197,6 +250,20 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
     textarea?.addEventListener("compositionstart", onCompositionStart);
     textarea?.addEventListener("compositionend", onCompositionEnd);
+
+    // Ctrl + wheel adjusts global font size (writes settings store, like Windows Terminal but persistent).
+    const wheelTarget = containerRef.current;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const current = useSettingsStore.getState().fontSize;
+      const next = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, current + (e.deltaY > 0 ? -1 : 1)));
+      if (next !== current) {
+        void useSettingsStore.getState().update("fontSize", next);
+      }
+    };
+    wheelTarget.addEventListener("wheel", onWheel, { passive: false, capture: true });
 
     // Resize observer — skip fit when container is hidden or IME composition is active.
     const resizeObserver = new ResizeObserver((entries) => {
@@ -222,19 +289,29 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     }
 
     return () => {
+      cancelled = true;
       textarea?.removeEventListener("compositionstart", onCompositionStart);
       textarea?.removeEventListener("compositionend", onCompositionEnd);
+      wheelTarget.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
       resizeObserver.disconnect();
       if (fitRafRef.current !== null) {
         cancelAnimationFrame(fitRafRef.current);
         fitRafRef.current = null;
       }
+      if (writeRafId !== null) {
+        cancelAnimationFrame(writeRafId);
+        writeRafId = null;
+      }
+      pendingChunks = [];
+      inactiveBufferRef.current = [];
+      inactiveBufferSizeRef.current = 0;
       unlisten?.();
+      webglAddon?.dispose();
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [sessionId, fontSize, fontFamily, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette]);
+  }, [sessionId]);
 
   return (
     <div

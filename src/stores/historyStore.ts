@@ -85,6 +85,7 @@ interface HistoryStore {
 const DEFAULT_SESSION_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 120;
 const STATS_CACHE_TTL_MS = 15_000;
+const STATS_CACHE_MAX = 16;
 
 interface StatsCacheEntry {
   payload: HistoryStatsPayload;
@@ -93,6 +94,26 @@ interface StatsCacheEntry {
 }
 
 const statsCache = new Map<string, StatsCacheEntry>();
+
+function statsCacheGet(key: string): StatsCacheEntry | undefined {
+  const entry = statsCache.get(key);
+  if (entry) {
+    // Refresh LRU recency
+    statsCache.delete(key);
+    statsCache.set(key, entry);
+  }
+  return entry;
+}
+
+function statsCacheSet(key: string, entry: StatsCacheEntry): void {
+  if (statsCache.has(key)) {
+    statsCache.delete(key);
+  } else if (statsCache.size >= STATS_CACHE_MAX) {
+    const oldestKey = statsCache.keys().next().value;
+    if (oldestKey !== undefined) statsCache.delete(oldestKey);
+  }
+  statsCache.set(key, entry);
+}
 
 function asString(value: unknown): string {
   if (typeof value === "string") return value;
@@ -598,7 +619,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const cacheKey = makeStatsCacheKey(sourceFilter, projectKey, rangeDays);
     const now = Date.now();
     const fingerprint = sessionsFingerprint(get().sessions);
-    const cached = statsCache.get(cacheKey);
+    const cached = statsCacheGet(cacheKey);
     const stopPerf = createPerfMarker("stats.load", {
       sourceFilter,
       projectKey: projectKey ?? "__all__",
@@ -633,7 +654,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       });
       const payload = normalizeStats(statsRaw);
       const cachedAt = Date.now();
-      statsCache.set(cacheKey, {
+      statsCacheSet(cacheKey, {
         payload,
         cachedAt,
         sessionsFingerprint: fingerprint,

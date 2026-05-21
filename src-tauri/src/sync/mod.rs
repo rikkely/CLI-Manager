@@ -65,12 +65,12 @@ pub async fn upload(config: WebDavConfig, data: SyncData) -> Result<(), String> 
         })?;
 
     info!("Serializing sync data");
-    let json = serde_json::to_string_pretty(&data)
+    let json = serde_json::to_string(&data)
         .map_err(|e| format!("Failed to serialize sync data: {}", e))?;
 
     info!("Uploading to {}", SYNC_FILE_PATH);
     client
-        .upload(SYNC_FILE_PATH, json.as_bytes())
+        .upload(SYNC_FILE_PATH, json.into_bytes())
         .await
         .map_err(|e| {
             error!("Upload failed: {}", e);
@@ -89,10 +89,7 @@ pub async fn download(config: WebDavConfig) -> Result<SyncData, String> {
         .await
         .map_err(|e| e.message)?;
 
-    let json_str = String::from_utf8(data)
-        .map_err(|e| format!("Invalid UTF-8 in sync data: {}", e))?;
-
-    let sync_data: SyncData = serde_json::from_str(&json_str)
+    let sync_data: SyncData = serde_json::from_slice(&data)
         .map_err(|e| format!("Failed to parse sync data: {}", e))?;
 
     Ok(sync_data)

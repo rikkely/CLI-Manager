@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { HistoryStatsHourlyActivityItem } from "../../lib/types";
 
 interface StatsHourlyActivityChartProps {
@@ -14,7 +14,9 @@ function formatHour(hour: number): string {
   return `${hour.toString().padStart(2, "0")}:00`;
 }
 
-export function StatsHourlyActivityChart({ items }: StatsHourlyActivityChartProps) {
+export const StatsHourlyActivityChart = memo(StatsHourlyActivityChartImpl);
+
+function StatsHourlyActivityChartImpl({ items }: StatsHourlyActivityChartProps) {
   const [activeHour, setActiveHour] = useState<number | null>(null);
   const normalized = useMemo(() => {
     if (items.length === 24) return items;

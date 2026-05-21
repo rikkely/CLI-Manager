@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { HistoryStatsHeatmapDay } from "../../lib/types";
 
 type TrendMetric = "sessions" | "messages";
@@ -42,7 +42,9 @@ function areaPath(points: ChartPoint[], baselineY: number, key: PointKey): strin
   return `${start} ${middle} ${end}`;
 }
 
-export function StatsTrendChart({ days, selectedDayStart, onSelectDay }: StatsTrendChartProps) {
+export const StatsTrendChart = memo(StatsTrendChartImpl);
+
+function StatsTrendChartImpl({ days, selectedDayStart, onSelectDay }: StatsTrendChartProps) {
   const [hoverDayStart, setHoverDayStart] = useState<number | null>(null);
   const [visible, setVisible] = useState({ sessions: true, messages: true });
   const chartHeight = 228;

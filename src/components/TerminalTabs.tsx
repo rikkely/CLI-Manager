@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useShallow } from "zustand/shallow";
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -76,7 +77,20 @@ function SortableTab({ id, title, isActive, status, onActivate, onClose, onConte
 }
 
 export function TerminalTabs() {
-  const { sessions, activeSessionId, sessionStatuses, splits, setActive, closeSession, createSession, reorderSessions, splitTerminal, unsplitTerminal } = useTerminalStore();
+  const { sessions, activeSessionId, sessionStatuses, splits } = useTerminalStore(
+    useShallow((s) => ({
+      sessions: s.sessions,
+      activeSessionId: s.activeSessionId,
+      sessionStatuses: s.sessionStatuses,
+      splits: s.splits,
+    }))
+  );
+  const setActive = useTerminalStore((s) => s.setActive);
+  const closeSession = useTerminalStore((s) => s.closeSession);
+  const createSession = useTerminalStore((s) => s.createSession);
+  const reorderSessions = useTerminalStore((s) => s.reorderSessions);
+  const splitTerminal = useTerminalStore((s) => s.splitTerminal);
+  const unsplitTerminal = useTerminalStore((s) => s.unsplitTerminal);
   const projects = useProjectStore((s) => s.projects);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
   const fontSize = useSettingsStore((s) => s.fontSize);

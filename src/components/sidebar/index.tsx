@@ -1,4 +1,5 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
+import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus } from "../../stores/terminalStore";
@@ -6,7 +7,6 @@ import { useSettingsStore } from "../../stores/settingsStore";
 import type { Project, TreeNode as TNode, Group } from "../../lib/types";
 import { ConfigModal } from "../ConfigModal";
 import { ConfirmDialog } from "../ConfirmDialog";
-import { SettingsModal } from "../SettingsModal";
 import { openWindowsTerminal } from "../../lib/externalTerminal";
 import { TreeContext, type TreeActions } from "./TreeContext";
 import { Portal } from "../ui/Portal";
@@ -19,6 +19,7 @@ import { SidebarFooter } from "./SidebarFooter";
 
 interface SidebarProps {
   onOpenStats?: () => void;
+  onOpenSettings: () => void;
   compactMode?: boolean;
 }
 
@@ -37,21 +38,29 @@ function normalizePersistedSidebarWidth(width: number): number {
   return clampExpandedSidebarWidth(width);
 }
 
-export function Sidebar({ onOpenStats, compactMode = false }: SidebarProps) {
+export function Sidebar({ onOpenStats, onOpenSettings, compactMode = false }: SidebarProps) {
   const {
     tree,
     projects,
     groups,
     searchQuery,
-    setSearchQuery,
-    fetchAll,
-    deleteProject,
-    createGroup,
-    renameGroup,
-    deleteGroup,
     projectHealth,
-    reorderItems,
-  } = useProjectStore();
+  } = useProjectStore(
+    useShallow((s) => ({
+      tree: s.tree,
+      projects: s.projects,
+      groups: s.groups,
+      searchQuery: s.searchQuery,
+      projectHealth: s.projectHealth,
+    }))
+  );
+  const setSearchQuery = useProjectStore((s) => s.setSearchQuery);
+  const fetchAll = useProjectStore((s) => s.fetchAll);
+  const deleteProject = useProjectStore((s) => s.deleteProject);
+  const createGroup = useProjectStore((s) => s.createGroup);
+  const renameGroup = useProjectStore((s) => s.renameGroup);
+  const deleteGroup = useProjectStore((s) => s.deleteGroup);
+  const reorderItems = useProjectStore((s) => s.reorderItems);
   const createSession = useTerminalStore((s) => s.createSession);
   const sessions = useTerminalStore((s) => s.sessions);
   const sessionStatuses = useTerminalStore((s) => s.sessionStatuses);
@@ -98,7 +107,6 @@ export function Sidebar({ onOpenStats, compactMode = false }: SidebarProps) {
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [newGroupParentId, setNewGroupParentId] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -690,7 +698,7 @@ export function Sidebar({ onOpenStats, compactMode = false }: SidebarProps) {
             void updateSetting("viewMode", viewMode === "compact" ? "standard" : "compact");
           }}
           onOpenStats={onOpenStats}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={onOpenSettings}
         />
       </div>
 
@@ -846,9 +854,6 @@ export function Sidebar({ onOpenStats, compactMode = false }: SidebarProps) {
         onConfirm={confirmDialog?.onConfirm ?? (() => {})}
         onClose={() => setConfirmAction(null)}
       />
-      <Portal>
-        <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
-      </Portal>
 
       {!compactMode && (
         <div

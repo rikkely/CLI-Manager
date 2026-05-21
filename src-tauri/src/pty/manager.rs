@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use log::{debug, error, info};
 use base64::Engine;
@@ -12,6 +13,7 @@ pub struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    reader_handle: Option<JoinHandle<()>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -21,7 +23,7 @@ pub struct PtyProcessStatus {
 }
 
 pub struct PtyManager {
-    sessions: Mutex<HashMap<String, PtySession>>,
+    sessions: Mutex<HashMap<String, Arc<Mutex<PtySession>>>>,
     statuses: Arc<Mutex<HashMap<String, PtyProcessStatus>>>,
 }
 
@@ -117,8 +119,8 @@ impl PtyManager {
             },
         );
 
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+        let reader_handle = std::thread::spawn(move || {
+            let mut buf = [0u8; 16384];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
@@ -160,11 +162,12 @@ impl PtyManager {
             let _ = app_handle.emit(&status_event, new_status);
         });
 
-        let session = PtySession {
+        let session = Arc::new(Mutex::new(PtySession {
             writer,
             master: pair.master,
             child,
-        };
+            reader_handle: Some(reader_handle),
+        }));
         self.sessions
             .lock()
             .unwrap()
@@ -174,14 +177,16 @@ impl PtyManager {
     }
 
     pub fn write(&self, session_id: &str, data: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let session = sessions
-            .get_mut(session_id)
-            .ok_or_else(|| {
-                let msg = format!("Session {session_id} not found");
-                error!("pty write failed: {}", msg);
-                msg
-            })?;
+        let session_arc = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions.get(session_id).cloned()
+        }
+        .ok_or_else(|| {
+            let msg = format!("Session {session_id} not found");
+            error!("pty write failed: {}", msg);
+            msg
+        })?;
+        let mut session = session_arc.lock().unwrap();
         session
             .writer
             .write_all(data.as_bytes())
@@ -197,14 +202,16 @@ impl PtyManager {
     }
 
     pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let sessions = self.sessions.lock().unwrap();
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| {
-                let msg = format!("Session {session_id} not found");
-                error!("pty resize failed: {}", msg);
-                msg
-            })?;
+        let session_arc = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions.get(session_id).cloned()
+        }
+        .ok_or_else(|| {
+            let msg = format!("Session {session_id} not found");
+            error!("pty resize failed: {}", msg);
+            msg
+        })?;
+        let session = session_arc.lock().unwrap();
         debug!(
             "pty resize: session_id={}, cols={}, rows={}",
             session_id, cols, rows
@@ -224,12 +231,23 @@ impl PtyManager {
     }
 
     pub fn close(&self, session_id: &str) -> Result<(), String> {
-        let session = {
+        let session_arc = {
             let mut sessions = self.sessions.lock().unwrap();
             sessions.remove(session_id)
         };
-        if let Some(session) = session {
-            let _ = session.child.lock().unwrap().kill();
+        if let Some(session_arc) = session_arc {
+            // Kill child first, take reader handle out, then drop the Arc.
+            // Dropping the last Arc releases the master PTY, which causes the
+            // reader thread to observe EOF and exit promptly.
+            let reader_handle = {
+                let mut session = session_arc.lock().unwrap();
+                let _ = session.child.lock().unwrap().kill();
+                session.reader_handle.take()
+            };
+            drop(session_arc);
+            if let Some(handle) = reader_handle {
+                let _ = handle.join();
+            }
             info!("pty session killed: id={}", session_id);
         } else {
             debug!("pty close requested for missing session: id={}", session_id);

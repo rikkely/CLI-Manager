@@ -9,6 +9,7 @@ export type DarkThemePalette = "night-indigo" | "forest-night" | "graphite-red" 
 export type TerminalThemeMode = "follow-app" | "independent";
 export type SidebarDensity = "compact" | "comfortable";
 export type ViewMode = "standard" | "compact";
+export type CloseBehavior = "ask" | "minimize" | "exit";
 export type ShortcutAction = "newTerminal" | "closeTerminal" | "nextTab" | "prevTab" | "commandPalette";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
 
@@ -27,6 +28,7 @@ interface Settings {
   terminalThemeName: string;
   sidebarDensity: SidebarDensity;
   viewMode: ViewMode;
+  closeBehavior: CloseBehavior;
   keyboardShortcuts: KeyboardShortcutMap;
 }
 
@@ -37,6 +39,7 @@ interface SettingsStore extends Settings {
   update: <K extends keyof Settings>(key: K, value: Settings[K]) => Promise<void>;
   setTheme: (mode: ThemeMode) => Promise<void>;
   setTerminalThemeMode: (mode: TerminalThemeMode) => Promise<void>;
+  syncSystemTheme: () => void;
 }
 
 const DEFAULTS: Settings = {
@@ -54,6 +57,7 @@ const DEFAULTS: Settings = {
   terminalThemeName: "auto",
   sidebarDensity: "comfortable",
   viewMode: "standard",
+  closeBehavior: "ask",
   keyboardShortcuts: {
     newTerminal: "Ctrl+Shift+T",
     closeTerminal: "Ctrl+W",
@@ -182,13 +186,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
     set({ ...entries, resolvedTheme, loaded: true });
     void applyDebugMode(debugMode);
+  },
 
-    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-      const current = get().theme;
-      if (current === "system") {
-        set({ resolvedTheme: getSystemTheme() });
-      }
-    });
+  syncSystemTheme: () => {
+    if (get().theme === "system") {
+      set({ resolvedTheme: getSystemTheme() });
+    }
   },
 
   update: async (key, value) => {

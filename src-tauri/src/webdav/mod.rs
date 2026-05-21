@@ -125,7 +125,7 @@ impl WebDavClient {
         Self::handle_response(response).await
     }
 
-    pub async fn upload(&self, remote_path: &str, data: &[u8]) -> Result<(), WebDavError> {
+    pub async fn upload(&self, remote_path: &str, data: Vec<u8>) -> Result<(), WebDavError> {
         let url = format!(
             "{}/{}",
             self.config.url.trim_end_matches('/'),
@@ -139,7 +139,7 @@ impl WebDavClient {
             .put(&url)
             .header(header::AUTHORIZATION, self.build_auth_header())
             .header(header::CONTENT_TYPE, "application/json")
-            .body(data.to_vec())
+            .body(data)
             .send()
             .await
             .map_err(|e| {

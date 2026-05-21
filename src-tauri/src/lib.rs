@@ -6,6 +6,11 @@ mod webdav;
 mod sync;
 
 use log::LevelFilter;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
 use tauri_plugin_sql::{Builder as SqlBuilder, Migration, MigrationKind};
 use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind, TimezoneStrategy};
 
@@ -128,6 +133,15 @@ fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "add_secondary_indexes",
+            sql: "
+                CREATE INDEX IF NOT EXISTS idx_session_meta_project ON session_meta(project_key);
+                CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -148,25 +162,70 @@ pub fn run() {
     };
 
     tauri::Builder::default()
-        .plugin(
+        .plugin({
+            let mut targets = vec![Target::new(TargetKind::LogDir {
+                file_name: Some("cli-manager.log".into()),
+            })];
+            if debug_logs {
+                targets.push(Target::new(TargetKind::Webview));
+                targets.push(Target::new(TargetKind::Stdout));
+            }
             LogBuilder::new()
                 .level(log_level)
                 .timezone_strategy(TimezoneStrategy::UseLocal)
-                .targets([
-                    Target::new(TargetKind::LogDir {
-                        file_name: Some("cli-manager.log".into()),
-                    }),
-                    Target::new(TargetKind::Webview),
-                    Target::new(TargetKind::Stdout),
-                ])
-                .build(),
-        )
-        .setup(move |_| {
+                .targets(targets)
+                .build()
+        })
+        .setup(move |app| {
             log::set_max_level(log_level);
             log::info!(
                 "CLI-Manager started (log_level={})",
                 if log_level == LevelFilter::Debug { "debug" } else { "info" }
             );
+
+            let show_item = MenuItem::with_id(app, "tray_show", "显示", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            TrayIconBuilder::with_id("main-tray")
+                .icon(app.default_window_icon().cloned().ok_or("missing default window icon")?)
+                .tooltip("CLI-Manager")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray_show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "tray_quit" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.emit("tray-quit-requested", ());
+                        } else {
+                            app.exit(0);
+                        }
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())

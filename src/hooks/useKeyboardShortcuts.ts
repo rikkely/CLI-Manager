@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useCommandPaletteStore } from "../components/CommandPalette";
@@ -23,18 +23,21 @@ export function eventToCombo(e: KeyboardEvent): string {
 }
 
 export function useKeyboardShortcuts() {
-  const sessions = useTerminalStore((s) => s.sessions);
-  const activeSessionId = useTerminalStore((s) => s.activeSessionId);
-  const setActive = useTerminalStore((s) => s.setActive);
-  const closeSession = useTerminalStore((s) => s.closeSession);
-  const createSession = useTerminalStore((s) => s.createSession);
   const shortcuts = useSettingsStore((s) => s.keyboardShortcuts);
   const viewMode = useSettingsStore((s) => s.viewMode);
+
+  // Refs hold the latest values; the actual handler is bound once.
+  const shortcutsRef = useRef(shortcuts);
+  const viewModeRef = useRef(viewMode);
+  shortcutsRef.current = shortcuts;
+  viewModeRef.current = viewMode;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const combo = eventToCombo(e);
       if (!combo) return;
+      const shortcuts = shortcutsRef.current;
+      const viewMode = viewModeRef.current;
 
       // Command palette toggle works regardless of focus context
       if (combo === shortcuts.commandPalette) {
@@ -70,6 +73,9 @@ export function useKeyboardShortcuts() {
       ) {
         return;
       }
+
+      const terminalState = useTerminalStore.getState();
+      const { sessions, activeSessionId, setActive, closeSession, createSession } = terminalState;
 
       if (combo === shortcuts.newTerminal) {
         if (viewMode === "compact") return;
@@ -108,5 +114,5 @@ export function useKeyboardShortcuts() {
 
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [sessions, activeSessionId, setActive, closeSession, createSession, shortcuts, viewMode]);
+  }, []);
 }

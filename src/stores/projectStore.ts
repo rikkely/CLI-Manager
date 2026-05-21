@@ -6,6 +6,8 @@ import type {
   Group, CreateGroupInput, TreeNode,
 } from "../lib/types";
 
+let inflightFetchAll: Promise<void> | null = null;
+
 interface ProjectStore {
   projects: Project[];
   groups: Group[];
@@ -106,26 +108,33 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   fetchAll: async () => {
-    const db = await getDb();
-    const [groups, projects] = await Promise.all([
-      db.select<Group[]>("SELECT * FROM groups ORDER BY sort_order, name"),
-      db.select<Project[]>("SELECT * FROM projects ORDER BY sort_order, name"),
-    ]);
-    const tree = buildTree(groups, projects, get().searchQuery);
-
-    // Path health check
-    let projectHealth = get().projectHealth;
-    if (projects.length > 0) {
+    if (inflightFetchAll) return inflightFetchAll;
+    inflightFetchAll = (async () => {
       try {
-        const paths = projects.map((p) => p.path);
-        const results = await invoke<boolean[]>("check_paths_exist", { paths });
-        const health: Record<string, boolean> = {};
-        projects.forEach((p, i) => { health[p.id] = results[i]; });
-        projectHealth = health;
-      } catch { /* ignore */ }
-    }
+        const db = await getDb();
+        const [groups, projects] = await Promise.all([
+          db.select<Group[]>("SELECT * FROM groups ORDER BY sort_order, name"),
+          db.select<Project[]>("SELECT * FROM projects ORDER BY sort_order, name"),
+        ]);
+        // Path health check
+        let projectHealth = get().projectHealth;
+        if (projects.length > 0) {
+          try {
+            const paths = projects.map((p) => p.path);
+            const results = await invoke<boolean[]>("check_paths_exist", { paths });
+            const health: Record<string, boolean> = {};
+            projects.forEach((p, i) => { health[p.id] = results[i]; });
+            projectHealth = health;
+          } catch { /* ignore */ }
+        }
 
-    set({ groups, projects, tree, projectHealth });
+        const tree = buildTree(groups, projects, get().searchQuery);
+        set({ groups, projects, tree, projectHealth });
+      } finally {
+        inflightFetchAll = null;
+      }
+    })();
+    return inflightFetchAll;
   },
 
   fetchProjects: async () => {

@@ -107,17 +107,10 @@ export function SidebarFooter({
           <span className="switch-thumb" />
         </button>
       </div>
-      <div className="ui-sidebar-footer-card mt-2 flex items-start justify-between gap-3 px-3 py-2.5">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="text-xs font-semibold text-on-surface">精简模式</div>
-            <span className="ui-primary-gradient rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em]">
-              NEW
-            </span>
-          </div>
-        </div>
+      <div className="ui-sidebar-footer-card mt-2 flex items-center justify-between gap-3 px-3 py-2.5">
+        <div className="text-xs font-semibold text-on-surface">精简模式</div>
         <button
-          className="switch ui-focus-ring mt-0.5"
+          className="switch ui-focus-ring"
           data-on={compactModeEnabled ? "true" : "false"}
           onClick={onToggleCompactMode}
           title="隐藏右侧内嵌终端，仅保留左侧启动器"

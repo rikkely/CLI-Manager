@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { HistoryStatsHeatmapDay } from "../../lib/types";
 
 interface TimelineHeatmapProps {
@@ -24,7 +24,9 @@ function cellColor(level: number): string {
   return "color-mix(in srgb, var(--accent) 82%, var(--bg-tertiary))";
 }
 
-export function TimelineHeatmap({ days, selectedDayStart, onSelectDay }: TimelineHeatmapProps) {
+export const TimelineHeatmap = memo(TimelineHeatmapImpl);
+
+function TimelineHeatmapImpl({ days, selectedDayStart, onSelectDay }: TimelineHeatmapProps) {
   const [hoverDayStart, setHoverDayStart] = useState<number | null>(null);
 
   const cells = useMemo(() => {

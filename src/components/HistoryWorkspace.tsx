@@ -63,6 +63,12 @@ export function HistoryWorkspace() {
   const [diffOpen, setDiffOpen] = useState(false);
   const [visibleSessionCount, setVisibleSessionCount] = useState(SESSION_PAGE_SIZE);
   const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_PAGE_SIZE);
+  const [debouncedSessionQuery, setDebouncedSessionQuery] = useState(sessionQuery);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSessionQuery(sessionQuery), 150);
+    return () => clearTimeout(timer);
+  }, [sessionQuery]);
 
   const activeView = useMemo(
     () => sessions.find((item) => item.sessionKey === activeSessionKey) ?? null,
@@ -143,19 +149,23 @@ export function HistoryWorkspace() {
 
   const normalizedGlobal = globalQuery.trim().toLowerCase();
 
+  const sessionHaystacks = useMemo(() => {
+    return sessions.map(
+      (item) =>
+        `${item.displayTitle.toLowerCase()}${item.project_key.toLowerCase()}${item.tags.join(" ").toLowerCase()}`
+    );
+  }, [sessions]);
+
   const filteredSessions = useMemo(() => {
-    return sessions.filter((item) => {
-      if (!normalizedGlobal) return true;
-      const title = item.displayTitle.toLowerCase();
-      const project = item.project_key.toLowerCase();
-      const tags = item.tags.join(" ").toLowerCase();
-      return (
-        title.includes(normalizedGlobal) ||
-        project.includes(normalizedGlobal) ||
-        tags.includes(normalizedGlobal)
-      );
-    });
-  }, [sessions, normalizedGlobal]);
+    if (!normalizedGlobal) return sessions;
+    const result: HistorySessionView[] = [];
+    for (let i = 0; i < sessions.length; i++) {
+      if (sessionHaystacks[i].includes(normalizedGlobal)) {
+        result.push(sessions[i]);
+      }
+    }
+    return result;
+  }, [sessions, sessionHaystacks, normalizedGlobal]);
 
   useEffect(() => {
     setVisibleSessionCount(Math.min(SESSION_PAGE_SIZE, filteredSessions.length));
@@ -191,21 +201,26 @@ export function HistoryWorkspace() {
     setVisibleSessionCount((prev) => Math.min(filteredSessions.length, prev + SESSION_PAGE_SIZE));
   }, [filteredSessions.length, hasMoreSessions]);
 
+  const messageHaystacks = useMemo(() => {
+    if (!activeSession) return null;
+    return activeSession.messages.map((msg) => msg.content.toLowerCase());
+  }, [activeSession]);
+
   const matchIndices = useMemo(() => {
-    const query = sessionQuery.trim().toLowerCase();
-    if (!query || !activeSession) return [];
+    const query = debouncedSessionQuery.trim().toLowerCase();
+    if (!query || !activeSession || !messageHaystacks) return [];
     const indices: number[] = [];
-    activeSession.messages.forEach((msg, idx) => {
-      if (msg.content.toLowerCase().includes(query)) {
-        indices.push(idx);
+    for (let i = 0; i < messageHaystacks.length; i++) {
+      if (messageHaystacks[i].includes(query)) {
+        indices.push(i);
       }
-    });
+    }
     return indices;
-  }, [activeSession, sessionQuery]);
+  }, [activeSession, messageHaystacks, debouncedSessionQuery]);
 
   useEffect(() => {
     setMatchCursor(0);
-  }, [sessionQuery, activeSession?.session_id]);
+  }, [debouncedSessionQuery, activeSession?.session_id]);
 
   useEffect(() => {
     setVisibleMessageCount(MESSAGE_PAGE_SIZE);

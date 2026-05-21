@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { isTauri } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/sidebar";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { CommandPalette } from "./components/CommandPalette";
 import { StatsPanel } from "./components/stats/StatsPanel";
+import { SettingsModal } from "./components/SettingsModal";
 import { WindowTitleBar } from "./components/WindowTitleBar";
+import { CloseConfirmDialog } from "./components/CloseConfirmDialog";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useProjectStore } from "./stores/projectStore";
 import { useSessionStore } from "./stores/sessionStore";
@@ -37,26 +40,33 @@ function App() {
   const openHistoryWorkspace = useHistoryStore((s) => s.openHistory);
   const openHistorySession = useHistoryStore((s) => s.openSession);
   const viewMode = useSettingsStore((s) => s.viewMode);
+  const closeBehavior = useSettingsStore((s) => s.closeBehavior);
+  const updateSetting = useSettingsStore((s) => s.update);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const restoreWindowWidthRef = useRef<number | null>(null);
+  const closeBehaviorRef = useRef(closeBehavior);
+
+  useEffect(() => {
+    closeBehaviorRef.current = closeBehavior;
+  }, [closeBehavior]);
 
   useKeyboardShortcuts();
 
   useEffect(() => {
     const init = async () => {
-      // 1. 加载设置
-      await loadSettings();
+      // 1. 并行加载相互独立的子系统：设置、同步配置、会话持久化
+      await Promise.all([
+        loadSettings(),
+        useSyncStore.getState().load(),
+        useSessionStore.getState().load(),
+      ]);
 
-      // 2. 加载同步配置
-      await useSyncStore.getState().load();
-
-      // 3. 加载会话持久化数据
-      await useSessionStore.getState().load();
-
-      // 4. 加载项目列表
+      // 2. 加载项目列表（必须在恢复终端会话之前）
       await useProjectStore.getState().fetchAll();
 
-      // 5. 恢复终端会话
+      // 3. 恢复终端会话
       const { projects, projectHealth } = useProjectStore.getState();
       const projectMap = new Map(projects.map((p) => [p.id, p]));
       await useTerminalStore.getState().restoreSessions(projectMap, projectHealth);
@@ -72,19 +82,99 @@ function App() {
     document.documentElement.setAttribute("data-dark-palette", darkThemePalette);
   }, [resolvedTheme, lightThemePalette, darkThemePalette]);
 
-  // 应用关闭时清除会话持久化数据（不恢复主动关闭时的终端）
+  // 跟随系统主题：监听放在 effect 中，确保挂载/卸载严格成对，避免 store.load 中残留 listener
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = () => useSettingsStore.getState().syncSystemTheme();
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    const unlistenPromise = listen("tray-quit-requested", async () => {
+      try {
+        await useSessionStore.getState().clear();
+      } finally {
+        try {
+          await getCurrentWindow().destroy();
+        } catch (err) {
+          logWarn("Failed to destroy window from tray quit", err);
+        }
+      }
+    });
+
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // 关闭窗口拦截：根据 closeBehavior 决定最小化到托盘 / 直接退出 / 弹窗询问
   useEffect(() => {
     const appWindow = getCurrentWindow();
     let unlistenPromise: Promise<() => void> | null = null;
 
-    unlistenPromise = appWindow.onCloseRequested(async () => {
-      await useSessionStore.getState().clear();
+    unlistenPromise = appWindow.onCloseRequested(async (event) => {
+      const behavior = closeBehaviorRef.current;
+      if (behavior === "minimize") {
+        event.preventDefault();
+        try {
+          await appWindow.hide();
+        } catch (err) {
+          logWarn("Failed to hide window on close", err);
+        }
+        return;
+      }
+      if (behavior === "exit") {
+        await useSessionStore.getState().clear();
+        return;
+      }
+      event.preventDefault();
+      setCloseDialogOpen(true);
     });
 
     return () => {
       unlistenPromise?.then((fn) => fn()).catch(() => {});
     };
   }, []);
+
+  const handleCloseDialogMinimize = useCallback(
+    (remember: boolean) => {
+      setCloseDialogOpen(false);
+      if (remember) {
+        void updateSetting("closeBehavior", "minimize");
+      }
+      void (async () => {
+        try {
+          await getCurrentWindow().hide();
+        } catch (err) {
+          logWarn("Failed to hide window from dialog", err);
+        }
+      })();
+    },
+    [updateSetting]
+  );
+
+  const handleCloseDialogExit = useCallback(
+    (remember: boolean) => {
+      setCloseDialogOpen(false);
+      if (remember) {
+        void updateSetting("closeBehavior", "exit");
+      }
+      void (async () => {
+        try {
+          await useSessionStore.getState().clear();
+        } finally {
+          try {
+            await getCurrentWindow().destroy();
+          } catch (err) {
+            logWarn("Failed to destroy window from dialog", err);
+          }
+        }
+      })();
+    },
+    [updateSetting]
+  );
 
   useEffect(() => {
     if (!IN_TAURI) return;
@@ -104,6 +194,18 @@ function App() {
         if (restoreWindowWidthRef.current == null) {
           restoreWindowWidthRef.current = window.innerWidth;
         }
+        if (settingsOpen) {
+          // 精简模式下打开设置：临时扩展窗口以容纳设置面板
+          await appWindow.setMinSize(new LogicalSize(800, WINDOW_MIN_HEIGHT));
+          if (await appWindow.isMaximized()) {
+            await appWindow.unmaximize();
+          }
+          const targetWidth = Math.max(restoreWindowWidthRef.current ?? 800, 800);
+          await appWindow.setSize(
+            new LogicalSize(targetWidth, Math.max(window.innerHeight, WINDOW_MIN_HEIGHT))
+          );
+          return;
+        }
         await appWindow.setMinSize(new LogicalSize(COMPACT_WINDOW_WIDTH, WINDOW_MIN_HEIGHT));
         if (await appWindow.isMaximized()) {
           await appWindow.unmaximize();
@@ -112,10 +214,10 @@ function App() {
           new LogicalSize(COMPACT_WINDOW_WIDTH, Math.max(window.innerHeight, WINDOW_MIN_HEIGHT))
         );
       } catch (err) {
-        logWarn("Failed to shrink window for compact mode", err);
+        logWarn("Failed to adjust window size", err);
       }
     })();
-  }, [viewMode]);
+  }, [viewMode, settingsOpen]);
 
   const handleOpenStats = useCallback(() => {
     const stopPerf = createPerfMarker("stats.open", {
@@ -183,11 +285,18 @@ function App() {
       <WindowTitleBar />
       {viewMode === "compact" ? (
         <div id="main-content" className="flex min-h-0 flex-1" tabIndex={-1}>
-          <Sidebar onOpenStats={handleOpenStats} compactMode />
+          <Sidebar
+            onOpenStats={handleOpenStats}
+            onOpenSettings={() => setSettingsOpen(true)}
+            compactMode
+          />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-          <Sidebar onOpenStats={handleOpenStats} />
+          <Sidebar
+            onOpenStats={handleOpenStats}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
           <main id="main-content" className="ui-main-shell flex min-w-0 flex-1 flex-col" tabIndex={-1}>
             <TerminalTabs />
           </main>
@@ -199,6 +308,13 @@ function App() {
         sessions={historySessions}
         onClose={() => setStatsOpen(false)}
         onOpenSession={handleOpenSessionFromStats}
+      />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <CloseConfirmDialog
+        open={closeDialogOpen}
+        onMinimize={handleCloseDialogMinimize}
+        onExit={handleCloseDialogExit}
+        onClose={() => setCloseDialogOpen(false)}
       />
       <Toaster
         theme={resolvedTheme}

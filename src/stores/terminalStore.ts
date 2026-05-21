@@ -40,6 +40,16 @@ interface TerminalStore {
 // 防止 StrictMode 双重调用
 let restoreInProgress = false;
 
+// setActive 防抖：高频切换标签时合并持久化写入
+let saveActiveIdTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSaveActiveId(id: string | null) {
+  if (saveActiveIdTimer !== null) clearTimeout(saveActiveIdTimer);
+  saveActiveIdTimer = setTimeout(() => {
+    saveActiveIdTimer = null;
+    useSessionStore.getState().saveActiveSessionId(id).catch(() => {});
+  }, 200);
+}
+
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   sessions: [],
   activeSessionId: null,
@@ -162,7 +172,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   setActive: (id) => {
     set({ activeSessionId: id });
-    useSessionStore.getState().saveActiveSessionId(id).catch(() => {});
+    scheduleSaveActiveId(id);
   },
 
   reorderSessions: (fromId, toId) => {
@@ -341,12 +351,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       newIdMap[ps.id] = newSessionId;
 
-      const unlisten = await listen<PtyStatusPayload>(`pty-status-${newSessionId}`, (event) => {
-        const status = event.payload.status as SessionStatus;
-        useTerminalStore.setState((state) => ({
-          sessionStatuses: { ...state.sessionStatuses, [newSessionId]: status },
-        }));
-      });
+      let unlisten: UnlistenFn;
+      try {
+        unlisten = await listen<PtyStatusPayload>(`pty-status-${newSessionId}`, (event) => {
+          const status = event.payload.status as SessionStatus;
+          useTerminalStore.setState((state) => ({
+            sessionStatuses: { ...state.sessionStatuses, [newSessionId]: status },
+          }));
+        });
+      } catch (err) {
+        logError("Failed to register status listener", { sessionId: newSessionId, err });
+        await invoke("pty_close", { sessionId: newSessionId }).catch(() => {});
+        skippedSessions.push(ps.title ?? `会话 ${i + 1}`);
+        continue;
+      }
 
       const restoredSession: TerminalSession = {
         id: newSessionId,
@@ -394,12 +412,21 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         continue;
       }
 
-      const unlisten = await listen<PtyStatusPayload>(`pty-status-${secondSessionId}`, (event) => {
-        const status = event.payload.status as SessionStatus;
-        useTerminalStore.setState((state) => ({
-          sessionStatuses: { ...state.sessionStatuses, [secondSessionId]: status },
-        }));
-      });
+      const unlisten = await (async () => {
+        try {
+          return await listen<PtyStatusPayload>(`pty-status-${secondSessionId}`, (event) => {
+            const status = event.payload.status as SessionStatus;
+            useTerminalStore.setState((state) => ({
+              sessionStatuses: { ...state.sessionStatuses, [secondSessionId]: status },
+            }));
+          });
+        } catch (err) {
+          logError("Failed to register split status listener", { sessionId: secondSessionId, err });
+          await invoke("pty_close", { sessionId: secondSessionId }).catch(() => {});
+          return null;
+        }
+      })();
+      if (!unlisten) continue;
 
       restoredSplits[newPrimaryId] = {
         direction: ps.direction,

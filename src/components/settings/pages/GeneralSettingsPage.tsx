@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
   useSettingsStore,
+  type CloseBehavior,
   type DarkThemePalette,
   type LightThemePalette,
   type SidebarDensity,
@@ -96,6 +97,12 @@ const SIDEBAR_DENSITY_OPTIONS: { value: SidebarDensity; label: string; descripti
   { value: "compact", label: "紧凑", description: "减少行高与缩进，显示更多条目" },
 ];
 
+const CLOSE_BEHAVIOR_OPTIONS: { value: CloseBehavior; label: string }[] = [
+  { value: "ask", label: "每次询问" },
+  { value: "minimize", label: "最小化到托盘" },
+  { value: "exit", label: "直接退出" },
+];
+
 function PaletteCard({
   active,
   label,
@@ -155,8 +162,10 @@ export function GeneralSettingsPage() {
   const fontFamily = useSettingsStore((s) => s.fontFamily);
   const defaultShell = useSettingsStore((s) => s.defaultShell);
   const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
+  const viewMode = useSettingsStore((s) => s.viewMode);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
   const debugMode = useSettingsStore((s) => s.debugMode);
+  const closeBehavior = useSettingsStore((s) => s.closeBehavior);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
 
@@ -308,6 +317,22 @@ export function GeneralSettingsPage() {
               </div>
             </div>
 
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-xs text-on-surface-variant">精简模式</div>
+                <div className="mt-1 text-[11px] text-text-muted">隐藏内嵌终端，把项目列表作为启动器。</div>
+              </div>
+              <button
+                className="switch ui-focus-ring shrink-0"
+                data-on={viewMode === "compact" ? "true" : "false"}
+                onClick={() => update("viewMode", viewMode === "compact" ? "standard" : "compact")}
+                aria-label={viewMode === "compact" ? "关闭精简模式" : "开启精简模式"}
+                aria-pressed={viewMode === "compact"}
+              >
+                <span className="switch-thumb" />
+              </button>
+            </div>
+
             <div className="flex items-center justify-between">
               <span className="text-xs text-on-surface-variant">外部 PowerShell</span>
               <button
@@ -332,6 +357,22 @@ export function GeneralSettingsPage() {
               >
                 <span className="switch-thumb" />
               </button>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-on-surface-variant">关闭按钮行为</label>
+              <Select
+                value={closeBehavior}
+                onChange={(e) => update("closeBehavior", e.target.value as CloseBehavior)}
+                aria-label="关闭按钮行为"
+              >
+                {CLOSE_BEHAVIOR_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </Select>
+              <div className="mt-1 text-[11px] text-text-muted">控制点击窗口关闭按钮时的动作。</div>
             </div>
           </div>
         </Card>
