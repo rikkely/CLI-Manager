@@ -20,6 +20,7 @@ export type ViewMode = "standard" | "compact";
 export type CloseBehavior = "ask" | "minimize" | "exit";
 export type ShortcutAction = "newTerminal" | "closeTerminal" | "nextTab" | "prevTab" | "commandPalette";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
+export type TerminalNewlineShortcut = "Shift+Enter" | "Ctrl+Enter" | "Alt+Enter";
 
 interface Settings {
   theme: ThemeMode;
@@ -40,6 +41,7 @@ interface Settings {
   viewMode: ViewMode;
   closeBehavior: CloseBehavior;
   keyboardShortcuts: KeyboardShortcutMap;
+  terminalNewlineShortcut: TerminalNewlineShortcut;
 }
 
 interface SettingsStore extends Settings {
@@ -78,6 +80,7 @@ const DEFAULTS: Settings = {
     prevTab: "Ctrl+Shift+Tab",
     commandPalette: "Ctrl+P",
   },
+  terminalNewlineShortcut: "Shift+Enter",
 };
 
 const LEGACY_LIGHT_PALETTE_MAP: Partial<Record<string, LightThemePalette>> = {

@@ -3,6 +3,7 @@ import {
   useSettingsStore,
   type ShortcutAction,
   type KeyboardShortcutMap,
+  type TerminalNewlineShortcut,
 } from "../../../stores/settingsStore";
 import { eventToCombo } from "../../../hooks/useKeyboardShortcuts";
 
@@ -22,12 +23,19 @@ const DEFAULT_SHORTCUTS: KeyboardShortcutMap = {
   commandPalette: "Ctrl+P",
 };
 
+const TERMINAL_NEWLINE_OPTIONS: { value: TerminalNewlineShortcut; label: string }[] = [
+  { value: "Shift+Enter", label: "Shift + Enter" },
+  { value: "Ctrl+Enter", label: "Ctrl + Enter" },
+  { value: "Alt+Enter", label: "Alt + Enter" },
+];
+
 interface ShortcutSettingsPageProps {
   searchValue: string;
 }
 
 export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps) {
   const shortcuts = useSettingsStore((s) => s.keyboardShortcuts);
+  const terminalNewlineShortcut = useSettingsStore((s) => s.terminalNewlineShortcut);
   const update = useSettingsStore((s) => s.update);
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
 
@@ -86,6 +94,36 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
 
   return (
     <div className="space-y-4">
+      <section className="ui-surface-card rounded-2xl border border-border p-4">
+        <div className="mb-1 text-sm font-semibold text-on-surface">终端键位</div>
+        <div className="mb-3 text-[11px] text-on-surface-variant">
+          在终端中按下该组合键时，向 PTY 发送换行符 <code>\n</code>（适配 Claude Code、Codex 等 AI CLI 的「换行不提交」）。单按 Enter 行为不变。
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {TERMINAL_NEWLINE_OPTIONS.map((opt) => {
+            const active = terminalNewlineShortcut === opt.value;
+            return (
+              <button
+                key={opt.value}
+                onClick={() => {
+                  if (!active) void update("terminalNewlineShortcut", opt.value);
+                }}
+                className="ui-interactive rounded-lg border px-3 py-1.5 text-xs"
+                style={{
+                  borderColor: active ? "var(--primary)" : "var(--border)",
+                  backgroundColor: active
+                    ? "color-mix(in srgb, var(--primary) 12%, var(--surface-container-high) 88%)"
+                    : "var(--surface-container-high)",
+                  color: active ? "var(--primary)" : "var(--on-surface)",
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       <section className="ui-surface-card rounded-2xl border border-border p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="text-sm font-semibold text-on-surface">快捷键绑定</div>

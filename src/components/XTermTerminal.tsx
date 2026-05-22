@@ -153,6 +153,18 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     };
 
     terminal.attachCustomKeyEventHandler((e) => {
+      if (e.type === "keydown" && e.key === "Enter") {
+        const shortcut = useSettingsStore.getState().terminalNewlineShortcut;
+        const matched =
+          (shortcut === "Shift+Enter" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) ||
+          (shortcut === "Ctrl+Enter" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) ||
+          (shortcut === "Alt+Enter" && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey);
+        if (matched) {
+          e.preventDefault();
+          invoke("pty_write", { sessionId, data: "\n" }).catch((err) => reportPtyWriteError("newline", err));
+          return false;
+        }
+      }
       if (e.type !== "keydown" || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return true;
       const key = e.key.toLowerCase();
       if (key === "c" && terminal.hasSelection()) {
