@@ -19,8 +19,17 @@ export type SidebarDensity = "compact" | "comfortable";
 export type ViewMode = "standard" | "compact";
 export type CloseBehavior = "ask" | "minimize" | "exit";
 export type ShortcutAction = "newTerminal" | "closeTerminal" | "nextTab" | "prevTab" | "commandPalette";
+export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
 export type TerminalNewlineShortcut = "Shift+Enter" | "Ctrl+Enter" | "Alt+Enter";
+
+export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
+  newTerminal: "Ctrl+Shift+T",
+  closeTerminal: "Ctrl+W",
+  nextTab: "Alt+ArrowRight",
+  prevTab: "Alt+ArrowLeft",
+  commandPalette: "Ctrl+P",
+};
 
 interface Settings {
   theme: ThemeMode;
@@ -73,13 +82,7 @@ const DEFAULTS: Settings = {
   sidebarDensity: "comfortable",
   viewMode: "standard",
   closeBehavior: "ask",
-  keyboardShortcuts: {
-    newTerminal: "Ctrl+Shift+T",
-    closeTerminal: "Ctrl+W",
-    nextTab: "Ctrl+Tab",
-    prevTab: "Ctrl+Shift+Tab",
-    commandPalette: "Ctrl+P",
-  },
+  keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   terminalNewlineShortcut: "Shift+Enter",
 };
 

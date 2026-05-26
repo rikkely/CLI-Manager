@@ -68,12 +68,12 @@ pub async fn upload(config: WebDavConfig, data: SyncData) -> Result<(), String> 
         })?;
 
     info!("Serializing sync data");
-    let json = serde_json::to_string(&data)
+    let json = serde_json::to_vec(&data)
         .map_err(|e| format!("Failed to serialize sync data: {}", e))?;
 
     info!("Uploading to {}", SYNC_FILE_PATH);
     client
-        .upload(SYNC_FILE_PATH, json.into_bytes())
+        .upload(SYNC_FILE_PATH, json)
         .await
         .map_err(|e| {
             error!("Upload failed: {}", e);

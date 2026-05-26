@@ -23,14 +23,14 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
   general: {
     label: "通用",
     title: "通用设置",
-    description: "首屏可完成主题、配色、终端、字体与侧栏密度配置。",
+    description: "配置应用主题、配色、界面字体、关闭行为与关于信息。",
     searchPlaceholder: "搜索通用设置（预留）",
   },
   "terminal-theme": {
-    label: "终端主题",
-    title: "终端主题",
-    description: "配置 auto 跟随策略，或固定为指定终端主题。",
-    searchPlaceholder: "搜索终端主题（预留）",
+    label: "终端设置",
+    title: "终端设置",
+    description: "配置终端行为、主题、字体、Shell 与实时预览。",
+    searchPlaceholder: "搜索终端设置（预留）",
   },
   shortcuts: {
     label: "快捷键",

@@ -235,17 +235,47 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     let cancelled = false;
     let pendingChunks: string[] = [];
     let writeRafId: number | null = null;
+    const stashInactiveText = (text: string) => {
+      if (!text) return;
+      if (text.length >= INACTIVE_BUFFER_MAX) {
+        const suffix = text.slice(-INACTIVE_BUFFER_MAX);
+        inactiveBufferRef.current = [suffix];
+        inactiveBufferSizeRef.current = suffix.length;
+        return;
+      }
+
+      inactiveBufferRef.current.push(text);
+      inactiveBufferSizeRef.current += text.length;
+      while (inactiveBufferSizeRef.current > INACTIVE_BUFFER_MAX && inactiveBufferRef.current.length > 0) {
+        const overflow = inactiveBufferSizeRef.current - INACTIVE_BUFFER_MAX;
+        const head = inactiveBufferRef.current[0];
+        if (!head || head.length <= overflow) {
+          const removed = inactiveBufferRef.current.shift();
+          if (removed) inactiveBufferSizeRef.current -= removed.length;
+          continue;
+        }
+        inactiveBufferRef.current[0] = head.slice(overflow);
+        inactiveBufferSizeRef.current -= overflow;
+      }
+    };
     const flushPendingWrites = () => {
       writeRafId = null;
       if (cancelled || pendingChunks.length === 0) return;
       const combined = pendingChunks.length === 1 ? pendingChunks[0] : pendingChunks.join("");
       pendingChunks = [];
-      terminal.write(combined);
+      if (isActiveRef.current) {
+        terminal.write(combined);
+      } else {
+        stashInactiveText(combined);
+      }
     };
     listen<string>(`pty-output-${sessionId}`, (event) => {
       if (cancelled) return;
       const binaryString = atob(event.payload);
-      const bytes = Uint8Array.from(binaryString, (c) => c.charCodeAt(0));
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i += 1) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
       const text = textDecoder.decode(bytes, { stream: true });
       if (isActiveRef.current) {
         pendingChunks.push(text);
@@ -254,15 +284,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
         }
       } else {
         // Tab hidden — stash to a bounded ring buffer; flush when reactivated
-        inactiveBufferRef.current.push(text);
-        inactiveBufferSizeRef.current += text.length;
-        while (
-          inactiveBufferSizeRef.current > INACTIVE_BUFFER_MAX &&
-          inactiveBufferRef.current.length > 1
-        ) {
-          const removed = inactiveBufferRef.current.shift();
-          if (removed) inactiveBufferSizeRef.current -= removed.length;
-        }
+        stashInactiveText(text);
       }
     }).then((fn) => {
       if (cancelled) {

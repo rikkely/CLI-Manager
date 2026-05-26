@@ -24,6 +24,8 @@ impl std::fmt::Display for WebDavError {
 
 impl std::error::Error for WebDavError {}
 
+const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// 进程级 HTTP client：连接池、DNS 缓存、HTTP/2 复用。
 /// 避免每个 upload/download/test_connection 重新构造一个 Client。
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -66,21 +68,27 @@ impl WebDavClient {
         let status = response.status();
         if status.is_success() {
             if let Some(len) = response.content_length() {
-                if len > 16 * 1024 * 1024 {
+                if len > MAX_RESPONSE_BYTES {
                     return Err(WebDavError {
                         message: format!("Response too large: {} bytes", len),
                         status_code: Some(status.as_u16()),
                     });
                 }
             }
-            response
+            let bytes = response
                 .bytes()
                 .await
-                .map(|b| b.to_vec())
                 .map_err(|e| WebDavError {
                     message: format!("Failed to read response: {}", e),
                     status_code: None,
-                })
+                })?;
+            if bytes.len() > MAX_RESPONSE_BYTES as usize {
+                return Err(WebDavError {
+                    message: format!("Response too large: {} bytes", bytes.len()),
+                    status_code: Some(status.as_u16()),
+                });
+            }
+            Ok(bytes.to_vec())
         } else {
             Err(WebDavError {
                 message: format!("HTTP error: {}", status),

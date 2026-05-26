@@ -15,6 +15,10 @@ const LOAD_MORE_THRESHOLD_PX = 220;
 // 稳定的空数组引用：避免每次 render 都用 `?? []` 生成新数组、击穿下游 memo。
 const EMPTY_MESSAGES: HistoryMessage[] = [];
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function makeHitKey(hit: HistorySearchHit): string {
   return `${hit.source}:${hit.session_id}:${hit.file_path}`;
 }
@@ -199,11 +203,12 @@ export function HistoryWorkspace() {
   }, [filteredSessions.length, hasMoreSessions]);
 
   const matchIndices = useMemo(() => {
-    const query = debouncedSessionQuery.trim().toLowerCase();
+    const query = debouncedSessionQuery.trim();
     if (!query || !activeSession) return [];
+    const matcher = new RegExp(escapeRegExp(query), "i");
     const indices: number[] = [];
     for (let i = 0; i < activeSession.messages.length; i++) {
-      if (activeSession.messages[i].content.toLowerCase().includes(query)) {
+      if (matcher.test(activeSession.messages[i].content)) {
         indices.push(i);
       }
     }
