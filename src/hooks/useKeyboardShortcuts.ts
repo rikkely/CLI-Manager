@@ -61,21 +61,33 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Skip global shortcuts while user is typing/editing (including xterm textarea).
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
-      if (
+      const isXtermTarget = !!target?.closest(".xterm");
+      const isEditingTarget =
         tag === "INPUT" ||
         tag === "TEXTAREA" ||
         tag === "SELECT" ||
-        !!target?.closest(".xterm") ||
-        !!target?.closest("[contenteditable='true']")
-      ) {
-        return;
-      }
+        !!target?.closest("[contenteditable='true']");
 
       const terminalState = useTerminalStore.getState();
       const { sessions, activeSessionId, setActive, closeSession, createSession } = terminalState;
+
+      if (combo === shortcuts.nextTab || combo === shortcuts.prevTab) {
+        if (viewMode === "compact" || (isEditingTarget && !isXtermTarget)) return;
+        e.preventDefault();
+        if (sessions.length < 2) return;
+        const idx = sessions.findIndex((s) => s.id === activeSessionId);
+        const delta = combo === shortcuts.nextTab ? 1 : -1;
+        const next = (idx + delta + sessions.length) % sessions.length;
+        setActive(sessions[next].id);
+        return;
+      }
+
+      // Skip global shortcuts while user is typing/editing.
+      if (isEditingTarget || isXtermTarget) {
+        return;
+      }
 
       if (combo === shortcuts.newTerminal) {
         if (viewMode === "compact") return;
@@ -88,26 +100,6 @@ export function useKeyboardShortcuts() {
         if (viewMode === "compact") return;
         e.preventDefault();
         if (activeSessionId) closeSession(activeSessionId);
-        return;
-      }
-
-      if (combo === shortcuts.nextTab) {
-        if (viewMode === "compact") return;
-        e.preventDefault();
-        if (sessions.length < 2) return;
-        const idx = sessions.findIndex((s) => s.id === activeSessionId);
-        const next = (idx + 1) % sessions.length;
-        setActive(sessions[next].id);
-        return;
-      }
-
-      if (combo === shortcuts.prevTab) {
-        if (viewMode === "compact") return;
-        e.preventDefault();
-        if (sessions.length < 2) return;
-        const idx = sessions.findIndex((s) => s.id === activeSessionId);
-        const prev = (idx - 1 + sessions.length) % sessions.length;
-        setActive(sessions[prev].id);
         return;
       }
     };
