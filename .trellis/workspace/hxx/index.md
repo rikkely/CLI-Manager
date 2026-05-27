@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
-- **Last Active**: 2026-05-22
+- **Total Sessions**: 4
+- **Last Active**: 2026-05-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~75 | Active |
+| `journal-1.md` | ~141 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-05-25 | fix font color coverage to derive secondary/muted tokens | `7cde1c6` | `master` |
+| 3 | 2026-05-25 | Terminal background customization | `af2ac24` | `master` |
 | 2 | 2026-05-22 | 发布 V0.1.4 版本与 CHANGELOG | `20b134f`, `742573a` | `master` |
 | 1 | 2026-05-22 | 修复内部终端 diff 输出左侧色块错乱 | `e4c29cb`, `c5b806f` | `master` |
 <!-- @@@/auto:session-history -->

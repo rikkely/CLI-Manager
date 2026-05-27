@@ -94,3 +94,29 @@
 * How it works: 同时新增 `uiTextColor` 和 `terminalTextColor`。
 * Pros: 最完整。
 * Cons: 设置项变多，改动面更大，当前需求可能过度。
+
+## Decision Amendment — 2026-05-25
+
+**Trigger**: 实装后发现侧边栏项目树（分组节点 `var(--on-surface-variant)`、`var(--text-muted)` 按钮）、命令面板、设置弹窗副标题、历史/Prompt/Diff 面板等大量位置仍未生效——它们使用的是 `--text-secondary`、`--text-muted`、`--on-surface-variant` 等与 `--text-primary` **平级**的 token，原方案仅覆盖 `--text-primary` 无法传递。
+
+**Context revision**: PRD 原假设 “只覆盖 primary、保留层级” 与用户新诉求 “除终端外所有字体颜色都跟随” 冲突。
+
+**Decision**: 将 Approach A 升级为「派生层级覆盖」：仍以单一 `uiTextColor` 输入，在 `App.tsx` effect 中同步覆盖三个 token——
+* `--text-primary` = `uiTextColor`
+* `--text-secondary` = `color-mix(in srgb, ${uiTextColor} 85%, var(--bg-primary))`
+* `--text-muted` = `color-mix(in srgb, ${uiTextColor} 60%, var(--bg-primary))`
+
+`--on-surface` 与 `--on-surface-variant` 仍走派生（`var(--text-primary)` / `var(--text-muted)`），自动生效。
+
+**Consequences**:
+* 用户无需新增 UI（仍只有一个颜色输入）。
+* 次级/弱化文字与背景按比例 mix，保留层级感的同时实现全局跟随。
+* 终端不受影响：xterm.js 通过 canvas 渲染，颜色源自 `terminalThemes.ts`，不依赖这些 CSS 变量。
+* Out of Scope 中「不允许逐项配置 secondary/muted」继续成立——用户仍只暴露 primary 一个输入，secondary/muted 由系统派生。
+
+**Rollback**: 清空 `uiTextColor`，三个变量一并 `removeProperty`，回到主题默认。
+
+**Acceptance Criteria 追加**:
+* [ ] 侧边栏项目树的分组节点、hover 按钮颜色跟随 `uiTextColor` 变化。
+* [ ] 命令面板、设置弹窗副标题、历史/Prompt/Diff 面板的次级文字跟随变化。
+* [ ] 清空设置后所有派生 token 立即回退到当前主题默认。

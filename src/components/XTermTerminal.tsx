@@ -1,10 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getTerminalTheme, getTerminalBackground } from "../lib/terminalThemes";
+import { useShallow } from "zustand/shallow";
+import { applyTransparency, getTerminalTheme, getTerminalBackground } from "../lib/terminalThemes";
+import { backgroundAssetUrl } from "../lib/assetUrl";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSettingsStore, type LightThemePalette, type DarkThemePalette } from "../stores/settingsStore";
@@ -40,6 +42,39 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   const inactiveBufferSizeRef = useRef(0);
   const INACTIVE_BUFFER_MAX = 256 * 1024;
 
+  const background = useSettingsStore(
+    useShallow((s) => ({
+      enabled: s.terminalBackground.enabled,
+      imagePath: s.terminalBackground.imagePath,
+      opacity: s.terminalBackground.opacity,
+      fit: s.terminalBackground.fit,
+      position: s.terminalBackground.position,
+      blur: s.terminalBackground.blur,
+      overlayDarken: s.terminalBackground.overlayDarken,
+    }))
+  );
+  const hiddenForThisSession = useTerminalStore((s) => s.hiddenBackgroundSessionIds.has(sessionId));
+
+  const [assetUrl, setAssetUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!background.imagePath) {
+      setAssetUrl(null);
+      return;
+    }
+    backgroundAssetUrl(background.imagePath).then((url) => {
+      if (!cancelled) setAssetUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [background.imagePath]);
+
+  const isTransparent = background.enabled && background.imagePath !== null && !hiddenForThisSession;
+  const isTransparentRef = useRef(isTransparent);
+  isTransparentRef.current = isTransparent;
+
   const fitWhenStable = (force = false) => {
     const container = containerRef.current;
     const fitAddon = fitAddonRef.current;
@@ -70,17 +105,24 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   };
 
   // Hot-update theme / fontSize / fontFamily without recreating the terminal.
+  // `isTransparent` is in the dep array so toggling the background image
+  // immediately recomputes the theme (otherwise the WebGL clear color stays
+  // opaque and the image-bearing pseudo-elements get painted over).
+  // `background.overlayDarken` is also tracked so the per-cell alpha floor
+  // (which stabilises subpixel text edges over high-frequency images) updates
+  // live while the user drags the slider.
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    terminal.options.theme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    terminal.options.theme = isTransparent ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme;
     const sizeChanged = terminal.options.fontSize !== fontSize || terminal.options.fontFamily !== fontFamily;
     if (sizeChanged) {
       terminal.options.fontSize = fontSize;
       terminal.options.fontFamily = fontFamily;
       scheduleFit(true);
     }
-  }, [fontSize, fontFamily, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette]);
+  }, [fontSize, fontFamily, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken]);
 
   // Refit terminal when tab becomes active
   useEffect(() => {
@@ -109,6 +151,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
     const terminal = new Terminal({
       cols: 80,
       rows: 24,
@@ -117,7 +160,12 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
       fontSize,
       fontFamily,
       scrollback: 5000,
-      theme: getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
+      // Always true — research confirms WebglAddon stays compatible and the
+      // perf cost is acceptable. xterm cannot toggle this after construction,
+      // so we pay it unconditionally to avoid having to recreate the terminal
+      // when the user enables/disables the background image.
+      allowTransparency: true,
+      theme: isTransparentRef.current ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme,
     });
 
     const fitAddon = new FitAddon();
@@ -420,8 +468,31 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
   const backgroundColor = getTerminalBackground(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
 
+  const showBackgroundImage = isTransparent && assetUrl !== null;
+  // When the background image is active, we MUST NOT set `backgroundColor` on
+  // the wrapper: the `::before` pseudo-element paints the image into the same
+  // rect, and an opaque wrapper background would either dim the image (when
+  // user opacity < 100%) or render the whole transparency model meaningless.
+  // Also drop `p-2` in this mode — the padding gap exposes the image around
+  // the xterm container (the user-visible "strip" bug). Without an image we
+  // keep the original opaque background + padding behavior unchanged.
+  const wrapperStyle: CSSProperties = showBackgroundImage
+    ? ({
+        "--terminal-bg-image": `url("${assetUrl}")`,
+        "--terminal-bg-opacity": (background.opacity / 100).toString(),
+        "--terminal-bg-blur": `${background.blur}px`,
+        "--terminal-bg-darken": (background.overlayDarken / 100).toString(),
+      } as CSSProperties)
+    : { backgroundColor };
+
   return (
-    <div className="h-full w-full overflow-hidden p-2" style={{ backgroundColor }}>
+    <div
+      className={`ui-terminal-bg-layer h-full w-full overflow-hidden${showBackgroundImage ? "" : " p-2"}`}
+      style={wrapperStyle}
+      data-bg-enabled={showBackgroundImage ? "true" : undefined}
+      data-bg-fit={showBackgroundImage ? background.fit : undefined}
+      data-bg-position={showBackgroundImage ? background.position : undefined}
+    >
       <div ref={containerRef} className="h-full w-full overflow-hidden" />
     </div>
   );

@@ -27,6 +27,7 @@ interface TerminalStore {
   sessionStatuses: Record<string, SessionStatus>;
   statusListeners: Record<string, UnlistenFn>;
   splits: Record<string, SplitState>;
+  hiddenBackgroundSessionIds: Set<string>;
   createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
@@ -35,6 +36,8 @@ interface TerminalStore {
   unsplitTerminal: (sessionId: string) => Promise<void>;
   setSplitRatio: (sessionId: string, ratio: number) => void;
   restoreSessions: (projectMap: Map<string, Project>, projectHealth: Record<string, boolean>) => Promise<void>;
+  hideBackgroundForSession: (sessionId: string) => void;
+  showBackgroundForSession: (sessionId: string) => void;
 }
 
 // 防止 StrictMode 双重调用
@@ -56,6 +59,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   sessionStatuses: {},
   statusListeners: {},
   splits: {},
+  hiddenBackgroundSessionIds: new Set<string>(),
 
   createSession: async (projectId, cwd, title, startupCmd, envVars, shell) => {
     const normalizedInputShell = normalizeShellKey(shell);
@@ -149,6 +153,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       delete newListeners[split.secondSessionId];
     }
 
+    // Drop in-memory background overrides for closed sessions (R8).
+    const prevHidden = get().hiddenBackgroundSessionIds;
+    let newHidden = prevHidden;
+    if (prevHidden.has(id) || (split && prevHidden.has(split.secondSessionId))) {
+      newHidden = new Set(prevHidden);
+      newHidden.delete(id);
+      if (split) newHidden.delete(split.secondSessionId);
+    }
+
     const newActiveId =
       get().activeSessionId === id
         ? remaining[remaining.length - 1]?.id ?? null
@@ -160,6 +173,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       sessionStatuses: newStatuses,
       statusListeners: newListeners,
       splits: newSplits,
+      ...(newHidden !== prevHidden ? { hiddenBackgroundSessionIds: newHidden } : {}),
     });
 
     // 更新持久化
@@ -494,5 +508,21 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     } finally {
       restoreInProgress = false;
     }
+  },
+
+  hideBackgroundForSession: (sessionId) => {
+    const current = get().hiddenBackgroundSessionIds;
+    if (current.has(sessionId)) return;
+    const next = new Set(current);
+    next.add(sessionId);
+    set({ hiddenBackgroundSessionIds: next });
+  },
+
+  showBackgroundForSession: (sessionId) => {
+    const current = get().hiddenBackgroundSessionIds;
+    if (!current.has(sessionId)) return;
+    const next = new Set(current);
+    next.delete(sessionId);
+    set({ hiddenBackgroundSessionIds: next });
   },
 }));

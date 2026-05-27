@@ -73,7 +73,7 @@ function SortableTab({ id, title, isActive, status, onActivate, onClose, menuCon
           <button
             onClick={(e) => { e.stopPropagation(); onClose(); }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded text-[16px] leading-none text-on-surface-variant opacity-60 transition-opacity hover:opacity-100"
+            className="ml-1.5 inline-flex h-6 w-6 items-center justify-center rounded text-[16px] leading-none text-on-surface-variant opacity-70 transition-[opacity,background-color] hover:bg-on-surface/10 hover:opacity-100"
             aria-label={`关闭终端 ${title}`}
             title={`关闭终端 ${title}`}
           >
@@ -101,6 +101,9 @@ export function TerminalTabs() {
   const reorderSessions = useTerminalStore((s) => s.reorderSessions);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
   const unsplitTerminal = useTerminalStore((s) => s.unsplitTerminal);
+  const hiddenBackgroundSessionIds = useTerminalStore((s) => s.hiddenBackgroundSessionIds);
+  const hideBackgroundForSession = useTerminalStore((s) => s.hideBackgroundForSession);
+  const showBackgroundForSession = useTerminalStore((s) => s.showBackgroundForSession);
   const projects = useProjectStore((s) => s.projects);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
   const fontSize = useSettingsStore((s) => s.fontSize);
@@ -110,6 +113,8 @@ export function TerminalTabs() {
   const terminalThemeName = useSettingsStore((s) => s.terminalThemeName);
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
+  const terminalBackgroundEnabled = useSettingsStore((s) => s.terminalBackground.enabled);
+  const terminalBackgroundImagePath = useSettingsStore((s) => s.terminalBackground.imagePath);
   const historyOpen = useHistoryStore((s) => s.isOpen);
   const toggleHistory = useHistoryStore((s) => s.toggleHistory);
 
@@ -196,6 +201,17 @@ export function TerminalTabs() {
                         <ContextMenuItem onSelect={() => void handleNewTab()}>
                           新建终端
                         </ContextMenuItem>
+                        {terminalBackgroundEnabled && terminalBackgroundImagePath && (
+                          hiddenBackgroundSessionIds.has(s.id) ? (
+                            <ContextMenuItem onSelect={() => showBackgroundForSession(s.id)}>
+                              显示背景图
+                            </ContextMenuItem>
+                          ) : (
+                            <ContextMenuItem onSelect={() => hideBackgroundForSession(s.id)}>
+                              隐藏背景图
+                            </ContextMenuItem>
+                          )
+                        )}
                         <ContextMenuSeparator />
                         {isSplit ? (
                           <ContextMenuItem onSelect={() => unsplitTerminal(s.id)}>

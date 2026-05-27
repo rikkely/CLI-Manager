@@ -1,5 +1,31 @@
 # Changelog
 
+## [V0.1.5] - 2026-05-26
+
+### 设置与侧栏 UI 优化
+
+- 主界面侧栏底部入口精简：移除主题选择、统计看板、外部终端与精简模式快捷开关，仅保留云同步入口，并在其后提供设置按钮。
+- 设置页信息架构调整：「终端主题」更名为「终端设置」，集中默认 Shell、外部 PowerShell、终端字体、实时预览、终端主题与背景配置；内部 tab id 继续沿用 `terminal-theme`。
+- 「侧栏与行为」移回通用设置，包含精简模式、侧栏密度、关闭按钮行为与调试模式；精简模式置顶展示但移除「推荐」标签。
+- 「主题详情」与「终端实时预览」合并为「终端预览」：窄屏时位于「终端行为」与「终端主题模式」之间，宽屏时保持右侧预览布局。
+- 设置选择卡片去除选中态外圈光晕，保留边框、背景与文字颜色作为基础选中反馈。
+
+### 终端背景图自定义
+
+- 内置终端支持自定义背景图片（JPEG / PNG / GIF），可调整图片不透明度、适配模式（cover / contain / center / tile）、9 宫格位置、高斯模糊与暗化覆盖。
+- 全局生效；终端 Tab 右键菜单新增「隐藏/显示背景图」，临时隐藏不影响全局设置，会话关闭后状态清理。
+- 后端新增 `src-tauri/src/commands/background.rs`：`save_background_image` / `cleanup_unused_backgrounds` / `background_image_exists` 三个 Tauri command。
+- 图片以 SHA-256 内容寻址命名，复制到 `$APPLOCALDATA/backgrounds/<hash>.<ext>`；包含 `validate_relative_path` + canonicalize 双层路径防护，`assetProtocol.scope` 严格锁定到 `$APPLOCALDATA/backgrounds/**`。
+- 设置入口并入「主题」页：新增 `src/components/settings/pages/TerminalBackgroundSection.tsx`，提供开关、图片选择、滑杆、9 宫格定位、缩略图预览与缺失提示。
+- 启动时若背景图文件缺失（设备迁移 / 用户清理）会优雅回退至无背景图状态，并在设置页提示重选。
+- 关联引入 `tauri-plugin-fs`（受 capability 限制于 `fs:default`）与 `tempfile`（仅作为 dev dep）。
+
+### 终端渲染修复
+
+- 修复开启背景图时部分 DOM 文字（输入区 textarea / 链接层 / 装饰层 / 滚动条等）变模糊的问题：`.ui-terminal-bg-layer` 改用 `position: relative + z-index: 0` 建立 stacking context，替代 `isolation: isolate`，避免 GPU 合成层提升导致 DOM 子像素抗锯齿降级为灰阶。
+- 修复带 SGR 高亮的小字号文字在高频背景图（如插画 / 复杂图案）上发糊、颜色异常的问题：`applyTransparency(theme, darkenPct)` 根据用户「暗化」值在 cell 背景注入深色 alpha 地板（系数 0.6），字符边缘 subpixel 像素叠加到稳定深色底而非花花绿绿的图像像素，文字边缘清晰可读，图片仍透出。
+- xterm `allowTransparency` 改为构造期无条件 `true`，配合 hot-update effect 仅切换 `terminal.options.theme`，避免在背景图开关时整体重建 Terminal 导致 scrollback / PTY 连接丢失。
+
 ## [V0.1.4] - 2026-05-22
 
 ### 终端渲染修复

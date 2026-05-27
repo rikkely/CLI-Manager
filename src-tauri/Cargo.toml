@@ -1,6 +1,6 @@
 [package]
 name = "cli-manager"
-version = "0.1.4"
+version = "0.1.5"
 description = "A lightweight desktop app for managing CLI tools across multiple projects"
 authors = ["you"]
 edition = "2021"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
@@ -31,12 +31,16 @@ portable-pty = "0.8"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 base64 = "0.22"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 memchr = "2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 lto = "fat"

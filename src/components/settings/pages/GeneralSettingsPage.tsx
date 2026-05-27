@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   useSettingsStore,
   type CloseBehavior,
   type DarkThemePalette,
   type LightThemePalette,
+  type SidebarDensity,
   type ThemeMode,
 } from "../../../stores/settingsStore";
 import { AboutSection } from "../AboutSection";
@@ -105,6 +107,17 @@ const DARK_PALETTE_OPTIONS: {
   },
 ];
 
+const SIDEBAR_DENSITY_OPTIONS: { value: SidebarDensity; label: string; description: string }[] = [
+  { value: "comfortable", label: "舒适", description: "默认间距，强调可读性" },
+  { value: "compact", label: "紧凑", description: "减少行高与缩进，显示更多条目" },
+];
+
+const CLOSE_BEHAVIOR_OPTIONS: { value: CloseBehavior; label: string }[] = [
+  { value: "ask", label: "每次询问" },
+  { value: "minimize", label: "最小化到托盘" },
+  { value: "exit", label: "直接退出" },
+];
+
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 const LIGHT_TEXT_COLORS: Record<LightThemePalette, string> = {
@@ -185,12 +198,6 @@ const UI_FONT_FAMILY_OPTIONS: { value: string; label: string }[] = [
   },
 ];
 
-const CLOSE_BEHAVIOR_OPTIONS: { value: CloseBehavior; label: string }[] = [
-  { value: "ask", label: "每次询问" },
-  { value: "minimize", label: "最小化到托盘" },
-  { value: "exit", label: "直接退出" },
-];
-
 function PaletteCard({
   active,
   label,
@@ -249,7 +256,10 @@ export function GeneralSettingsPage() {
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
+  const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
+  const viewMode = useSettingsStore((s) => s.viewMode);
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
+  const debugMode = useSettingsStore((s) => s.debugMode);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
   const [uiTextColorDraft, setUiTextColorDraft] = useState(uiTextColor);
@@ -269,7 +279,6 @@ export function GeneralSettingsPage() {
       void update("uiTextColor", next);
     }
   };
-
   const isCustomUiFontFamily = useMemo(
     () => !UI_FONT_FAMILY_OPTIONS.some((opt) => opt.value === uiFontFamily),
     [uiFontFamily]
@@ -277,7 +286,7 @@ export function GeneralSettingsPage() {
 
   return (
     <div className="space-y-4">
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <section>
         <Card className="p-4">
           <div className="text-sm font-semibold text-on-surface">外观</div>
 
@@ -344,7 +353,7 @@ export function GeneralSettingsPage() {
               ))}
             </Select>
             <div className="mt-1 text-[11px] text-text-muted">
-              影响除终端外的应用整体界面字体；终端字体请在“终端设置”中单独设置。
+              影响除终端外的应用整体界面字体；终端字体在「终端设置」中单独配置。
             </div>
           </div>
 
@@ -404,23 +413,70 @@ export function GeneralSettingsPage() {
             </div>
           </div>
         </Card>
+      </section>
 
+      <section>
         <Card className="p-4">
-          <div className="text-sm font-semibold text-on-surface">通用行为</div>
-          <div className="mt-3">
-            <label className="mb-1 block text-xs text-on-surface-variant">关闭按钮行为</label>
-            <Select
-              value={closeBehavior}
-              onChange={(e) => update("closeBehavior", e.target.value as CloseBehavior)}
-              aria-label="关闭按钮行为"
-            >
-              {CLOSE_BEHAVIOR_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </Select>
-            <div className="mt-1 text-[11px] text-text-muted">控制点击窗口关闭按钮时的动作。</div>
+          <div className="text-sm font-semibold text-on-surface">侧栏与行为</div>
+          <div className="mt-3 space-y-4">
+            <div className="flex items-center justify-between gap-4 rounded-2xl border border-primary bg-surface-container-low px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-on-surface">精简模式</div>
+                <div className="mt-1 text-[11px] text-text-muted">隐藏内嵌终端，把项目列表作为启动器。</div>
+              </div>
+              <Switch
+                className="shrink-0"
+                checked={viewMode === "compact"}
+                onCheckedChange={() => update("viewMode", viewMode === "compact" ? "standard" : "compact")}
+                aria-label={viewMode === "compact" ? "关闭精简模式" : "开启精简模式"}
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-on-surface-variant">侧栏密度</label>
+              <div className="grid grid-cols-2 gap-2">
+                {SIDEBAR_DENSITY_OPTIONS.map((opt) => {
+                  const active = sidebarDensity === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => update("sidebarDensity", opt.value)}
+                      className="ui-interactive ui-focus-ring ui-selection-card rounded-xl border px-3 py-2 text-left"
+                      data-selected={active ? "true" : "false"}
+                      aria-pressed={active}
+                    >
+                      <div className="text-sm font-semibold">{opt.label}</div>
+                      <div className="mt-0.5 text-[11px] leading-4 text-on-surface-variant">{opt.description}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-on-surface-variant">关闭按钮行为</label>
+              <Select
+                value={closeBehavior}
+                onChange={(e) => update("closeBehavior", e.target.value as CloseBehavior)}
+                aria-label="关闭按钮行为"
+              >
+                {CLOSE_BEHAVIOR_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </Select>
+              <div className="mt-1 text-[11px] text-text-muted">控制点击窗口关闭按钮时的动作。</div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-xs text-on-surface-variant">调试模式</span>
+              <Switch
+                checked={debugMode}
+                onCheckedChange={() => update("debugMode", !debugMode)}
+                aria-label={debugMode ? "关闭调试模式" : "开启调试模式"}
+              />
+            </div>
           </div>
         </Card>
       </section>

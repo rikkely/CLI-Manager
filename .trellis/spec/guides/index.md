@@ -23,6 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [Tauri User File Security Checklist](./tauri-user-file-security-checklist.md) | Verify boundary defenses on user paths and asset/fs scopes | Adding a Tauri command that accepts a path, or broadening assetProtocol/fs scope |
 
 ---
 
@@ -46,6 +47,16 @@ These guides help you **ask the right questions before coding**.
 - [ ] **You're creating a new utility/helper function** ← Search first!
 
 → Read [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md)
+
+### When to Think About Tauri File-Boundary Security
+
+- [ ] Adding a `#[tauri::command]` whose argument is a path or contains a path fragment
+- [ ] Broadening `assetProtocol.scope` or any `fs:scope` block
+- [ ] Adding a new `fs:*` permission to `capabilities/*.json`
+- [ ] Storing a user-picked file path in `settings.json` or SQLite
+- [ ] Loading a local file in the WebView via `convertFileSrc`
+
+→ Read [Tauri User File Security Checklist](./tauri-user-file-security-checklist.md)
 
 ---
 

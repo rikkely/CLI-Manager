@@ -73,3 +73,69 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Terminal background customization
+
+**Date**: 2026-05-25
+**Task**: Terminal background customization
+**Branch**: `master`
+
+### Summary
+
+Implemented internal-terminal background image (JPEG/PNG/GIF) with opacity, fit, 9-grid position, blur, dark overlay, plus per-session right-click hide/show. Backend Tauri commands (save/cleanup/exists) with sha256 content-addressed naming, validate_relative_path + canonicalize defenses, assetProtocol scope locked to backgrounds/**. Frontend settingsStore migrate* pattern with transient missing flag; xterm allowTransparency set unconditionally at construction; applyTransparency now injects a darken-coupled cell alpha floor so glyph edges stay legible over high-frequency images. CSS wrapper uses z-index:0 (not isolation:isolate) to avoid GPU compositing promotion that downgrades DOM text rendering. Spec updates: new guides/tauri-user-file-security-checklist.md, plus state-management & component-guidelines additions.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af2ac24` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 4: fix font color coverage to derive secondary/muted tokens
+
+**Date**: 2026-05-25
+**Task**: fix font color coverage to derive secondary/muted tokens
+**Branch**: `master`
+
+### Summary
+
+Fixed uiTextColor only overriding --text-primary by also deriving --text-secondary (85% mix with bg) and --text-muted (60% mix) in App.tsx effect, so sidebar tree groups, command palette, settings subtitles and history panels follow the user-selected color. Updated PRD with Decision Amendment recording the scope expansion from PRD's original 'primary-only' assumption.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7cde1c6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

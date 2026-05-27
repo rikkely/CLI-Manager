@@ -238,6 +238,7 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(pty::manager::PtyManager::new())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -267,6 +268,9 @@ pub fn run() {
             commands::sync::sync_local_export,
             commands::sync::sync_local_import,
             commands::version::get_app_version,
+            commands::background::save_background_image,
+            commands::background::cleanup_unused_backgrounds,
+            commands::background::background_image_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

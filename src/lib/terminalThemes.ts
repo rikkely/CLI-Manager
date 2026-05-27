@@ -870,3 +870,37 @@ export function getTerminalBackground(
 ): string {
   return getTerminalTheme(themeName, resolvedTheme, lightPalette, darkPalette).background!;
 }
+
+/**
+ * Return a shallow clone of `theme` with a (possibly translucent) dark
+ * background and a translucent selection color suitable for rendering over a
+ * DOM background image. Other colors are untouched.
+ *
+ * Required when `allowTransparency: true` is set on the xterm `Terminal`
+ * instance — see `research/xterm-transparent-background.md`.
+ *
+ * `darkenPct` (0–100) is the user's "background darken" slider. We use a
+ * fraction of it as the alpha floor on the default cell background — this
+ * stops small-glyph edge pixels (which carry subpixel alpha) from
+ * alpha-blending directly into high-frequency image pixels (which makes the
+ * glyphs look mushy). With a stable dark substrate beneath each cell, glyph
+ * edges resolve cleanly even over busy images. The image still shows through
+ * because the floor alpha < 1.
+ *
+ * The coefficient (0.6) is calibrated so:
+ *   darken=0   → cell bg alpha=0    (image fully visible, original behavior)
+ *   darken=50  → cell bg alpha=0.30 (image still visible, text legible)
+ *   darken=100 → cell bg alpha=0.60 (image mostly hidden, text crisp)
+ */
+export function applyTransparency(theme: ITheme, darkenPct: number = 0): ITheme {
+  const clamped = Math.max(0, Math.min(100, darkenPct));
+  const floor = (clamped / 100) * 0.6;
+  const next: ITheme = { ...theme, background: `rgba(0,0,0,${floor.toFixed(3)})` };
+  const selection = theme.selectionBackground;
+  // Only override opaque selection backgrounds (HEX or rgb without alpha).
+  // Already-translucent rgba selections are kept as-is.
+  if (typeof selection === "string" && !/^rgba\s*\(/i.test(selection)) {
+    next.selectionBackground = "rgba(255,255,255,0.18)";
+  }
+  return next;
+}
