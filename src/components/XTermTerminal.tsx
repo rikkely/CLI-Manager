@@ -11,6 +11,8 @@ import { useSettingsStore, type LightThemePalette, type DarkThemePalette } from 
 
 const FONT_SIZE_MIN = 8;
 const FONT_SIZE_MAX = 32;
+const MIN_TERMINAL_COLS = 40;
+const MIN_TERMINAL_ROWS = 8;
 import { toast } from "sonner";
 import { logError } from "../lib/logger";
 
@@ -38,18 +40,27 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   const inactiveBufferSizeRef = useRef(0);
   const INACTIVE_BUFFER_MAX = 256 * 1024;
 
+  const fitWhenStable = (force = false) => {
+    const container = containerRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!container || !fitAddon) return;
+    if (!force && (!isActiveRef.current || isComposingRef.current)) return;
+    if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
+
+    const dims = fitAddon.proposeDimensions();
+    if (!dims || dims.cols < MIN_TERMINAL_COLS || dims.rows < MIN_TERMINAL_ROWS) return;
+    fitAddon.fit();
+  };
+
   const scheduleFit = (force = false) => {
     if (fitRafRef.current !== null) {
       cancelAnimationFrame(fitRafRef.current);
     }
     fitRafRef.current = requestAnimationFrame(() => {
-      fitRafRef.current = null;
-      const container = containerRef.current;
-      const fitAddon = fitAddonRef.current;
-      if (!container || !fitAddon) return;
-      if (!force && (!isActiveRef.current || isComposingRef.current)) return;
-      if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
-      fitAddon.fit();
+      fitRafRef.current = requestAnimationFrame(() => {
+        fitRafRef.current = null;
+        fitWhenStable(force);
+      });
     });
   };
 
@@ -127,9 +138,9 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
       // WebGL not supported, fall back to canvas
     }
 
-    fitAddon.fit();
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+    scheduleFit(true);
     if (isActive) {
       terminal.focus();
     }
@@ -216,6 +227,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
     // Sync resize to PTY
     terminal.onResize(({ cols, rows }) => {
+      if (cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS) return;
       invoke("pty_resize", { sessionId, cols, rows }).catch((err) => {
         logError("PTY resize failed in XTermTerminal", { sessionId, cols, rows, err });
       });
@@ -375,13 +387,6 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     });
     resizeObserver.observe(containerRef.current);
 
-    // Initial resize sync
-    const dims = fitAddon.proposeDimensions();
-    if (dims) {
-      invoke("pty_resize", { sessionId, cols: dims.cols, rows: dims.rows }).catch((err) => {
-        logError("Initial PTY resize failed in XTermTerminal", { sessionId, dims, err });
-      });
-    }
 
     return () => {
       cancelled = true;

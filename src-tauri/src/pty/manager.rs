@@ -15,6 +15,8 @@ use crate::pty::boundary::safe_emit_boundary;
 /// 每次 read 都触发一次 IPC + Base64 编码。
 const READER_FLUSH_THRESHOLD: usize = 32 * 1024;
 const READER_BUF_SIZE: usize = 16 * 1024;
+const MIN_PTY_COLS: u16 = 40;
+const MIN_PTY_ROWS: u16 = 8;
 
 pub struct PtySession {
     writer: Box<dyn Write + Send>,
@@ -247,6 +249,8 @@ impl PtyManager {
             msg
         })?;
         let session = session_arc.lock().unwrap();
+        let cols = cols.max(MIN_PTY_COLS);
+        let rows = rows.max(MIN_PTY_ROWS);
         debug!(
             "pty resize: session_id={}, cols={}, rows={}",
             session_id, cols, rows
