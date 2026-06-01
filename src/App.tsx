@@ -144,6 +144,7 @@ function showClaudeHookToast(payload: CliHookPayload, tabId: string): void {
 
 function App() {
   const loadSettings = useSettingsStore((s) => s.load);
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
@@ -468,6 +469,10 @@ function App() {
       window.cancelAnimationFrame(raf2);
     };
   }, [resolvedTheme, viewMode]);
+
+  if (!settingsLoaded) {
+    return <div className="ui-workspace-shell flex h-screen flex-col" />;
+  }
 
   return (
     <div className="ui-workspace-shell flex h-screen flex-col">
