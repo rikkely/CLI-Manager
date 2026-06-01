@@ -40,6 +40,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const inactiveBufferRef = useRef<string[]>([]);
   const inactiveBufferSizeRef = useRef(0);
+  const cursorShowTimerRef = useRef<number | null>(null);
   const INACTIVE_BUFFER_MAX = 256 * 1024;
 
   const background = useSettingsStore(
@@ -104,6 +105,42 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     logError("PTY write failed in XTermTerminal", { sessionId, stage, err });
   };
 
+  const cancelPendingCursorShow = () => {
+    if (cursorShowTimerRef.current !== null) {
+      window.clearTimeout(cursorShowTimerRef.current);
+      cursorShowTimerRef.current = null;
+    }
+  };
+
+  const scheduleCursorShow = () => {
+    cancelPendingCursorShow();
+    cursorShowTimerRef.current = window.setTimeout(() => {
+      cursorShowTimerRef.current = null;
+      terminalRef.current?.write("\x1b[?25h");
+    }, 80);
+  };
+
+  const processCursorVisibility = (text: string) => {
+    const cursorPattern = /\x1b\[\?25[hl]/g;
+    let processed = "";
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = cursorPattern.exec(text)) !== null) {
+      processed += text.slice(lastIndex, match.index);
+      const sequence = match[0];
+      if (sequence.endsWith("l")) {
+        cancelPendingCursorShow();
+        processed += sequence;
+      } else {
+        scheduleCursorShow();
+      }
+      lastIndex = match.index + sequence.length;
+    }
+
+    return processed + text.slice(lastIndex);
+  };
+
   // Hot-update theme / fontSize / fontFamily without recreating the terminal.
   // `isTransparent` is in the dep array so toggling the background image
   // immediately recomputes the theme (otherwise the WebGL clear color stays
@@ -129,7 +166,6 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     const wasActive = isActiveRef.current;
     isActiveRef.current = isActive;
     if (terminalRef.current) {
-      terminalRef.current.options.cursorBlink = isActive;
       if (!isActive) {
         terminalRef.current.blur();
       }
@@ -140,7 +176,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
         const combined = inactiveBufferRef.current.join("");
         inactiveBufferRef.current = [];
         inactiveBufferSizeRef.current = 0;
-        terminalRef.current.write(combined);
+        terminalRef.current.write(processCursorVisibility(combined));
       }
       // Wait one frame to ensure display:block has taken effect and layout is stable.
       scheduleFit(true);
@@ -155,7 +191,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     const terminal = new Terminal({
       cols: 80,
       rows: 24,
-      cursorBlink: isActive,
+      cursorBlink: false,
       cursorStyle: "block",
       fontSize,
       fontFamily,
@@ -323,7 +359,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
       const combined = pendingChunks.length === 1 ? pendingChunks[0] : pendingChunks.join("");
       pendingChunks = [];
       if (isActiveRef.current) {
-        terminal.write(combined);
+        terminal.write(processCursorVisibility(combined));
       } else {
         stashInactiveText(combined);
       }
@@ -437,6 +473,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
     return () => {
       cancelled = true;
+      cancelPendingCursorShow();
       textarea?.removeEventListener("compositionstart", onCompositionStart);
       textarea?.removeEventListener("compositionupdate", onCompositionUpdate);
       textarea?.removeEventListener("compositionend", onCompositionEnd);

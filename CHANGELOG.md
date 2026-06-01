@@ -13,6 +13,11 @@
 - Hook 设置页拆分为 Claude / Codex 两套配置状态与操作，分别展示路径、安装状态和安装/删除入口。
 - Claude Hook 安装逻辑继续只处理 `settings.json` 内的 `Notification` / `Stop` / `StopFailure`，避免覆盖用户自定义 hook。
 - Hook bridge 日志文案统一为 CLI hook，便于区分来源。
+- Hook 设置页 Claude 配置入口按钮改为“选择 Claude 目录”，并将刷新状态按钮移到安装操作之后。
+
+### 终端修复
+
+- 修复 Codex CLI 高频重绘时反复发送光标显示/隐藏 ANSI 序列导致内嵌终端光标快速闪动的问题；前端延迟合并 `CSI ?25h`，并保留 `CSI ?25l` 立即生效。
 
 ## [V0.1.8] - 2026-05-29
 

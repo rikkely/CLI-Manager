@@ -342,16 +342,16 @@ export function HookSettingsPage() {
 
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={handleSelectDir} disabled={loading || claudeWorking || codexWorking}>
-              选择目录
-            </Button>
-            <Button variant="outline" onClick={() => void refreshStatus()} disabled={loading || claudeWorking || codexWorking}>
-              {loading ? "刷新中..." : "刷新状态"}
+              选择 Claude 目录
             </Button>
             <Button variant="default" onClick={handleClaudeInstall} disabled={loading || claudeWorking || claudeStatus === "directoryMissing"}>
               {claudeWorking ? "处理中..." : "安装 Claude Hook"}
             </Button>
             <Button variant="destructive" onClick={handleClaudeUninstall} disabled={loading || claudeWorking || claudeStatus === "directoryMissing"}>
               删除 Claude Hook
+            </Button>
+            <Button variant="outline" onClick={() => void refreshStatus()} disabled={loading || claudeWorking || codexWorking}>
+              {loading ? "刷新中..." : "刷新状态"}
             </Button>
           </div>
         </CardContent>

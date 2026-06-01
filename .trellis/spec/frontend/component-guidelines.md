@@ -106,3 +106,31 @@ terminal.options.theme = isTransparent ? applyTransparency(theme) : theme;
 **Cause**: The construction `useEffect` lists a settings field in its dependency array, so changing that field disposes and recreates the Terminal.
 
 **Fix**: Keep the construction effect's deps as `[sessionId]`. Add a separate hot-update effect that mutates `terminal.options.*` for the changed setting. xterm supports hot-mutating `fontSize`, `fontFamily`, `theme`, `cursorBlink`, `cursorStyle`, `scrollback` without rebuild. Only `allowTransparency`, `cols`/`rows` (use Fit instead), and `rendererType` (legacy) require rebuild.
+
+### Common Mistake: Treating `cursorBlink` as full cursor visibility control
+
+**Symptom**: A TUI such as Codex still shows rapid cursor flashing after `cursorBlink` is set to `false`.
+
+**Cause**: `cursorBlink` only controls xterm's own blink animation. Terminal applications can still emit DECTCEM sequences (`CSI ?25h` show cursor, `CSI ?25l` hide cursor), and xterm honors those independently while processing PTY output.
+
+**Wrong**:
+
+```tsx
+const terminal = new Terminal({
+  cursorBlink: false,
+});
+// Assumes this also suppresses application-driven show/hide cursor churn.
+```
+
+**Correct**:
+
+```tsx
+if (sequence === "\x1b[?25l") {
+  cancelPendingCursorShow();
+  writeNow(sequence);
+} else if (sequence === "\x1b[?25h") {
+  scheduleCursorShow();
+}
+```
+
+**Prevention**: For high-frequency TUI redraw issues, inspect application-emitted ANSI cursor visibility sequences before changing xterm appearance options. Pass hide through immediately, debounce show, and keep output processing in the PTY write path instead of adding CLI-specific UI state.
