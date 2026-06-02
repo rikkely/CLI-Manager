@@ -299,6 +299,27 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
       }
     };
 
+    const normalizePastedInput = (text: string) => text.replace(/\r\n?/g, "\n");
+
+    const writePastedInput = (text: string) => {
+      const data = normalizePastedInput(text);
+      if (!data) return;
+      inputBuffer.current += data;
+      invoke("pty_write", { sessionId, data }).catch((err) => reportPtyWriteError("paste", err));
+    };
+
+    const pasteTarget = containerRef.current;
+    const pasteListenerOptions = { capture: true } as const;
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text/plain");
+      if (text === undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      writePastedInput(text);
+    };
+
+    pasteTarget.addEventListener("paste", onPaste, pasteListenerOptions);
+
     terminal.attachCustomKeyEventHandler((e) => {
       if (e.type === "keydown" && e.key === "Enter") {
         const shortcut = useSettingsStore.getState().terminalNewlineShortcut;
@@ -323,9 +344,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
       if (key === "v") {
         e.preventDefault();
         navigator.clipboard.readText().then((text) => {
-          if (text) {
-            terminal.paste(text);
-          }
+          writePastedInput(text);
         }).catch((err) => {
           logError("Failed to read clipboard text", { sessionId, err });
         });
@@ -525,6 +544,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     return () => {
       cancelled = true;
       cancelPendingCursorShow();
+      pasteTarget.removeEventListener("paste", onPaste, pasteListenerOptions);
       textarea?.removeEventListener("compositionstart", onCompositionStart);
       textarea?.removeEventListener("compositionupdate", onCompositionUpdate);
       textarea?.removeEventListener("compositionend", onCompositionEnd);
