@@ -15,6 +15,28 @@ const READ_BUF_CAPACITY: usize = 64 * 1024;
 /// collect_session_files 的 TTL：避免分析看板/搜索短时间内反复全树扫盘。
 const SESSION_FILES_TTL_MS: i64 = 5_000;
 
+#[derive(Clone, Default, PartialEq, Eq)]
+struct HistoryRoots {
+    claude_config_dir: Option<PathBuf>,
+    codex_config_dir: Option<PathBuf>,
+}
+
+impl HistoryRoots {
+    fn cache_key(&self) -> String {
+        format!(
+            "claude={}|codex={}",
+            self.claude_config_dir
+                .as_deref()
+                .map(path_to_key)
+                .unwrap_or_else(|| "__default__".to_string()),
+            self.codex_config_dir
+                .as_deref()
+                .map(path_to_key)
+                .unwrap_or_else(|| "__default__".to_string())
+        )
+    }
+}
+
 #[derive(Clone)]
 struct SessionFileRef {
     source: String,
@@ -80,6 +102,7 @@ struct HistoryIndexEntry {
 
 #[derive(Clone, Default)]
 struct HistorySessionIndex {
+    roots: HistoryRoots,
     entries: Vec<HistoryIndexEntry>,
     by_path: HashMap<String, usize>,
     refreshed_at: i64,
@@ -272,12 +295,15 @@ struct HourStatsAggregate {
 #[tauri::command]
 pub async fn history_list_sessions(
     source: Option<String>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     project_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<HistorySessionSummary>, String> {
     tokio::task::spawn_blocking(move || {
+        let roots = history_roots(claude_config_dir, codex_config_dir);
         let source_filter = source.map(|v| v.to_lowercase());
         let target_project_path = project_path
             .map(|v| normalize_history_path(&v))
@@ -294,7 +320,7 @@ pub async fn history_list_sessions(
 
         if query_lower.is_none() {
             let mut files: Vec<(SessionFileRef, SessionFileFingerprint)> =
-                collect_session_files(source_filter.as_deref())
+                collect_session_files(source_filter.as_deref(), &roots)
                     .into_iter()
                     .map(|file_ref| {
                         let fingerprint = session_file_fingerprint(&file_ref.path);
@@ -328,7 +354,7 @@ pub async fn history_list_sessions(
             return Ok(sessions);
         }
 
-        for entry in refresh_history_index() {
+        for entry in refresh_history_index(&roots) {
             if let Some(filter) = &source_filter {
                 if &entry.file_ref.source != filter {
                     continue;
@@ -374,11 +400,14 @@ pub async fn history_list_sessions(
 #[tauri::command]
 pub async fn history_get_session(
     file_path: String,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     source: String,
     project_key: String,
 ) -> Result<HistorySessionDetail, String> {
     tokio::task::spawn_blocking(move || {
-        let file_ref = validate_session_file_ref(&file_path, &source, &project_key)?;
+        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let file_ref = validate_session_file_ref(&file_path, &source, &project_key, &roots)?;
         build_session_detail(&file_ref)
     })
     .await
@@ -389,10 +418,11 @@ fn validate_session_file_ref(
     file_path: &str,
     source: &str,
     project_key: &str,
+    roots: &HistoryRoots,
 ) -> Result<SessionFileRef, String> {
     let source = source.trim().to_lowercase();
     let project_key = project_key.trim();
-    let base = history_source_base(&source)?
+    let base = history_source_base(&source, roots)?
         .canonicalize()
         .map_err(|_| "history_source_not_found".to_string())?;
     resolve_session_file_ref(
@@ -400,17 +430,14 @@ fn validate_session_file_ref(
         &source,
         project_key,
         &base,
-        collect_session_files(Some(&source)),
+        collect_session_files(Some(&source), roots),
     )
 }
 
-fn history_source_base(source: &str) -> Result<PathBuf, String> {
-    let Some(home) = detect_home_dir() else {
-        return Err("home_dir_not_found".to_string());
-    };
+fn history_source_base(source: &str, roots: &HistoryRoots) -> Result<PathBuf, String> {
     match source {
-        "claude" => Ok(home.join(".claude").join("projects")),
-        "codex" => Ok(home.join(".codex").join("sessions")),
+        "claude" => Ok(resolve_claude_history_root(roots)),
+        "codex" => Ok(resolve_codex_history_root(roots)),
         _ => Err("unsupported_history_source".to_string()),
     }
 }
@@ -460,11 +487,14 @@ fn resolve_session_file_ref(
 #[tauri::command]
 pub async fn history_delete_session(
     file_path: String,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     source: String,
     project_key: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let file_ref = validate_session_file_ref(&file_path, &source, &project_key)?;
+        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let file_ref = validate_session_file_ref(&file_path, &source, &project_key, &roots)?;
         fs::remove_file(&file_ref.path).map_err(|err| err.to_string())?;
         invalidate_history_caches();
         Ok(())
@@ -477,10 +507,13 @@ pub async fn history_delete_session(
 pub async fn history_search(
     query: String,
     source: Option<String>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     project_path: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistorySearchResult>, String> {
     tokio::task::spawn_blocking(move || {
+        let roots = history_roots(claude_config_dir, codex_config_dir);
         let normalized_query = query.trim().to_lowercase();
         if normalized_query.is_empty() {
             return Ok(Vec::new());
@@ -493,7 +526,7 @@ pub async fn history_search(
             .filter(|v| !v.is_empty());
         let mut hits: Vec<HistorySearchResult> = Vec::new();
 
-        for entry in refresh_history_index() {
+        for entry in refresh_history_index(&roots) {
             if let Some(filter) = &source_filter {
                 if &entry.file_ref.source != filter {
                     continue;
@@ -557,12 +590,15 @@ pub async fn history_search(
 pub async fn history_list_prompts(
     scope: Option<String>,
     source: Option<String>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     project_key: Option<String>,
     file_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistoryPromptItem>, String> {
     tokio::task::spawn_blocking(move || {
+        let roots = history_roots(claude_config_dir, codex_config_dir);
         let scope = scope
             .as_deref()
             .map(|v| v.trim().to_lowercase())
@@ -581,7 +617,7 @@ pub async fn history_list_prompts(
         let max_items = limit.unwrap_or(200).clamp(1, 2000);
         let mut prompts: Vec<HistoryPromptItem> = Vec::new();
 
-        for entry in refresh_history_index() {
+        for entry in refresh_history_index(&roots) {
             if let Some(filter) = &source_filter {
                 if &entry.file_ref.source != filter {
                     continue;
@@ -672,15 +708,18 @@ pub async fn history_list_prompts(
 #[tauri::command]
 pub async fn history_get_stats(
     source: Option<String>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     project_key: Option<String>,
     range_days: Option<usize>,
 ) -> Result<HistoryStatsResponse, String> {
     let range_days = range_days.unwrap_or(30).clamp(1, 180);
+    let roots = history_roots(claude_config_dir, codex_config_dir);
     let source_filter = source.map(|v| v.to_lowercase());
     let target_project = project_key
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let entries = refresh_history_index();
+    let entries = refresh_history_index(&roots);
     let end_day = day_start_utc(now_millis());
     let start_day = end_day - (range_days as i64 - 1) * DAY_MS;
 
@@ -926,10 +965,13 @@ fn invalidate_history_caches() {
     }
 }
 
-fn refresh_history_index() -> Vec<HistoryIndexEntry> {
+fn refresh_history_index(roots: &HistoryRoots) -> Vec<HistoryIndexEntry> {
     let now = now_millis();
     if let Ok(index) = get_history_index().read() {
-        if index.refreshed_at > 0 && now - index.refreshed_at < HISTORY_SESSION_INDEX_TTL_MS {
+        if index.roots.eq(roots)
+            && index.refreshed_at > 0
+            && now - index.refreshed_at < HISTORY_SESSION_INDEX_TTL_MS
+        {
             return index.entries.clone();
         }
     }
@@ -937,9 +979,9 @@ fn refresh_history_index() -> Vec<HistoryIndexEntry> {
     let previous = get_history_index()
         .read()
         .ok()
-        .filter(|index| index.refreshed_at > 0)
+        .filter(|index| index.roots.eq(roots) && index.refreshed_at > 0)
         .map(|index| index.clone());
-    let next = build_history_index(now, previous);
+    let next = build_history_index(now, roots, previous);
     let entries = next.entries.clone();
 
     if let Ok(mut index) = get_history_index().write() {
@@ -949,7 +991,11 @@ fn refresh_history_index() -> Vec<HistoryIndexEntry> {
     entries
 }
 
-fn build_history_index(now: i64, previous: Option<HistorySessionIndex>) -> HistorySessionIndex {
+fn build_history_index(
+    now: i64,
+    roots: &HistoryRoots,
+    previous: Option<HistorySessionIndex>,
+) -> HistorySessionIndex {
     let mut previous_entries: HashMap<String, HistoryIndexEntry> = previous
         .as_ref()
         .map(|index| {
@@ -962,7 +1008,7 @@ fn build_history_index(now: i64, previous: Option<HistorySessionIndex>) -> Histo
         })
         .unwrap_or_default();
     let previous_generation = previous.as_ref().map(|index| index.generation).unwrap_or(0);
-    let files = collect_session_files(None);
+    let files = collect_session_files(None, roots);
     let mut entries = Vec::with_capacity(files.len());
 
     for file_ref in files {
@@ -1002,6 +1048,7 @@ fn build_history_index(now: i64, previous: Option<HistorySessionIndex>) -> Histo
     }
 
     HistorySessionIndex {
+        roots: roots.clone(),
         entries,
         by_path,
         refreshed_at: now,
@@ -1157,10 +1204,49 @@ fn build_session_detail(file_ref: &SessionFileRef) -> Result<HistorySessionDetai
     })
 }
 
-fn collect_session_files(source_filter: Option<&str>) -> Vec<SessionFileRef> {
-    let cache_key = source_filter
-        .map(|v| v.to_lowercase())
-        .unwrap_or_else(|| "*".to_string());
+fn history_roots(
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
+) -> HistoryRoots {
+    HistoryRoots {
+        claude_config_dir: normalize_config_dir(claude_config_dir),
+        codex_config_dir: normalize_config_dir(codex_config_dir),
+    }
+}
+
+fn normalize_config_dir(value: Option<String>) -> Option<PathBuf> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn resolve_claude_history_root(roots: &HistoryRoots) -> PathBuf {
+    roots
+        .claude_config_dir
+        .clone()
+        .or_else(|| detect_home_dir().map(|home| home.join(".claude")))
+        .unwrap_or_else(|| PathBuf::from(".claude"))
+        .join("projects")
+}
+
+fn resolve_codex_history_root(roots: &HistoryRoots) -> PathBuf {
+    roots
+        .codex_config_dir
+        .clone()
+        .or_else(|| detect_home_dir().map(|home| home.join(".codex")))
+        .unwrap_or_else(|| PathBuf::from(".codex"))
+        .join("sessions")
+}
+
+fn collect_session_files(source_filter: Option<&str>, roots: &HistoryRoots) -> Vec<SessionFileRef> {
+    let cache_key = format!(
+        "{}|{}",
+        source_filter
+            .map(|v| v.to_lowercase())
+            .unwrap_or_else(|| "*".to_string()),
+        roots.cache_key()
+    );
     let now = now_millis();
 
     if let Ok(cache) = get_files_cache().lock() {
@@ -1171,7 +1257,7 @@ fn collect_session_files(source_filter: Option<&str>) -> Vec<SessionFileRef> {
         }
     }
 
-    let files = scan_session_files(source_filter);
+    let files = scan_session_files(source_filter, roots);
 
     if let Ok(mut cache) = get_files_cache().lock() {
         cache.by_source.insert(
@@ -1186,10 +1272,7 @@ fn collect_session_files(source_filter: Option<&str>) -> Vec<SessionFileRef> {
     files
 }
 
-fn scan_session_files(source_filter: Option<&str>) -> Vec<SessionFileRef> {
-    let Some(home) = detect_home_dir() else {
-        return Vec::new();
-    };
+fn scan_session_files(source_filter: Option<&str>, roots: &HistoryRoots) -> Vec<SessionFileRef> {
     let mut files = Vec::new();
     let source_filter = source_filter.map(|v| v.to_lowercase());
 
@@ -1198,17 +1281,16 @@ fn scan_session_files(source_filter: Option<&str>) -> Vec<SessionFileRef> {
         .map(|v| v == "claude")
         .unwrap_or(true)
     {
-        files.extend(collect_claude_session_files(&home));
+        files.extend(collect_claude_session_files(&resolve_claude_history_root(roots)));
     }
     if source_filter.as_ref().map(|v| v == "codex").unwrap_or(true) {
-        files.extend(collect_codex_session_files(&home));
+        files.extend(collect_codex_session_files(&resolve_codex_history_root(roots)));
     }
 
     files
 }
 
-fn collect_claude_session_files(home: &Path) -> Vec<SessionFileRef> {
-    let root = home.join(".claude").join("projects");
+fn collect_claude_session_files(root: &Path) -> Vec<SessionFileRef> {
     if !root.exists() {
         return Vec::new();
     }
@@ -1239,8 +1321,7 @@ fn collect_claude_session_files(home: &Path) -> Vec<SessionFileRef> {
     results
 }
 
-fn collect_codex_session_files(home: &Path) -> Vec<SessionFileRef> {
-    let root = home.join(".codex").join("sessions");
+fn collect_codex_session_files(root: &Path) -> Vec<SessionFileRef> {
     if !root.exists() {
         return Vec::new();
     }

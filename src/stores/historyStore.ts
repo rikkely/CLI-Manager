@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { getDb } from "../lib/db";
 import { createPerfMarker } from "../lib/logger";
+import { useSettingsStore } from "./settingsStore";
 import type {
   HistoryPromptItem,
   HistorySearchHit,
@@ -344,6 +345,19 @@ function normalizeSourceFilter(filter: HistorySourceFilter): HistorySource | nul
   return filter;
 }
 
+function getHistoryPathArgs(): { claudeConfigDir: string | null; codexConfigDir: string | null } {
+  const settings = useSettingsStore.getState();
+  return {
+    claudeConfigDir: settings.claudeHookConfigDir?.trim() || null,
+    codexConfigDir: settings.codexHookConfigDir?.trim() || null,
+  };
+}
+
+function getHistoryPathCacheKey(): string {
+  const { claudeConfigDir, codexConfigDir } = getHistoryPathArgs();
+  return `${claudeConfigDir ?? "__default__"}|${codexConfigDir ?? "__default__"}`;
+}
+
 function makeSessionKey(source: HistorySource, sessionId: string, filePath: string): string {
   return `${source}:${sessionId}:${filePath}`;
 }
@@ -351,9 +365,10 @@ function makeSessionKey(source: HistorySource, sessionId: string, filePath: stri
 function makeStatsCacheKey(
   source: HistorySourceFilter,
   projectKey: string | null,
-  rangeDays: number
+  rangeDays: number,
+  historyPathKey: string
 ): string {
-  return `${source}|${projectKey ?? "__all__"}|${rangeDays}`;
+  return `${source}|${projectKey ?? "__all__"}|${rangeDays}|${historyPathKey}`;
 }
 
 function sessionsFingerprint(sessions: HistorySessionView[]): string {
@@ -544,8 +559,10 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     try {
       await get().ensureMetaTable();
       const source = normalizeSourceFilter(get().sourceFilter);
+      const historyPathArgs = getHistoryPathArgs();
       const summariesRaw = await invoke<unknown[]>("history_list_sessions", {
         source,
+        ...historyPathArgs,
         projectPath: get().projectPathFilter,
         query: null,
         limit: SESSION_PAGE_FETCH_LIMIT,
@@ -595,8 +612,10 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     try {
       await get().ensureMetaTable();
       const source = normalizeSourceFilter(get().sourceFilter);
+      const historyPathArgs = getHistoryPathArgs();
       const summariesRaw = await invoke<unknown[]>("history_list_sessions", {
         source,
+        ...historyPathArgs,
         projectPath: get().projectPathFilter,
         query: null,
         limit: SESSION_PAGE_FETCH_LIMIT,
@@ -639,6 +658,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     try {
       const detailRaw = await invoke<unknown>("history_get_session", {
         filePath: target.file_path,
+        ...getHistoryPathArgs(),
         source: target.source,
         projectKey: target.project_key,
       });
@@ -659,6 +679,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     try {
       const detailRaw = await invoke<unknown>("history_get_session", {
         filePath: hit.file_path,
+        ...getHistoryPathArgs(),
         source: hit.source,
         projectKey: hit.project_key,
       });
@@ -700,6 +721,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
     await invoke("history_delete_session", {
       filePath: target.file_path,
+      ...getHistoryPathArgs(),
       source: target.source,
       projectKey: target.project_key,
     });
@@ -743,6 +765,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       const hitsRaw = await invoke<unknown[]>("history_search", {
         query: normalized,
         source,
+        ...getHistoryPathArgs(),
         projectPath: get().projectPathFilter,
         limit: DEFAULT_SEARCH_LIMIT,
       });
@@ -767,6 +790,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       const promptsRaw = await invoke<unknown[]>("history_list_prompts", {
         scope,
         source,
+        ...getHistoryPathArgs(),
         query: query?.trim() || null,
         projectKey: projectKey?.trim() || null,
         filePath: session?.file_path ?? null,
@@ -784,7 +808,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const rangeDays = options?.rangeDays ?? 30;
     const force = options?.force ?? false;
     const sourceFilter = get().sourceFilter;
-    const cacheKey = makeStatsCacheKey(sourceFilter, projectKey, rangeDays);
+    const historyPathArgs = getHistoryPathArgs();
+    const historyPathKey = getHistoryPathCacheKey();
+    const cacheKey = makeStatsCacheKey(sourceFilter, projectKey, rangeDays, historyPathKey);
     const now = Date.now();
     const fingerprint = sessionsFingerprint(get().sessions);
     const cached = statsCacheGet(cacheKey);
@@ -817,6 +843,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       const source = normalizeSourceFilter(sourceFilter);
       const statsRaw = await invoke<unknown>("history_get_stats", {
         source,
+        ...historyPathArgs,
         projectKey,
         rangeDays,
       });

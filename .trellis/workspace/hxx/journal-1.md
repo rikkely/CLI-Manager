@@ -139,3 +139,37 @@ Fixed uiTextColor only overriding --text-primary by also deriving --text-seconda
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Hook 自定义目录联动历史统计与历史列表分割修复
+
+**Date**: 2026-06-04
+**Task**: Hook 自定义目录联动历史统计与历史列表分割修复
+**Branch**: `master`
+
+### Summary
+
+历史读取链路跟随 Claude/Codex Hook 自定义目录并隔离缓存；历史会话列表改为卡片式分割，补充右键删除入口。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `349dffc` | (see git log) |
+| `648bbe9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

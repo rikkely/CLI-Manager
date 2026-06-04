@@ -104,9 +104,11 @@ function SettingsSwitchRow({
 }
 
 export function HookSettingsPage() {
+  const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
+  const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const [status, setStatus] = useState<HookSettingsStatus | null>(null);
-  const [selectedDir, setSelectedDir] = useState<string | null>(null);
-  const [codexSelectedDir, setCodexSelectedDir] = useState<string | null>(null);
+  const [selectedDir, setSelectedDir] = useState<string | null>(claudeHookConfigDir);
+  const [codexSelectedDir, setCodexSelectedDir] = useState<string | null>(codexHookConfigDir);
   const [loading, setLoading] = useState(false);
   const [claudeWorking, setClaudeWorking] = useState(false);
   const [codexWorking, setCodexWorking] = useState(false);
@@ -145,7 +147,7 @@ export function HookSettingsPage() {
   };
 
   useEffect(() => {
-    void refreshStatus(undefined);
+    void refreshStatus();
   }, []);
 
   const handleSelectDir = async () => {
@@ -155,6 +157,7 @@ export function HookSettingsPage() {
       });
       if (!dir) return;
       setSelectedDir(dir);
+      await updateSetting("claudeHookConfigDir", dir);
       await refreshStatus(dir, codexSelectedDirArg);
     } catch (error) {
       toast.error("选择目录失败", { description: getErrorMessage(error) });
@@ -168,6 +171,7 @@ export function HookSettingsPage() {
       });
       if (!dir) return;
       setCodexSelectedDir(dir);
+      await updateSetting("codexHookConfigDir", dir);
       await refreshStatus(selectedDirArg, dir);
     } catch (error) {
       toast.error("选择 Codex 目录失败", { description: getErrorMessage(error) });

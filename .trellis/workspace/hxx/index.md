@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
-- **Last Active**: 2026-05-25
+- **Total Sessions**: 5
+- **Last Active**: 2026-06-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~141 | Active |
+| `journal-1.md` | ~175 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-06-04 | Hook 自定义目录联动历史统计与历史列表分割修复 | `349dffc`, `648bbe9` | `master` |
 | 4 | 2026-05-25 | fix font color coverage to derive secondary/muted tokens | `7cde1c6` | `master` |
 | 3 | 2026-05-25 | Terminal background customization | `af2ac24` | `master` |
 | 2 | 2026-05-22 | 发布 V0.1.4 版本与 CHANGELOG | `20b134f`, `742573a` | `master` |
