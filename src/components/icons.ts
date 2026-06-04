@@ -11,6 +11,8 @@ export {
   Eye,
   EyeOff,
   Folder,
+  Maximize2,
+  Minimize2,
   FolderPlus,
   Pencil,
   Play,

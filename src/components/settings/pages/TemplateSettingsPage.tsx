@@ -46,6 +46,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<"create" | "edit">("create");
   const [saving, setSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [form, setForm] = useState<TemplateEditorForm>({
     name: "",
     command: "",
@@ -97,6 +98,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
   const resetToCreate = () => {
     setMode("create");
     setSelectedId(null);
+    setConfirmingDelete(false);
     setForm({
       name: "",
       command: "",
@@ -109,6 +111,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
   const openEditor = (template: CommandTemplate) => {
     setMode("edit");
     setSelectedId(template.id);
+    setConfirmingDelete(false);
     setForm({
       name: template.name,
       command: template.command,
@@ -187,8 +190,8 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
     || (mode === "create" && form.scope === "session" && !activeSessionId);
 
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_1fr]">
-      <section className="ui-surface-card rounded-2xl border border-border p-3">
+    <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-4">
+      <section className="ui-surface-card min-w-0 rounded-2xl border border-border p-3">
         <div className="mb-2 flex items-center justify-between">
           <div className="text-sm font-semibold text-on-surface">模板列表</div>
           <button
@@ -228,8 +231,8 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
         </div>
       </section>
 
-      <section className="ui-surface-card rounded-2xl border border-border p-4">
-        <div className="mb-3 flex items-center justify-between gap-2">
+      <section className="ui-surface-card min-w-0 rounded-2xl border border-border p-4">
+        <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-container px-4 py-3">
           <div>
             <div className="text-sm font-semibold text-on-surface">
               {mode === "create" ? "新建模板" : "编辑模板"}
@@ -238,14 +241,48 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
               新建与编辑共用同一表单，避免行为分叉。
             </div>
           </div>
-          {mode === "edit" && (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {mode === "edit" && (
+              <button
+                onClick={resetToCreate}
+                className="ui-interactive rounded-md border border-border px-3 py-1.5 text-xs text-on-surface-variant"
+              >
+                取消编辑
+              </button>
+            )}
             <button
-              onClick={() => void handleDelete()}
-              className="ui-interactive rounded-md border border-danger/50 px-2 py-1 text-[11px] text-danger"
+              onClick={() => void handleSave()}
+              disabled={saveDisabled}
+              className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              删除
+              {saving ? "保存中..." : "确认保存"}
             </button>
-          )}
+            {mode === "edit" && (
+              confirmingDelete ? (
+                <>
+                  <button
+                    onClick={() => setConfirmingDelete(false)}
+                    className="ui-interactive rounded-md border border-border px-3 py-1.5 text-xs text-on-surface-variant"
+                  >
+                    取消删除
+                  </button>
+                  <button
+                    onClick={() => void handleDelete()}
+                    className="rounded-md border border-danger/50 bg-danger px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  >
+                    确认删除
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setConfirmingDelete(true)}
+                  className="ui-interactive rounded-md border border-danger/50 px-3 py-1.5 text-xs text-danger"
+                >
+                  删除
+                </button>
+              )
+            )}
+          </div>
         </div>
 
         <div className="space-y-3">
@@ -330,23 +367,6 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-2 pt-1">
-            {mode === "edit" && (
-              <button
-                onClick={resetToCreate}
-                className="ui-interactive rounded-md border border-border px-3 py-1.5 text-xs text-on-surface-variant"
-              >
-                取消编辑
-              </button>
-            )}
-            <button
-              onClick={() => void handleSave()}
-              disabled={saveDisabled}
-              className="ui-interactive rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-            >
-              {saving ? "保存中..." : "保存"}
-            </button>
-          </div>
         </div>
       </section>
     </div>

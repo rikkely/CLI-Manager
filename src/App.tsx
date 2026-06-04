@@ -205,6 +205,7 @@ function App() {
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [statsOpen, setStatsOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [terminalFullscreen, setTerminalFullscreen] = useState(false);
   const restoreWindowWidthRef = useRef<number | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
 
@@ -239,7 +240,25 @@ function App() {
     [openHistory, openHistorySession]
   );
 
-  useKeyboardShortcuts();
+  const handleToggleTerminalFullscreen = useCallback(() => {
+    const nextFullscreen = !terminalFullscreen;
+    if (!IN_TAURI) {
+      setTerminalFullscreen(nextFullscreen);
+      return;
+    }
+
+    void (async () => {
+      try {
+        await getCurrentWindow().setFullscreen(nextFullscreen);
+        setTerminalFullscreen(nextFullscreen);
+      } catch (err) {
+        toast.error(nextFullscreen ? "进入全屏失败" : "退出全屏失败", { description: String(err) });
+        logWarn("Failed to toggle terminal fullscreen", err);
+      }
+    })();
+  }, [terminalFullscreen]);
+
+  useKeyboardShortcuts({ onToggleTerminalFullscreen: handleToggleTerminalFullscreen });
 
   useEffect(() => {
     if (!IN_TAURI) return;
@@ -519,7 +538,7 @@ function App() {
       <a href="#main-content" className="skip-link">
         跳转到主内容
       </a>
-      <WindowTitleBar />
+      {(!terminalFullscreen || viewMode === "compact") && <WindowTitleBar />}
       {viewMode === "compact" ? (
         <div id="main-content" className="flex min-h-0 flex-1" tabIndex={-1}>
           <Sidebar
@@ -533,15 +552,17 @@ function App() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-          <Sidebar
-            onOpenSettings={(tab) => {
-              setSettingsInitialTab(tab ?? "general");
-              setSettingsOpen(true);
-            }}
-            onOpenStats={handleOpenStats}
-          />
+          {!terminalFullscreen && (
+            <Sidebar
+              onOpenSettings={(tab) => {
+                setSettingsInitialTab(tab ?? "general");
+                setSettingsOpen(true);
+              }}
+              onOpenStats={handleOpenStats}
+            />
+          )}
           <main id="main-content" className="ui-main-shell flex min-w-0 flex-1 flex-col" tabIndex={-1}>
-            <TerminalTabs />
+            <TerminalTabs fullscreen={terminalFullscreen} onToggleFullscreen={handleToggleTerminalFullscreen} />
           </main>
         </div>
       )}

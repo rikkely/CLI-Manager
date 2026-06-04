@@ -15,6 +15,7 @@ const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
   nextTab: "下一个标签",
   prevTab: "上一个标签",
   commandPalette: "命令面板",
+  toggleTerminalFullscreen: "终端全屏",
 };
 
 const TERMINAL_NEWLINE_OPTIONS: { value: TerminalNewlineShortcut; label: string }[] = [

@@ -11,9 +11,10 @@ import { logError } from "../lib/logger";
 
 interface CommandHistoryPanelProps {
   compact?: boolean;
+  showText?: boolean;
 }
 
-export function CommandHistoryPanel({ compact = false }: CommandHistoryPanelProps) {
+export function CommandHistoryPanel({ compact = false, showText = true }: CommandHistoryPanelProps) {
   const [open, setOpen] = useState(false);
   const [panelLoading, setPanelLoading] = useState(false);
   const { entries, searchQuery, setSearchQuery, fetchAll } = useCommandHistoryStore();
@@ -63,18 +64,24 @@ export function CommandHistoryPanel({ compact = false }: CommandHistoryPanelProp
     const d = new Date(Number(ts));
     return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
   };
+  const iconOnly = compact && !showText;
+  const triggerClassName = iconOnly
+    ? "ui-focus-ring ui-icon-action"
+    : compact
+    ? "ui-flat-action ui-toolbar-button"
+    : "ui-flat-action text-xs";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className={compact ? "ui-focus-ring ui-icon-action" : "ui-flat-action text-xs"}
+          className={triggerClassName}
           data-active={open ? "true" : "false"}
           title="命令历史"
           aria-label={open ? "关闭命令历史面板" : "打开命令历史面板"}
         >
           <Clock size={14} strokeWidth={1.5} />
-          {!compact && <span>命令历史</span>}
+          {showText && <span>命令历史</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent id="command-history-panel" align="end" className="w-80">

@@ -8,6 +8,7 @@ import { useShallow } from "zustand/shallow";
 import { applyTransparency, getTerminalTheme, getTerminalBackground } from "../lib/terminalThemes";
 import { backgroundAssetUrl } from "../lib/assetUrl";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
+import { useProjectStore } from "../stores/projectStore";
 import { useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
 import { useSettingsStore, type LightThemePalette, type DarkThemePalette } from "../stores/settingsStore";
 
@@ -359,17 +360,38 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
     pasteTarget.addEventListener("paste", onPaste, pasteListenerOptions);
 
+    const isCodexNewlineSession = () => {
+      const terminalState = useTerminalStore.getState();
+      const primarySessionId =
+        Object.entries(terminalState.splits).find(([, split]) => split.secondSessionId === sessionId)?.[0] ?? sessionId;
+      const session = terminalState.sessions.find((item) => item.id === primarySessionId);
+      const project = session?.projectId
+        ? useProjectStore.getState().projects.find((item) => item.id === session.projectId)
+        : null;
+      if (project?.cli_tool.trim().toLowerCase() === "codex") return true;
+      const startupCmd = session?.startupCmd?.toLowerCase() ?? "";
+      const titleTool = session?.title.match(/\(([^()]*)\)\s*$/)?.[1]?.trim().toLowerCase() ?? "";
+      return titleTool === "codex" || /(?:^|\s)codex(?:\s|$)/.test(startupCmd);
+    };
+
     terminal.attachCustomKeyEventHandler((e) => {
       if (e.type === "keydown" && e.key === "Enter") {
         const shortcut = useSettingsStore.getState().terminalNewlineShortcut;
+        const managedCombo =
+          (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) ||
+          (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) ||
+          (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey);
         const matched =
           (shortcut === "Shift+Enter" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) ||
           (shortcut === "Ctrl+Enter" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) ||
           (shortcut === "Alt+Enter" && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey);
-        if (matched) {
+        if (managedCombo) {
           e.preventDefault();
-          markAttentionInputHandled();
-          invoke("pty_write", { sessionId, data: "\n" }).catch((err) => reportPtyWriteError("newline", err));
+          if (matched) {
+            markAttentionInputHandled();
+            const newlineData = isCodexNewlineSession() ? "\x1b\r" : "\n";
+            invoke("pty_write", { sessionId, data: newlineData }).catch((err) => reportPtyWriteError("newline", err));
+          }
           return false;
         }
       }

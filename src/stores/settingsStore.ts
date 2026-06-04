@@ -19,10 +19,24 @@ export type TerminalThemeMode = "follow-app" | "independent";
 export type SidebarDensity = "compact" | "comfortable";
 export type ViewMode = "standard" | "compact";
 export type CloseBehavior = "ask" | "minimize" | "exit";
-export type ShortcutAction = "newTerminal" | "closeTerminal" | "nextTab" | "prevTab" | "commandPalette";
+export type ShortcutAction =
+  | "newTerminal"
+  | "closeTerminal"
+  | "nextTab"
+  | "prevTab"
+  | "commandPalette"
+  | "toggleTerminalFullscreen";
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
 export type TerminalNewlineShortcut = "Shift+Enter" | "Ctrl+Enter" | "Alt+Enter";
+
+export interface TerminalToolbarVisibilitySettings {
+  templates: boolean;
+  commandHistory: boolean;
+  fullscreen: boolean;
+  sessionHistory: boolean;
+  showText: boolean;
+}
 
 export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   newTerminal: "Ctrl+Shift+T",
@@ -30,6 +44,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   nextTab: "Alt+ArrowRight",
   prevTab: "Alt+ArrowLeft",
   commandPalette: "Ctrl+P",
+  toggleTerminalFullscreen: "F11",
 };
 
 export type TerminalBackgroundFit = "cover" | "contain" | "center" | "tile";
@@ -90,10 +105,12 @@ interface Settings {
   terminalThemeMode: TerminalThemeMode;
   terminalThemeName: string;
   sidebarDensity: SidebarDensity;
+  showProjectTreeBadges: boolean;
   viewMode: ViewMode;
   closeBehavior: CloseBehavior;
   keyboardShortcuts: KeyboardShortcutMap;
   terminalNewlineShortcut: TerminalNewlineShortcut;
+  terminalToolbarVisibility: TerminalToolbarVisibilitySettings;
   shellRuntimeMonitoringEnabled: boolean;
   terminalBackground: TerminalBackgroundSettings;
   hookPopupNotificationsEnabled: boolean;
@@ -131,10 +148,18 @@ const DEFAULTS: Settings = {
   terminalThemeMode: "follow-app",
   terminalThemeName: "auto",
   sidebarDensity: "comfortable",
+  showProjectTreeBadges: true,
   viewMode: "standard",
   closeBehavior: "ask",
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   terminalNewlineShortcut: "Shift+Enter",
+  terminalToolbarVisibility: {
+    templates: true,
+    commandHistory: true,
+    fullscreen: true,
+    sessionHistory: true,
+    showText: false,
+  },
   shellRuntimeMonitoringEnabled: true,
   terminalBackground: {
     enabled: false,
@@ -194,6 +219,22 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   if (value < min) return min;
   if (value > max) return max;
   return value;
+}
+
+export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolbarVisibilitySettings {
+  const defaults = DEFAULTS.terminalToolbarVisibility;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Record<string, unknown>;
+
+  return {
+    templates: typeof raw.templates === "boolean" ? raw.templates : defaults.templates,
+    commandHistory: typeof raw.commandHistory === "boolean" ? raw.commandHistory : defaults.commandHistory,
+    fullscreen: typeof raw.fullscreen === "boolean" ? raw.fullscreen : defaults.fullscreen,
+    sessionHistory: typeof raw.sessionHistory === "boolean" ? raw.sessionHistory : defaults.sessionHistory,
+    showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
+  };
 }
 
 export function migrateTerminalBackground(value: unknown): TerminalBackgroundSettings {
@@ -314,6 +355,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       entries.keyboardShortcuts = { ...DEFAULTS.keyboardShortcuts, ...entries.keyboardShortcuts };
     }
 
+    entries.terminalToolbarVisibility = migrateTerminalToolbarVisibility(entries.terminalToolbarVisibility);
+    entries.showProjectTreeBadges =
+      typeof entries.showProjectTreeBadges === "boolean"
+        ? entries.showProjectTreeBadges
+        : DEFAULTS.showProjectTreeBadges;
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
 
     entries.shellRuntimeMonitoringEnabled =

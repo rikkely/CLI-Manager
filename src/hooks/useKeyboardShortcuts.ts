@@ -22,15 +22,21 @@ export function eventToCombo(e: KeyboardEvent): string {
   return parts.join("+");
 }
 
-export function useKeyboardShortcuts() {
+interface KeyboardShortcutOptions {
+  onToggleTerminalFullscreen?: () => void;
+}
+
+export function useKeyboardShortcuts(options: KeyboardShortcutOptions = {}) {
   const shortcuts = useSettingsStore((s) => s.keyboardShortcuts);
   const viewMode = useSettingsStore((s) => s.viewMode);
 
   // Refs hold the latest values; the actual handler is bound once.
   const shortcutsRef = useRef(shortcuts);
   const viewModeRef = useRef(viewMode);
+  const onToggleTerminalFullscreenRef = useRef(options.onToggleTerminalFullscreen);
   shortcutsRef.current = shortcuts;
   viewModeRef.current = viewMode;
+  onToggleTerminalFullscreenRef.current = options.onToggleTerminalFullscreen;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -43,6 +49,12 @@ export function useKeyboardShortcuts() {
       if (combo === shortcuts.commandPalette) {
         e.preventDefault();
         useCommandPaletteStore.getState().toggle();
+        return;
+      }
+
+      if (combo === shortcuts.toggleTerminalFullscreen) {
+        e.preventDefault();
+        onToggleTerminalFullscreenRef.current?.();
         return;
       }
 

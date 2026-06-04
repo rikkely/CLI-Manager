@@ -21,7 +21,11 @@ function resolveCommand(command: string, project?: Project): string {
     .replace(/\$\{projectName\}/g, project.name);
 }
 
-export function CommandTemplatePanel() {
+interface CommandTemplatePanelProps {
+  showText?: boolean;
+}
+
+export function CommandTemplatePanel({ showText = true }: CommandTemplatePanelProps) {
   const {
     fetchTemplates,
     getForContext,
@@ -148,12 +152,12 @@ export function CommandTemplatePanel() {
     >
       <PopoverTrigger asChild>
         <button
-          className="ui-flat-action ui-toolbar-button"
+          className={showText ? "ui-flat-action ui-toolbar-button" : "ui-focus-ring ui-icon-action"}
           title="Command templates"
           aria-label="打开命令模板面板"
         >
           <TerminalSquare size={14} strokeWidth={1.5} />
-          <span>Templates</span>
+          {showText && <span>Templates</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent id="command-template-panel" align="start" className="w-72">

@@ -5,6 +5,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { TreeNode as TNode } from "../../lib/types";
 import type { SessionStatus } from "../../stores/terminalStore";
 import { useTreeActions } from "./TreeContext";
+import { useSettingsStore } from "../../stores/settingsStore";
 import { Folder, FolderPlus, Terminal, Pencil, Trash2, Play, ChevronRight, Plus, AlertTriangle, Copy } from "../icons";
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
@@ -63,6 +64,7 @@ interface TreeNodeItemProps {
 
 function TreeNodeItemImpl({ node, depth, density, focusedNodeKey, onFocusNode }: TreeNodeItemProps) {
   const actions = useTreeActions();
+  const showProjectTreeBadges = useSettingsStore((s) => s.showProjectTreeBadges);
   const itemId = node.type === "project" ? node.project.id : node.group.id;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: itemId });
   const sortableStyle = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
@@ -119,7 +121,7 @@ function TreeNodeItemImpl({ node, depth, density, focusedNodeKey, onFocusNode }:
           </span>
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="block truncate font-medium">{p.name}</span>
-            {p.cli_tool && (
+            {showProjectTreeBadges && p.cli_tool && (
               <span
                 className="ui-tree-meta-chip inline-flex shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-tight"
                 data-cli-tool={p.cli_tool.trim().toLowerCase()}
@@ -127,7 +129,7 @@ function TreeNodeItemImpl({ node, depth, density, focusedNodeKey, onFocusNode }:
                 {p.cli_tool}
               </span>
             )}
-            {pathInvalid && (
+            {showProjectTreeBadges && pathInvalid && (
               <span
                 className="ui-tree-warning-chip inline-flex shrink-0 items-center justify-center rounded-full"
                 title="路径不存在"
@@ -219,7 +221,9 @@ function TreeNodeItemImpl({ node, depth, density, focusedNodeKey, onFocusNode }:
           </span>
           <span className="ui-tree-leading-icon"><Folder size={16} strokeWidth={1.5} /></span>
           <span className="flex-1 text-left truncate">{g.name}</span>
-          <span className="ui-tree-count-badge rounded-full px-1.5 text-[11px] font-medium">{childCount}</span>
+          {showProjectTreeBadges && (
+            <span className="ui-tree-count-badge rounded-full px-1.5 text-[11px] font-medium">{childCount}</span>
+          )}
           <span className="ui-tree-item-actions hidden shrink-0 items-center gap-0.5 group-hover/grp:flex group-focus-within/grp:flex">
             <button onClick={(e) => { e.stopPropagation(); actions.onStartGroup(g.id); }} className="icon-btn" style={{ color: "var(--success)", opacity: 0.7 }} title="启动本目录"><Play size={14} strokeWidth={1.5} /></button>
             <button onClick={(e) => { e.stopPropagation(); actions.onAddSubGroup(g.id); }} className="icon-btn" style={{ color: "var(--text-muted)", opacity: 0.7 }} title="Add sub-group"><FolderPlus size={14} strokeWidth={1.5} /></button>

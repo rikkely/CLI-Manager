@@ -9,6 +9,7 @@ import {
   type DarkThemePalette,
   type LightThemePalette,
   type SidebarDensity,
+  type TerminalToolbarVisibilitySettings,
   type ThemeMode,
 } from "../../../stores/settingsStore";
 import { AboutSection } from "../AboutSection";
@@ -116,6 +117,15 @@ const CLOSE_BEHAVIOR_OPTIONS: { value: CloseBehavior; label: string }[] = [
   { value: "ask", label: "每次询问" },
   { value: "minimize", label: "最小化到托盘" },
   { value: "exit", label: "直接退出" },
+];
+
+type TerminalToolbarOptionKey = Exclude<keyof TerminalToolbarVisibilitySettings, "showText">;
+
+const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; label: string }[] = [
+  { key: "templates", label: "Templates" },
+  { key: "commandHistory", label: "历史命令" },
+  { key: "fullscreen", label: "全屏" },
+  { key: "sessionHistory", label: "历史会话" },
 ];
 
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
@@ -260,6 +270,8 @@ export function GeneralSettingsPage() {
   const viewMode = useSettingsStore((s) => s.viewMode);
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
   const debugMode = useSettingsStore((s) => s.debugMode);
+  const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
+  const showProjectTreeBadges = useSettingsStore((s) => s.showProjectTreeBadges);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
   const [uiTextColorDraft, setUiTextColorDraft] = useState(uiTextColor);
@@ -283,6 +295,9 @@ export function GeneralSettingsPage() {
     () => !UI_FONT_FAMILY_OPTIONS.some((opt) => opt.value === uiFontFamily),
     [uiFontFamily]
   );
+  const updateToolbarVisibility = (key: keyof TerminalToolbarVisibilitySettings, checked: boolean) => {
+    void update("terminalToolbarVisibility", { ...terminalToolbarVisibility, [key]: checked });
+  };
 
   return (
     <div className="space-y-4">
@@ -453,6 +468,19 @@ export function GeneralSettingsPage() {
               </div>
             </div>
 
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface-container-lowest px-3 py-2">
+              <div>
+                <div className="text-xs text-on-surface-variant">项目树徽章</div>
+                <div className="mt-1 text-[11px] text-text-muted">显示项目工具、路径异常和分组数量标记。</div>
+              </div>
+              <Switch
+                className="shrink-0"
+                checked={showProjectTreeBadges}
+                onCheckedChange={(checked) => update("showProjectTreeBadges", checked)}
+                aria-label={showProjectTreeBadges ? "隐藏项目树徽章" : "显示项目树徽章"}
+              />
+            </div>
+
             <div>
               <label className="mb-1 block text-xs text-on-surface-variant">关闭按钮行为</label>
               <Select
@@ -477,6 +505,40 @@ export function GeneralSettingsPage() {
                 aria-label={debugMode ? "关闭调试模式" : "开启调试模式"}
               />
             </div>
+          </div>
+        </Card>
+      </section>
+
+      <section>
+        <Card className="p-4">
+          <div className="text-sm font-semibold text-on-surface">工具栏</div>
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {TERMINAL_TOOLBAR_OPTIONS.map((option) => (
+              <div
+                key={option.key}
+                className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface-container-lowest px-3 py-2"
+              >
+                <div className="text-xs text-on-surface-variant">{option.label}</div>
+                <Switch
+                  className="shrink-0"
+                  checked={terminalToolbarVisibility[option.key]}
+                  onCheckedChange={(checked) => updateToolbarVisibility(option.key, checked)}
+                  aria-label={`${terminalToolbarVisibility[option.key] ? "隐藏" : "显示"}${option.label}`}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-4 rounded-xl border border-border bg-surface-container-lowest px-3 py-2">
+            <div>
+              <div className="text-xs text-on-surface-variant">显示工具栏文字</div>
+              <div className="mt-1 text-[11px] text-text-muted">关闭后除“新建”外只显示图标。</div>
+            </div>
+            <Switch
+              className="shrink-0"
+              checked={terminalToolbarVisibility.showText}
+              onCheckedChange={(checked) => updateToolbarVisibility("showText", checked)}
+              aria-label={terminalToolbarVisibility.showText ? "隐藏工具栏文字" : "显示工具栏文字"}
+            />
           </div>
         </Card>
       </section>

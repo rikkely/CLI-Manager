@@ -83,6 +83,7 @@ interface TerminalStore {
   handleCliHookEvent: (payload: CliHookPayload) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
   reorderSessions: (fromId: string, toId: string) => void;
+  renameSession: (id: string, title: string) => void;
   splitTerminal: (sessionId: string, direction: "horizontal" | "vertical", cwd?: string, shell?: string) => Promise<void>;
   unsplitTerminal: (sessionId: string) => Promise<void>;
   setSplitRatio: (sessionId: string, ratio: number) => void;
@@ -300,14 +301,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   closeSession: async (id) => {
     const split = get().splits[id];
-
-    if (split) {
-      get().statusListeners[split.secondSessionId]?.();
-      await invoke("pty_close", { sessionId: split.secondSessionId }).catch(() => {});
-    }
-
-    get().statusListeners[id]?.();
-    await invoke("pty_close", { sessionId: id });
+    const ptySessionIds = split ? [split.secondSessionId, id] : [id];
 
     // 必须在 set sessions 之前记录原索引，否则后续 findIndex 永远返回 -1，
     // 导致 persistedSplits 永远清不掉（历史 bug）。
@@ -343,6 +337,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       if (split) newHidden.delete(split.secondSessionId);
     }
 
+    if (split) get().statusListeners[split.secondSessionId]?.();
+    get().statusListeners[id]?.();
+
     const newActiveId =
       get().activeSessionId === id
         ? remaining[remaining.length - 1]?.id ?? null
@@ -360,16 +357,23 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       ...(newHidden !== prevHidden ? { hiddenBackgroundSessionIds: newHidden } : {}),
     });
 
-    // 更新持久化
-    await useSessionStore.getState().saveSessions(remaining);
-    await useSessionStore.getState().saveActiveSessionId(newActiveId);
+    try {
+      await useSessionStore.getState().saveSessions(remaining);
+      await useSessionStore.getState().saveActiveSessionId(newActiveId);
 
-    // 更新 splits（移除已关闭主会话对应的 split），使用关闭前记录的索引
-    if (closedIndex >= 0) {
-      const persistedSplits = useSessionStore.getState().splits.filter(
-        (s) => s.primarySessionIndex !== closedIndex
-      );
-      await useSessionStore.getState().saveSplits(persistedSplits);
+      // 更新 splits（移除已关闭主会话对应的 split），使用关闭前记录的索引
+      if (closedIndex >= 0) {
+        const persistedSplits = useSessionStore.getState().splits.filter(
+          (s) => s.primarySessionIndex !== closedIndex
+        );
+        await useSessionStore.getState().saveSplits(persistedSplits);
+      }
+    } finally {
+      for (const sessionId of ptySessionIds) {
+        void invoke("pty_close", { sessionId }).catch((err) => {
+          logError("pty_close invoke failed while closing terminal tab", { sessionId, err });
+        });
+      }
     }
   },
 
@@ -428,6 +432,21 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     list.splice(toIdx, 0, moved);
     set({ sessions: list });
     useSessionStore.getState().saveSessions(list).catch(() => {});
+  },
+
+  renameSession: (id, title) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    let changed = false;
+    const nextSessions = get().sessions.map((session) => {
+      if (session.id !== id) return session;
+      if (session.title === trimmed) return session;
+      changed = true;
+      return { ...session, title: trimmed };
+    });
+    if (!changed) return;
+    set({ sessions: nextSessions });
+    useSessionStore.getState().saveSessions(nextSessions).catch(() => {});
   },
 
   splitTerminal: async (sessionId, direction, cwd, shell) => {

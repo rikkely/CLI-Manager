@@ -754,10 +754,12 @@ samp,
 
 .ui-tab-trigger {
   color: var(--on-surface-variant);
+  border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
 }
 
 .ui-tab-trigger[data-selected="true"] {
   color: var(--on-surface);
+  border-color: color-mix(in srgb, var(--interactive-selected-border) 72%, var(--border) 28%);
 }
 
 .ui-tab-runtime-dot {
@@ -1948,6 +1950,17 @@ samp,
 [data-theme="light"] .ui-terminal-well[data-terminal-mode="independent"] {
   outline-color: color-mix(in srgb, var(--border) 16%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 10%, transparent);
+}
+
+.ui-terminal-tabs-shell[data-fullscreen="true"] .ui-terminal-well {
+  margin: 0;
+  border-radius: 0;
+  outline: 0;
+  box-shadow: none;
+}
+
+.ui-terminal-tabs-shell[data-fullscreen="true"] .ui-history-shell {
+  border-radius: 0;
 }
 
 [data-sonner-toaster][data-x-position="right"]:has(.claude-hook-toast) {

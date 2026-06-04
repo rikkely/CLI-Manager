@@ -11,7 +11,7 @@ import { CommandTemplatePanel } from "./CommandTemplatePanel";
 import { CommandHistoryPanel } from "./CommandHistoryPanel";
 import { HistoryWorkspace } from "./HistoryWorkspace";
 import { openWindowsTerminal } from "../lib/externalTerminal";
-import { ChevronDown, ChevronRight, Terminal, Plus, Search, X } from "./icons";
+import { ChevronDown, ChevronRight, Terminal, Plus, Search, X, Maximize2, Minimize2 } from "./icons";
 import { EmptyState } from "./ui/EmptyState";
 import { useHistoryStore } from "../stores/historyStore";
 import type { HistorySourceFilter } from "../lib/types";
@@ -64,16 +64,37 @@ interface SortableTabProps {
   id: string;
   title: string;
   isActive: boolean;
+  isEditing: boolean;
   notification: TabNotificationState;
   statusUpdatedAt: string | null;
   onActivate: () => void;
   onClose: () => void;
+  onStartEdit: () => void;
+  onSubmitEdit: (title: string) => void;
+  onCancelEdit: () => void;
   onRegisterElement: (id: string, element: HTMLDivElement | null) => void;
   menuContent: ReactNode;
 }
 
-function SortableTab({ id, title, isActive, notification, statusUpdatedAt, onActivate, onClose, onRegisterElement, menuContent }: SortableTabProps) {
+function SortableTab({
+  id,
+  title,
+  isActive,
+  isEditing,
+  notification,
+  statusUpdatedAt,
+  onActivate,
+  onClose,
+  onStartEdit,
+  onSubmitEdit,
+  onCancelEdit,
+  onRegisterElement,
+  menuContent,
+}: SortableTabProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const [editValue, setEditValue] = useState(title);
+  const editInputRef = useRef<HTMLInputElement | null>(null);
+  const skipNextBlurSubmitRef = useRef(false);
   const statusLabel = TAB_NOTIFICATION_LABELS[notification];
   const statusTitle = `状态：${statusLabel}\n会话：${title}\n更新时间：${formatTabStatusUpdatedAt(statusUpdatedAt)}`;
   const tabMinWidthClass = notification === "none" ? "min-w-[92px]" : "min-w-[118px]";
@@ -85,6 +106,26 @@ function SortableTab({ id, title, isActive, notification, statusUpdatedAt, onAct
     },
     [id, onRegisterElement, setNodeRef]
   );
+
+  const submitEdit = useCallback(() => {
+    const trimmed = editValue.trim();
+    if (trimmed) onSubmitEdit(trimmed);
+    else onCancelEdit();
+  }, [editValue, onCancelEdit, onSubmitEdit]);
+
+  const cancelEdit = useCallback(() => {
+    onCancelEdit();
+  }, [onCancelEdit]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    setEditValue(title);
+    skipNextBlurSubmitRef.current = false;
+    window.requestAnimationFrame(() => {
+      editInputRef.current?.focus();
+      editInputRef.current?.select();
+    });
+  }, [isEditing, title]);
 
   const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
   const style = {
@@ -103,6 +144,7 @@ function SortableTab({ id, title, isActive, notification, statusUpdatedAt, onAct
           className={`ui-interactive ui-tab-trigger mx-1 flex h-7 ${tabMinWidthClass} max-w-[180px] shrink-0 cursor-pointer items-center gap-2 rounded-lg px-3 text-[12px] font-medium`}
           data-selected={isActive ? "true" : "false"}
           onClick={onActivate}
+          onDoubleClick={onStartEdit}
           aria-selected={isActive}
           {...attributes}
           {...listeners}
@@ -115,7 +157,43 @@ function SortableTab({ id, title, isActive, notification, statusUpdatedAt, onAct
             aria-label={statusLabel}
             title={statusTitle}
           />
-          <span className="min-w-0 flex-1 truncate tracking-[0.01em]" title={statusTitle}>{title}</span>
+          {isEditing ? (
+            <input
+              ref={editInputRef}
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerMove={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  skipNextBlurSubmitRef.current = true;
+                  submitEdit();
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  skipNextBlurSubmitRef.current = true;
+                  cancelEdit();
+                }
+              }}
+              onBlur={() => {
+                if (skipNextBlurSubmitRef.current) {
+                  skipNextBlurSubmitRef.current = false;
+                  return;
+                }
+                submitEdit();
+              }}
+              className="ui-input h-5 min-w-0 flex-1 rounded-md px-1.5 py-0 text-[12px] text-on-surface outline-none"
+              aria-label={`重命名终端 ${title}`}
+            />
+          ) : (
+            <span className="min-w-0 flex-1 truncate tracking-[0.01em]" title={statusTitle}>{title}</span>
+          )}
           {notification !== "none" && (
             <span className="shrink-0 text-[10px] leading-none text-on-surface-variant" title={statusTitle}>
               {statusLabel}
@@ -124,6 +202,7 @@ function SortableTab({ id, title, isActive, notification, statusUpdatedAt, onAct
           <button
             onClick={(e) => { e.stopPropagation(); onClose(); }}
             onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
             className="ui-terminal-tab-close ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-on-surface-variant transition-[background-color,color,opacity,box-shadow] hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]"
             aria-label={`关闭终端 ${title}`}
             title={`关闭终端 ${title}`}
@@ -201,7 +280,12 @@ function SortableHistoryTab({ isActive, onActivate, onClose, onNewTab, onRegiste
   );
 }
 
-export function TerminalTabs() {
+interface TerminalTabsProps {
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+}
+
+export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: TerminalTabsProps = {}) {
   const { sessions, activeSessionId, tabNotifications, tabStatusDetails, splits } = useTerminalStore(
     useShallow((s) => ({
       sessions: s.sessions,
@@ -215,6 +299,7 @@ export function TerminalTabs() {
   const closeSession = useTerminalStore((s) => s.closeSession);
   const createSession = useTerminalStore((s) => s.createSession);
   const reorderSessions = useTerminalStore((s) => s.reorderSessions);
+  const renameSession = useTerminalStore((s) => s.renameSession);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
   const unsplitTerminal = useTerminalStore((s) => s.unsplitTerminal);
   const hiddenBackgroundSessionIds = useTerminalStore((s) => s.hiddenBackgroundSessionIds);
@@ -231,6 +316,7 @@ export function TerminalTabs() {
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const terminalBackgroundEnabled = useSettingsStore((s) => s.terminalBackground.enabled);
   const terminalBackgroundImagePath = useSettingsStore((s) => s.terminalBackground.imagePath);
+  const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
   const historyOpen = useHistoryStore((s) => s.isOpen);
   const openHistory = useHistoryStore((s) => s.openHistory);
   const focusGlobalSearchSeq = useHistoryStore((s) => s.focusGlobalSearchSeq);
@@ -245,6 +331,7 @@ export function TerminalTabs() {
   });
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"terminal" | "history">("terminal");
   const [historyTabAnchorId, setHistoryTabAnchorId] = useState<string | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -351,6 +438,7 @@ export function TerminalTabs() {
   );
 
   const historyActive = historyOpen && activeWorkspaceTab === "history";
+  const showToolbarText = terminalToolbarVisibility.showText;
   const sessionIds = sessions.map((s) => s.id);
   const historyTabItem = { id: HISTORY_TAB_ID, title: "会话历史" };
   const historyAnchorIndex = historyTabAnchorId && historyTabAnchorId !== HISTORY_TAB_START_ANCHOR_ID
@@ -462,7 +550,7 @@ export function TerminalTabs() {
   }, [tabListOpen, tabScrollState.hasOverflow]);
 
   return (
-    <div className="ui-terminal-tabs-shell flex h-full min-h-0 flex-col">
+    <div className="ui-terminal-tabs-shell flex h-full min-h-0 flex-col" data-fullscreen={fullscreen ? "true" : "false"}>
       <div className="ui-terminal-chrome">
         {tabScrollState.hasOverflow && (
           <button
@@ -497,6 +585,7 @@ export function TerminalTabs() {
                     id={s.id}
                     title={s.title}
                     isActive={!historyActive && s.id === activeSessionId}
+                    isEditing={editingSessionId === s.id}
                     notification={tabNotifications[s.id] ?? "none"}
                     statusUpdatedAt={tabStatusDetails[s.id]?.updatedAt ?? null}
                     onActivate={() => {
@@ -504,6 +593,12 @@ export function TerminalTabs() {
                       setActive(s.id);
                     }}
                     onClose={() => closeSession(s.id)}
+                    onStartEdit={() => setEditingSessionId(s.id)}
+                    onSubmitEdit={(title) => {
+                      renameSession(s.id, title);
+                      setEditingSessionId(null);
+                    }}
+                    onCancelEdit={() => setEditingSessionId(null)}
                     onRegisterElement={registerTabElement}
                     menuContent={
                       <>
@@ -631,30 +726,53 @@ export function TerminalTabs() {
             <Terminal size={14} strokeWidth={1.5} />
             <span>新建</span>
           </button>
-          <CommandTemplatePanel />
-          <CommandHistoryPanel compact />
-          <button
-            onClick={handleOpenHistoryTab}
-            className={`ui-flat-action ui-toolbar-button ${historyOpen ? "ui-primary-action" : "ui-history-primary"}`}
-            title="会话历史（Ctrl+K）"
-            aria-label="打开会话历史 Tab"
-            aria-controls="history-workspace"
-            aria-expanded={historyOpen}
-          >
-            <Search size={13} strokeWidth={1.8} />
-            <span>会话历史</span>
-          </button>
+          {terminalToolbarVisibility.templates && <CommandTemplatePanel showText={showToolbarText} />}
+          {terminalToolbarVisibility.commandHistory && <CommandHistoryPanel compact showText={showToolbarText} />}
+          {terminalToolbarVisibility.fullscreen && onToggleFullscreen && (
+            <button
+              onClick={onToggleFullscreen}
+              className={showToolbarText ? "ui-flat-action ui-toolbar-button" : "ui-focus-ring ui-icon-action"}
+              data-active={fullscreen ? "true" : "false"}
+              title={fullscreen ? "退出沉浸式全屏" : "沉浸式全屏"}
+              aria-label={fullscreen ? "退出沉浸式全屏" : "进入沉浸式全屏"}
+              aria-pressed={fullscreen}
+            >
+              {fullscreen ? <Minimize2 size={14} strokeWidth={1.8} /> : <Maximize2 size={14} strokeWidth={1.8} />}
+              {showToolbarText && <span>{fullscreen ? "退出全屏" : "全屏"}</span>}
+            </button>
+          )}
+          {terminalToolbarVisibility.sessionHistory && (
+            <button
+              onClick={handleOpenHistoryTab}
+              className={
+                showToolbarText
+                  ? `ui-flat-action ui-toolbar-button ${historyOpen ? "ui-primary-action" : "ui-history-primary"}`
+                  : "ui-focus-ring ui-icon-action"
+              }
+              data-active={historyOpen ? "true" : "false"}
+              title="会话历史（Ctrl+K）"
+              aria-label="打开会话历史 Tab"
+              aria-controls="history-workspace"
+              aria-expanded={historyOpen}
+            >
+              <Search size={13} strokeWidth={1.8} />
+              {showToolbarText && <span>会话历史</span>}
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="relative flex-1 min-h-0 overflow-hidden px-3 pb-3 pt-3">
+      <div className={`relative flex-1 min-h-0 overflow-hidden ${fullscreen ? "px-0 pb-0 pt-0" : "px-3 pb-3 pt-3"}`}>
         {historyOpen && (
-          <div className="absolute inset-x-3 bottom-3 top-3 min-h-0 overflow-hidden" style={{ display: historyActive ? "block" : "none" }}>
+          <div
+            className={`absolute min-h-0 overflow-hidden ${fullscreen ? "inset-x-0 bottom-0 top-0" : "inset-x-3 bottom-3 top-3"}`}
+            style={{ display: historyActive ? "block" : "none" }}
+          >
             <HistoryWorkspace active={historyActive} />
           </div>
         )}
         <div
-          className="ui-terminal-well absolute inset-x-3 bottom-3 top-3 min-h-0"
+          className={`ui-terminal-well absolute min-h-0 ${fullscreen ? "inset-x-0 bottom-0 top-0" : "inset-x-3 bottom-3 top-3"}`}
           data-terminal-mode={terminalThemeMode}
           style={{ ...terminalWellStyle, display: historyActive ? "none" : "block" }}
         >
