@@ -10,7 +10,7 @@ import {
 } from "../../../lib/terminalThemes";
 import { normalizeShellKey } from "../../../lib/shell";
 import { SHELL_OPTIONS } from "../../../lib/types";
-import { useSettingsStore } from "../../../stores/settingsStore";
+import { useSettingsStore, type UnsplitBehavior } from "../../../stores/settingsStore";
 import { TerminalBackgroundSection } from "./TerminalBackgroundSection";
 
 const SWATCH_KEYS = ["background", "foreground", "red", "green", "blue", "cyan"] as const;
@@ -40,6 +40,7 @@ export function ThemeSettingsPage() {
   const fontFamily = useSettingsStore((s) => s.fontFamily);
   const defaultShell = useSettingsStore((s) => s.defaultShell);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
+  const unsplitBehavior = useSettingsStore((s) => s.unsplitBehavior);
   const shellRuntimeMonitoringEnabled = useSettingsStore((s) => s.shellRuntimeMonitoringEnabled);
   const setTerminalThemeMode = useSettingsStore((s) => s.setTerminalThemeMode);
   const update = useSettingsStore((s) => s.update);
@@ -196,6 +197,22 @@ export function ThemeSettingsPage() {
                   </option>
                 ))}
               </Select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-on-surface-variant">取消分屏行为</label>
+              <Select
+                value={unsplitBehavior}
+                onChange={(e) => {
+                  const next: UnsplitBehavior = e.target.value === "close" ? "close" : "merge";
+                  void update("unsplitBehavior", next);
+                }}
+                aria-label="取消分屏行为"
+              >
+                <option value="merge">合并到相邻 Pane</option>
+                <option value="close">关闭当前 Pane 内终端</option>
+              </Select>
+              <div className="mt-1 text-[11px] text-text-muted">影响 Unsplit 时当前 Pane 内终端的处理方式。</div>
             </div>
 
             <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface-container-lowest px-3 py-2">

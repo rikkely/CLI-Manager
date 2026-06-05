@@ -29,6 +29,7 @@ export type ShortcutAction =
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
 export type TerminalNewlineShortcut = "Shift+Enter" | "Ctrl+Enter" | "Alt+Enter";
+export type UnsplitBehavior = "merge" | "close";
 
 export interface TerminalToolbarVisibilitySettings {
   templates: boolean;
@@ -110,6 +111,7 @@ interface Settings {
   closeBehavior: CloseBehavior;
   keyboardShortcuts: KeyboardShortcutMap;
   terminalNewlineShortcut: TerminalNewlineShortcut;
+  unsplitBehavior: UnsplitBehavior;
   terminalToolbarVisibility: TerminalToolbarVisibilitySettings;
   shellRuntimeMonitoringEnabled: boolean;
   terminalBackground: TerminalBackgroundSettings;
@@ -155,6 +157,7 @@ const DEFAULTS: Settings = {
   closeBehavior: "ask",
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   terminalNewlineShortcut: "Shift+Enter",
+  unsplitBehavior: "merge",
   terminalToolbarVisibility: {
     templates: true,
     commandHistory: true,
@@ -239,6 +242,10 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     sessionHistory: typeof raw.sessionHistory === "boolean" ? raw.sessionHistory : defaults.sessionHistory,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
   };
+}
+
+function migrateUnsplitBehavior(value: unknown): UnsplitBehavior {
+  return value === "close" || value === "merge" ? value : DEFAULTS.unsplitBehavior;
 }
 
 export function migrateTerminalBackground(value: unknown): TerminalBackgroundSettings {
@@ -360,6 +367,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
 
     entries.terminalToolbarVisibility = migrateTerminalToolbarVisibility(entries.terminalToolbarVisibility);
+    entries.unsplitBehavior = migrateUnsplitBehavior(entries.unsplitBehavior);
     entries.showProjectTreeBadges =
       typeof entries.showProjectTreeBadges === "boolean"
         ? entries.showProjectTreeBadges

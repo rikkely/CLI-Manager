@@ -1,29 +1,43 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useShallow } from "zustand/shallow";
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useTerminalStore, type TabNotificationState } from "../stores/terminalStore";
+import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
+import type { TerminalPaneLeaf, TerminalPaneSplitDirection } from "../stores/terminalPaneTree";
+import { collectPaneLeaves } from "../stores/terminalPaneTree";
 import { SplitTerminalView } from "./SplitTerminalView";
+import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
 import { CommandHistoryPanel } from "./CommandHistoryPanel";
 import { HistoryWorkspace } from "./HistoryWorkspace";
 import { openWindowsTerminal } from "../lib/externalTerminal";
-import { ChevronDown, ChevronRight, Terminal, Plus, Search, X, Maximize2, Minimize2 } from "./icons";
+import { Terminal, Plus, Search, X, Maximize2, Minimize2, ChevronDown, ChevronRight } from "./icons";
 import { EmptyState } from "./ui/EmptyState";
 import { useHistoryStore } from "../stores/historyStore";
-import type { HistorySourceFilter } from "../lib/types";
+import type { HistorySourceFilter, Project, TerminalSession } from "../lib/types";
 import {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubTrigger,
+  ContextMenuSubContent,
 } from "./ui/context-menu";
-import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
-import { getTerminalBackground } from "../lib/terminalThemes";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { getTerminalTheme } from "../lib/terminalThemes";
 
 const TAB_NOTIFICATION_COLORS: Record<TabNotificationState, string> = {
   none: "#565f89",
@@ -42,8 +56,15 @@ const TAB_NOTIFICATION_LABELS: Record<TabNotificationState, string> = {
 };
 
 const PULSING_TAB_STATES = new Set<TabNotificationState>(["running", "attention"]);
-const HISTORY_TAB_ID = "history-workspace-tab";
-const HISTORY_TAB_START_ANCHOR_ID = "history-workspace-tab-start";
+const PANE_DROP_PREFIX = "pane-drop:";
+const SPLIT_PICKER_OUTSIDE_GUARD_MS = 250;
+
+type SplitPickerState = {
+  sessionId: string;
+  direction: TerminalPaneSplitDirection;
+  x: number;
+  y: number;
+} | null;
 
 function resolveHistorySourceFilter(cliTool: string | null | undefined): HistorySourceFilter {
   const normalized = cliTool?.trim().toLowerCase();
@@ -60,8 +81,33 @@ function formatTabStatusUpdatedAt(value: string | null | undefined): string {
   return date.toLocaleString();
 }
 
+function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
+  const cmd = project.startup_cmd || project.cli_tool || undefined;
+  const shell = project.shell && project.shell !== "powershell" ? project.shell : undefined;
+  let envVars: Record<string, string> | undefined;
+  try {
+    const parsed = JSON.parse(project.env_vars || "{}");
+    if (typeof parsed === "object" && parsed !== null) {
+      const entries = Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+      if (entries.length > 0) envVars = Object.fromEntries(entries);
+    }
+  } catch {
+    // ignore invalid env json
+  }
+
+  return {
+    projectId: project.id,
+    cwd: project.path,
+    title: project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name,
+    startupCmd: cmd,
+    envVars,
+    shell,
+  };
+}
+
 interface SortableTabProps {
   id: string;
+  paneId: string;
   title: string;
   isActive: boolean;
   isEditing: boolean;
@@ -72,12 +118,12 @@ interface SortableTabProps {
   onStartEdit: () => void;
   onSubmitEdit: (title: string) => void;
   onCancelEdit: () => void;
-  onRegisterElement: (id: string, element: HTMLDivElement | null) => void;
-  menuContent: ReactNode;
+  menuContent: (getAnchor: () => DOMRect | undefined) => ReactNode;
 }
 
 function SortableTab({
   id,
+  paneId,
   title,
   isActive,
   isEditing,
@@ -88,24 +134,16 @@ function SortableTab({
   onStartEdit,
   onSubmitEdit,
   onCancelEdit,
-  onRegisterElement,
   menuContent,
 }: SortableTabProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, data: { paneId } });
+  const tabElementRef = useRef<HTMLDivElement | null>(null);
   const [editValue, setEditValue] = useState(title);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const skipNextBlurSubmitRef = useRef(false);
   const statusLabel = TAB_NOTIFICATION_LABELS[notification];
   const statusTitle = `状态：${statusLabel}\n会话：${title}\n更新时间：${formatTabStatusUpdatedAt(statusUpdatedAt)}`;
   const tabMinWidthClass = notification === "none" ? "min-w-[92px]" : "min-w-[118px]";
-
-  const setTabRef = useCallback(
-    (element: HTMLDivElement | null) => {
-      setNodeRef(element);
-      onRegisterElement(id, element);
-    },
-    [id, onRegisterElement, setNodeRef]
-  );
 
   const submitEdit = useCallback(() => {
     const trimmed = editValue.trim();
@@ -135,13 +173,21 @@ function SortableTab({
     zIndex: isDragging ? 10 : undefined,
   };
 
+  const setTabNodeRef = useCallback((node: HTMLDivElement | null) => {
+    tabElementRef.current = node;
+    setNodeRef(node);
+  }, [setNodeRef]);
+
+  const getTabAnchor = useCallback(() => tabElementRef.current?.getBoundingClientRect(), []);
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          ref={setTabRef}
+          ref={setTabNodeRef}
           style={style}
           className={`ui-interactive ui-tab-trigger mx-1 flex h-7 ${tabMinWidthClass} max-w-[180px] shrink-0 cursor-pointer items-center gap-2 rounded-lg px-3 text-[12px] font-medium`}
+          data-terminal-tab-id={id}
           data-selected={isActive ? "true" : "false"}
           onClick={onActivate}
           onDoubleClick={onStartEdit}
@@ -211,72 +257,557 @@ function SortableTab({
           </button>
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent>{menuContent}</ContextMenuContent>
+      <ContextMenuContent>{menuContent(getTabAnchor)}</ContextMenuContent>
     </ContextMenu>
   );
 }
 
-interface SortableHistoryTabProps {
-  isActive: boolean;
-  onActivate: () => void;
-  onClose: () => void;
+interface PaneTabBarProps {
+  pane: TerminalPaneLeaf;
+  sessions: TerminalSession[];
+  allPanes: TerminalPaneLeaf[];
+  activeSessionId: string | null;
+  editingSessionId: string | null;
+  tabNotifications: Record<string, TabNotificationState>;
+  tabStatusDetails: Record<string, { updatedAt: string | null }>;
+  terminalBackgroundEnabled: boolean;
+  terminalBackgroundImagePath: string | null;
+  hiddenBackgroundSessionIds: Set<string>;
+  onActivateSession: (sessionId: string) => void;
+  onCloseSession: (sessionId: string) => void;
+  onStartEdit: (sessionId: string) => void;
+  onSubmitEdit: (sessionId: string, title: string) => void;
+  onCancelEdit: () => void;
   onNewTab: () => void;
-  onRegisterElement: (id: string, element: HTMLDivElement | null) => void;
+  onOpenSplitPicker: (sessionId: string, direction: TerminalPaneSplitDirection, anchor?: DOMRect) => void;
+  onUnsplit: (sessionId: string) => void;
+  onMoveToPane: (sessionId: string, paneId: string) => void;
+  onHideBackground: (sessionId: string) => void;
+  onShowBackground: (sessionId: string) => void;
+  toolbarActions?: ReactNode;
+  variant?: "global" | "pane";
 }
 
-function SortableHistoryTab({ isActive, onActivate, onClose, onNewTab, onRegisterElement }: SortableHistoryTabProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: HISTORY_TAB_ID });
+function PaneTabBar({
+  pane,
+  sessions,
+  allPanes,
+  activeSessionId,
+  editingSessionId,
+  tabNotifications,
+  tabStatusDetails,
+  terminalBackgroundEnabled,
+  terminalBackgroundImagePath,
+  hiddenBackgroundSessionIds,
+  onActivateSession,
+  onCloseSession,
+  onStartEdit,
+  onSubmitEdit,
+  onCancelEdit,
+  onNewTab,
+  onOpenSplitPicker,
+  onUnsplit,
+  onMoveToPane,
+  onHideBackground,
+  onShowBackground,
+  toolbarActions,
+  variant = "pane",
+}: PaneTabBarProps) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${PANE_DROP_PREFIX}${pane.id}` });
+  const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  const tabScrollUpdateTimeoutRef = useRef<number | null>(null);
+  const [tabListOpen, setTabListOpen] = useState(false);
+  const [tabScrollState, setTabScrollState] = useState({
+    isOverflowing: false,
+    canScrollLeft: false,
+    canScrollRight: false,
+  });
+  const paneSessions = pane.sessionIds
+    .map((id) => sessions.find((session) => session.id === id))
+    .filter((session): session is TerminalSession => Boolean(session));
+  const otherPanes = allPanes.filter((item) => item.id !== pane.id && item.sessionIds.length > 0);
+  const tabScrollSignature = paneSessions
+    .map((session) => `${session.id}:${session.title}:${tabNotifications[session.id] ?? "none"}`)
+    .join("|");
 
-  const setTabRef = useCallback(
-    (element: HTMLDivElement | null) => {
-      setNodeRef(element);
-      onRegisterElement(HISTORY_TAB_ID, element);
-    },
-    [onRegisterElement, setNodeRef]
-  );
+  const updateTabScrollState = useCallback(() => {
+    const element = tabScrollRef.current;
+    if (!element) {
+      setTabScrollState((current) => {
+        if (!current.isOverflowing && !current.canScrollLeft && !current.canScrollRight) return current;
+        return { isOverflowing: false, canScrollLeft: false, canScrollRight: false };
+      });
+      return;
+    }
 
-  const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
-  const style = {
-    transform: CSS.Transform.toString(horizontalTransform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    zIndex: isDragging ? 10 : undefined,
-  };
+    const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+    const scrollLeft = Math.max(0, element.scrollLeft);
+    const nextState = {
+      isOverflowing: maxScrollLeft > 1,
+      canScrollLeft: scrollLeft > 1,
+      canScrollRight: scrollLeft < maxScrollLeft - 1,
+    };
+
+    setTabScrollState((current) => {
+      if (
+        current.isOverflowing === nextState.isOverflowing &&
+        current.canScrollLeft === nextState.canScrollLeft &&
+        current.canScrollRight === nextState.canScrollRight
+      ) {
+        return current;
+      }
+      return nextState;
+    });
+  }, []);
+
+  const scrollPaneTabs = useCallback((direction: -1 | 1) => {
+    const element = tabScrollRef.current;
+    if (!element) return;
+    const distance = Math.max(Math.floor(element.clientWidth * 0.72), 160);
+    element.scrollBy({ left: distance * direction, behavior: "smooth" });
+    window.requestAnimationFrame(updateTabScrollState);
+    if (tabScrollUpdateTimeoutRef.current !== null) window.clearTimeout(tabScrollUpdateTimeoutRef.current);
+    tabScrollUpdateTimeoutRef.current = window.setTimeout(() => {
+      tabScrollUpdateTimeoutRef.current = null;
+      updateTabScrollState();
+    }, 220);
+  }, [updateTabScrollState]);
+
+  const scrollActivePaneTabIntoView = useCallback(() => {
+    const element = tabScrollRef.current;
+    const activeSessionId = pane.activeSessionId;
+    if (!element || !activeSessionId) {
+      updateTabScrollState();
+      return;
+    }
+
+    const activeTab = Array.from(element.querySelectorAll<HTMLElement>("[data-terminal-tab-id]"))
+      .find((node) => node.dataset.terminalTabId === activeSessionId);
+    if (!activeTab) {
+      updateTabScrollState();
+      return;
+    }
+
+    const containerRect = element.getBoundingClientRect();
+    const activeRect = activeTab.getBoundingClientRect();
+    let nextScrollLeft = element.scrollLeft;
+
+    if (activeRect.left < containerRect.left) {
+      nextScrollLeft -= containerRect.left - activeRect.left;
+    } else if (activeRect.right > containerRect.right) {
+      nextScrollLeft += activeRect.right - containerRect.right;
+    }
+
+    const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+    const clampedScrollLeft = Math.min(maxScrollLeft, Math.max(0, nextScrollLeft));
+    if (Math.abs(clampedScrollLeft - element.scrollLeft) > 0.5) {
+      element.scrollTo({ left: clampedScrollLeft, behavior: "smooth" });
+    }
+
+    window.requestAnimationFrame(updateTabScrollState);
+    if (tabScrollUpdateTimeoutRef.current !== null) window.clearTimeout(tabScrollUpdateTimeoutRef.current);
+    tabScrollUpdateTimeoutRef.current = window.setTimeout(() => {
+      tabScrollUpdateTimeoutRef.current = null;
+      updateTabScrollState();
+    }, 220);
+  }, [pane.activeSessionId, updateTabScrollState]);
+
+  const activatePaneSessionAt = useCallback((index: number) => {
+    const session = paneSessions[index];
+    if (!session) return;
+    onActivateSession(session.id);
+  }, [onActivateSession, paneSessions]);
+
+  const closePaneSessions = useCallback((sessionIds: string[]) => {
+    sessionIds.forEach((sessionId) => onCloseSession(sessionId));
+  }, [onCloseSession]);
+
+  const closeOtherPaneSessions = useCallback((sessionId: string) => {
+    const index = pane.sessionIds.indexOf(sessionId);
+    if (index < 0) return;
+    closePaneSessions(pane.sessionIds.filter((id) => id !== sessionId));
+  }, [closePaneSessions, pane.sessionIds]);
+
+  const closePaneSessionsToLeft = useCallback((sessionId: string) => {
+    const index = pane.sessionIds.indexOf(sessionId);
+    if (index <= 0) return;
+    closePaneSessions(pane.sessionIds.slice(0, index));
+  }, [closePaneSessions, pane.sessionIds]);
+
+  const closePaneSessionsToRight = useCallback((sessionId: string) => {
+    const index = pane.sessionIds.indexOf(sessionId);
+    if (index < 0) return;
+    closePaneSessions(pane.sessionIds.slice(index + 1));
+  }, [closePaneSessions, pane.sessionIds]);
+
+  useEffect(() => {
+    setTabListOpen(false);
+  }, [pane.id, pane.activeSessionId]);
+
+  useEffect(() => {
+    if (!tabScrollState.isOverflowing) setTabListOpen(false);
+  }, [tabScrollState.isOverflowing]);
+
+  useEffect(() => {
+    const element = tabScrollRef.current;
+    let frameId: number | null = null;
+    const scheduleUpdate = () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        updateTabScrollState();
+      });
+    };
+
+    scheduleUpdate();
+    if (!element) return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+    };
+
+    element.addEventListener("scroll", scheduleUpdate, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleUpdate);
+    observer?.observe(element);
+
+    return () => {
+      element.removeEventListener("scroll", scheduleUpdate);
+      observer?.disconnect();
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      if (tabScrollUpdateTimeoutRef.current !== null) {
+        window.clearTimeout(tabScrollUpdateTimeoutRef.current);
+        tabScrollUpdateTimeoutRef.current = null;
+      }
+    };
+  }, [tabScrollSignature, updateTabScrollState]);
+
+  useEffect(() => {
+    scrollActivePaneTabIntoView();
+  }, [pane.activeSessionId, pane.sessionIds.length, scrollActivePaneTabIntoView]);
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={setTabRef}
-          style={style}
-          className="ui-interactive ui-tab-trigger mx-1 flex h-7 min-w-[118px] max-w-[180px] shrink-0 cursor-pointer items-center gap-2 rounded-lg px-3 text-[12px] font-medium"
-          data-selected={isActive ? "true" : "false"}
-          onClick={onActivate}
-          aria-selected={isActive}
-          {...attributes}
-          {...listeners}
+    <div
+      ref={setNodeRef}
+      className={`ui-terminal-chrome ${variant === "global" ? "ui-terminal-global-chrome" : "ui-terminal-pane-chrome"} relative flex h-10 shrink-0 items-center`}
+      data-drop-target={isOver ? "true" : "false"}
+      data-chrome-variant={variant}
+    >
+      {variant === "pane" && tabScrollState.isOverflowing && (
+        <button
+          type="button"
+          className="ui-terminal-tab-scroll-button ui-terminal-tab-scroll-button-left"
+          onClick={() => scrollPaneTabs(-1)}
+          disabled={!tabScrollState.canScrollLeft}
+          aria-label="向左滚动终端标签"
+          title="向左滚动终端标签"
         >
-          <Search size={13} strokeWidth={1.8} className="shrink-0" aria-hidden="true" />
-          <span className="max-w-[140px] truncate tracking-[0.01em]" title="会话历史">会话历史</span>
+          <ChevronRight size={14} strokeWidth={1.8} className="rotate-180" aria-hidden="true" />
+        </button>
+      )}
+      <div
+        ref={tabScrollRef}
+        className="ui-terminal-tab-scroll flex h-full min-w-0 flex-1 items-center overflow-x-auto px-1.5"
+        data-can-scroll-left={tabScrollState.canScrollLeft ? "true" : "false"}
+        data-can-scroll-right={tabScrollState.canScrollRight ? "true" : "false"}
+      >
+        <SortableContext items={pane.sessionIds} strategy={horizontalListSortingStrategy}>
+          {paneSessions.map((session) => (
+            <SortableTab
+              key={session.id}
+              id={session.id}
+              paneId={pane.id}
+              title={session.title}
+              isActive={session.id === activeSessionId}
+              isEditing={editingSessionId === session.id}
+              notification={tabNotifications[session.id] ?? "none"}
+              statusUpdatedAt={tabStatusDetails[session.id]?.updatedAt ?? null}
+              onActivate={() => onActivateSession(session.id)}
+              onClose={() => onCloseSession(session.id)}
+              onStartEdit={() => onStartEdit(session.id)}
+              onSubmitEdit={(title) => onSubmitEdit(session.id, title)}
+              onCancelEdit={onCancelEdit}
+              menuContent={(getAnchor) => (
+                <>
+                  <ContextMenuItem onSelect={() => onCloseSession(session.id)}>关闭终端</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => closeOtherPaneSessions(session.id)}>关闭其它终端</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => closePaneSessionsToLeft(session.id)}>关闭左侧终端</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => closePaneSessionsToRight(session.id)}>关闭右侧终端</ContextMenuItem>
+                  <ContextMenuItem onSelect={onNewTab}>新建终端</ContextMenuItem>
+                  {terminalBackgroundEnabled && terminalBackgroundImagePath && (
+                    hiddenBackgroundSessionIds.has(session.id) ? (
+                      <ContextMenuItem onSelect={() => onShowBackground(session.id)}>显示背景图</ContextMenuItem>
+                    ) : (
+                      <ContextMenuItem onSelect={() => onHideBackground(session.id)}>隐藏背景图</ContextMenuItem>
+                    )
+                  )}
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={() => onOpenSplitPicker(session.id, "horizontal", getAnchor())}>
+                    Split Right
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onOpenSplitPicker(session.id, "vertical", getAnchor())}>
+                    Split Down
+                  </ContextMenuItem>
+                  {allPanes.length > 1 && <ContextMenuItem onSelect={() => onUnsplit(session.id)}>Unsplit</ContextMenuItem>}
+                  {otherPanes.length > 0 && (
+                    <ContextMenuSub>
+                      <ContextMenuSubTrigger>Move to Other Split</ContextMenuSubTrigger>
+                      <ContextMenuSubContent>
+                        {otherPanes.map((targetPane, index) => (
+                          <ContextMenuItem key={targetPane.id} onSelect={() => onMoveToPane(session.id, targetPane.id)}>
+                            Pane {index + 1}
+                          </ContextMenuItem>
+                        ))}
+                      </ContextMenuSubContent>
+                    </ContextMenuSub>
+                  )}
+                </>
+              )}
+            />
+          ))}
+        </SortableContext>
+      </div>
+      {variant === "pane" && tabScrollState.isOverflowing && (
+        <>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="ui-terminal-tab-close ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-on-surface-variant transition-[background-color,color,opacity,box-shadow] hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]"
-            aria-label="关闭会话历史"
-            title="关闭会话历史"
+            type="button"
+            className="ui-terminal-tab-scroll-button ui-terminal-tab-scroll-button-right"
+            onClick={() => scrollPaneTabs(1)}
+            disabled={!tabScrollState.canScrollRight}
+            aria-label="向右滚动终端标签"
+            title="向右滚动终端标签"
           >
-            <X size={13} strokeWidth={2.2} aria-hidden="true" />
+            <ChevronRight size={14} strokeWidth={1.8} aria-hidden="true" />
           </button>
+          <Popover open={tabListOpen && tabScrollState.isOverflowing} onOpenChange={setTabListOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="ui-terminal-tab-list-button"
+                aria-label="打开终端标签列表"
+                aria-expanded={tabListOpen && tabScrollState.isOverflowing}
+                title="终端标签列表"
+              >
+                <ChevronDown size={14} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="w-64 p-1.5"
+              onOpenAutoFocus={(event) => event.preventDefault()}
+              onCloseAutoFocus={(event) => event.preventDefault()}
+            >
+              <div className="px-2 py-1 text-[11px] font-semibold text-on-surface">终端标签</div>
+              <div className="max-h-72 overflow-y-auto">
+                {paneSessions.map((session, index) => {
+                  const notification = tabNotifications[session.id] ?? "none";
+                  const statusLabel = TAB_NOTIFICATION_LABELS[notification];
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      className="ui-interactive flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-on-surface-variant"
+                      data-selected={session.id === pane.activeSessionId ? "true" : "false"}
+                      onClick={() => {
+                        activatePaneSessionAt(index);
+                        setTabListOpen(false);
+                      }}
+                      title={`${session.title} · ${statusLabel}`}
+                    >
+                      <span
+                        className="ui-tab-runtime-dot h-2 w-2 shrink-0 rounded-full"
+                        data-pulsing={PULSING_TAB_STATES.has(notification) ? "true" : "false"}
+                        style={{ backgroundColor: TAB_NOTIFICATION_COLORS[notification], color: TAB_NOTIFICATION_COLORS[notification] }}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                      {notification !== "none" && <span className="shrink-0 text-[10px] text-text-muted">{statusLabel}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </>
+      )}
+      {toolbarActions}
+    </div>
+  );
+}
+
+interface PaneLeafViewProps {
+  pane: TerminalPaneLeaf;
+  sessions: TerminalSession[];
+  allPanes: TerminalPaneLeaf[];
+  activeSessionId: string | null;
+  historyActive: boolean;
+  editingSessionId: string | null;
+  tabNotifications: Record<string, TabNotificationState>;
+  tabStatusDetails: Record<string, { updatedAt: string | null }>;
+  fontSize: number;
+  fontFamily: string;
+  resolvedTheme: "dark" | "light";
+  terminalThemeName: string;
+  lightThemePalette: ReturnType<typeof useSettingsStore.getState>["lightThemePalette"];
+  darkThemePalette: ReturnType<typeof useSettingsStore.getState>["darkThemePalette"];
+  terminalBackgroundEnabled: boolean;
+  terminalBackgroundImagePath: string | null;
+  hiddenBackgroundSessionIds: Set<string>;
+  onActivateSession: (sessionId: string) => void;
+  onCloseSession: (sessionId: string) => void;
+  onStartEdit: (sessionId: string) => void;
+  onSubmitEdit: (sessionId: string, title: string) => void;
+  onCancelEdit: () => void;
+  onNewTab: () => void;
+  onOpenSplitPicker: (sessionId: string, direction: TerminalPaneSplitDirection, anchor?: DOMRect) => void;
+  onUnsplit: (sessionId: string) => void;
+  onMoveToPane: (sessionId: string, paneId: string) => void;
+  onHideBackground: (sessionId: string) => void;
+  onShowBackground: (sessionId: string) => void;
+  hideTabBar?: boolean;
+}
+
+function PaneLeafView({
+  pane,
+  sessions,
+  allPanes,
+  activeSessionId,
+  historyActive,
+  editingSessionId,
+  tabNotifications,
+  tabStatusDetails,
+  fontSize,
+  fontFamily,
+  resolvedTheme,
+  terminalThemeName,
+  lightThemePalette,
+  darkThemePalette,
+  terminalBackgroundEnabled,
+  terminalBackgroundImagePath,
+  hiddenBackgroundSessionIds,
+  onActivateSession,
+  onCloseSession,
+  onStartEdit,
+  onSubmitEdit,
+  onCancelEdit,
+  onNewTab,
+  onOpenSplitPicker,
+  onUnsplit,
+  onMoveToPane,
+  onHideBackground,
+  onShowBackground,
+  hideTabBar = false,
+}: PaneLeafViewProps) {
+  const paneSessions = pane.sessionIds
+    .map((id) => sessions.find((session) => session.id === id))
+    .filter((session): session is TerminalSession => Boolean(session));
+
+  return (
+    <div className="ui-terminal-pane flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      {!hideTabBar && (
+        <PaneTabBar
+          pane={pane}
+          sessions={sessions}
+          allPanes={allPanes}
+          activeSessionId={activeSessionId}
+          editingSessionId={editingSessionId}
+          tabNotifications={tabNotifications}
+          tabStatusDetails={tabStatusDetails}
+          terminalBackgroundEnabled={terminalBackgroundEnabled}
+          terminalBackgroundImagePath={terminalBackgroundImagePath}
+          hiddenBackgroundSessionIds={hiddenBackgroundSessionIds}
+          onActivateSession={onActivateSession}
+          onCloseSession={onCloseSession}
+          onStartEdit={onStartEdit}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          onNewTab={onNewTab}
+          onOpenSplitPicker={onOpenSplitPicker}
+          onUnsplit={onUnsplit}
+          onMoveToPane={onMoveToPane}
+          onHideBackground={onHideBackground}
+          onShowBackground={onShowBackground}
+        />
+      )}
+      <div
+        className="relative min-h-0 flex-1 overflow-hidden"
+        onMouseDownCapture={() => {
+          if (pane.activeSessionId && pane.activeSessionId !== activeSessionId) onActivateSession(pane.activeSessionId);
+        }}
+      >
+        {paneSessions.map((session) => (
+          <div
+            key={session.id}
+            className="absolute inset-0"
+            style={{ display: session.id === pane.activeSessionId ? "block" : "none" }}
+          >
+            <XTermTerminal
+              sessionId={session.id}
+              isActive={!historyActive && session.id === activeSessionId}
+              fontSize={fontSize}
+              fontFamily={fontFamily}
+              resolvedTheme={resolvedTheme}
+              terminalThemeName={terminalThemeName}
+              lightThemePalette={lightThemePalette}
+              darkThemePalette={darkThemePalette}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface SplitProjectPickerProps {
+  picker: SplitPickerState;
+  projects: Project[];
+  onSelectEmpty: () => void;
+  onSelectProject: (project: Project) => void;
+  onClose: () => void;
+  shouldIgnoreOutsideInteraction: () => boolean;
+}
+
+function SplitProjectPicker({ picker, projects, onSelectEmpty, onSelectProject, onClose, shouldIgnoreOutsideInteraction }: SplitProjectPickerProps) {
+  const anchorStyle: CSSProperties = picker
+    ? { position: "fixed", left: picker.x, top: picker.y, width: 1, height: 1 }
+    : { position: "fixed", left: 0, top: 0, width: 1, height: 1 };
+
+  return (
+    <Popover open={picker !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <PopoverAnchor asChild>
+        <span className="pointer-events-none" style={anchorStyle} aria-hidden="true" />
+      </PopoverAnchor>
+      <PopoverContent
+        align="end"
+        className="w-80 p-2"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onInteractOutside={(event) => {
+          if (shouldIgnoreOutsideInteraction()) event.preventDefault();
+        }}
+      >
+        <div className="px-2 py-1 text-xs font-semibold text-on-surface">选择分屏终端</div>
+        <button
+          type="button"
+          onClick={onSelectEmpty}
+          className="ui-interactive mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-on-surface"
+        >
+          <Terminal size={13} strokeWidth={1.8} />
+          <span>空终端</span>
+        </button>
+        <div className="mt-1 max-h-72 overflow-y-auto">
+          {projects.map((project) => (
+            <button
+              key={project.id}
+              type="button"
+              onClick={() => onSelectProject(project)}
+              className="ui-interactive flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-on-surface-variant"
+              title={project.path}
+            >
+              <span className="min-w-0 flex-1 truncate">{project.name}</span>
+              {project.cli_tool && <span className="shrink-0 text-[10px] text-text-muted">{project.cli_tool}</span>}
+            </button>
+          ))}
         </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={onClose}>关闭会话历史</ContextMenuItem>
-        <ContextMenuItem onSelect={onNewTab}>新建终端</ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -286,19 +817,20 @@ interface TerminalTabsProps {
 }
 
 export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: TerminalTabsProps = {}) {
-  const { sessions, activeSessionId, tabNotifications, tabStatusDetails, splits } = useTerminalStore(
+  const { sessions, activeSessionId, paneTree, tabNotifications, tabStatusDetails } = useTerminalStore(
     useShallow((s) => ({
       sessions: s.sessions,
       activeSessionId: s.activeSessionId,
+      paneTree: s.paneTree,
       tabNotifications: s.tabNotifications,
       tabStatusDetails: s.tabStatusDetails,
-      splits: s.splits,
     }))
   );
   const setActive = useTerminalStore((s) => s.setActive);
   const closeSession = useTerminalStore((s) => s.closeSession);
   const createSession = useTerminalStore((s) => s.createSession);
   const reorderSessions = useTerminalStore((s) => s.reorderSessions);
+  const moveSessionToPane = useTerminalStore((s) => s.moveSessionToPane);
   const renameSession = useTerminalStore((s) => s.renameSession);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
   const unsplitTerminal = useTerminalStore((s) => s.unsplitTerminal);
@@ -320,71 +852,66 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
   const historyOpen = useHistoryStore((s) => s.isOpen);
   const openHistory = useHistoryStore((s) => s.openHistory);
   const focusGlobalSearchSeq = useHistoryStore((s) => s.focusGlobalSearchSeq);
-  const tabScrollRef = useRef<HTMLDivElement | null>(null);
-  const tabElementsRef = useRef(new Map<string, HTMLDivElement>());
-  const activeSessionIdRef = useRef(activeSessionId);
-  const [tabListOpen, setTabListOpen] = useState(false);
-  const [tabScrollState, setTabScrollState] = useState({
-    hasOverflow: false,
-    canScrollLeft: false,
-    canScrollRight: false,
-  });
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"terminal" | "history">("terminal");
-  const [historyTabAnchorId, setHistoryTabAnchorId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-
+  const [splitPicker, setSplitPicker] = useState<SplitPickerState>(null);
+  const splitPickerOpenFrameRef = useRef<number | null>(null);
+  const splitPickerOpenTimerRef = useRef<number | null>(null);
+  const splitPickerOutsideGuardUntilRef = useRef(0);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
+  const allPanes = useMemo(() => collectPaneLeaves(paneTree), [paneTree]);
+  const effectiveTerminalThemeName = terminalThemeMode === "follow-app" ? "auto" : terminalThemeName;
+  const terminalTheme = useMemo(
+    () => getTerminalTheme(effectiveTerminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
+    [darkThemePalette, effectiveTerminalThemeName, lightThemePalette, resolvedTheme]
+  );
+  const terminalThemeBackground = terminalTheme.background ?? (resolvedTheme === "dark" ? "#0c0e10" : "#ffffff");
+  const terminalThemeForeground = terminalTheme.foreground ?? (resolvedTheme === "dark" ? "#f8fafc" : "#1e293b");
+  const terminalThemeAccent = terminalTheme.blue ?? terminalTheme.cursor ?? terminalThemeForeground;
+  const terminalThemeMuted = terminalTheme.brightBlack ?? terminalTheme.white ?? terminalThemeForeground;
+  const terminalThemeSelection = terminalTheme.selectionBackground ?? terminalThemeAccent;
+  const terminalWellStyle = {
+    "--terminal-bridge-color": terminalThemeBackground,
+    "--terminal-theme-background": terminalThemeBackground,
+    "--terminal-theme-foreground": terminalThemeForeground,
+    "--terminal-theme-muted": terminalThemeMuted,
+    "--terminal-theme-accent": terminalThemeAccent,
+    "--terminal-theme-selection": terminalThemeSelection,
+  } as CSSProperties;
+  const historyActive = historyOpen && activeWorkspaceTab === "history";
+  const showToolbarText = terminalToolbarVisibility.showText;
+
   useEffect(() => {
-    activeSessionIdRef.current = activeSessionId;
-  }, [activeSessionId]);
+    if (!historyOpen && activeWorkspaceTab === "history") setActiveWorkspaceTab("terminal");
+  }, [activeWorkspaceTab, historyOpen]);
 
-  const updateTabScrollState = useCallback(() => {
-    const element = tabScrollRef.current;
-    if (!element) return;
+  useEffect(() => {
+    if (!historyOpen) return;
+    setActiveWorkspaceTab("history");
+  }, [focusGlobalSearchSeq, historyOpen]);
 
-    const maxScrollLeft = element.scrollWidth - element.clientWidth;
-    const next = {
-      hasOverflow: maxScrollLeft > 1,
-      canScrollLeft: element.scrollLeft > 1,
-      canScrollRight: element.scrollLeft < maxScrollLeft - 1,
-    };
-    setTabScrollState((current) => (
-      current.hasOverflow === next.hasOverflow
-        && current.canScrollLeft === next.canScrollLeft
-        && current.canScrollRight === next.canScrollRight
-        ? current
-        : next
-    ));
-  }, []);
-
-  const registerTabElement = useCallback((id: string, element: HTMLDivElement | null) => {
-    if (element) {
-      tabElementsRef.current.set(id, element);
-    } else {
-      tabElementsRef.current.delete(id);
+  const clearSplitPickerOpenSchedule = useCallback(() => {
+    if (splitPickerOpenFrameRef.current !== null) {
+      window.cancelAnimationFrame(splitPickerOpenFrameRef.current);
+      splitPickerOpenFrameRef.current = null;
+    }
+    if (splitPickerOpenTimerRef.current !== null) {
+      window.clearTimeout(splitPickerOpenTimerRef.current);
+      splitPickerOpenTimerRef.current = null;
     }
   }, []);
 
-  const activateHistoryTab = useCallback(() => {
-    setActiveWorkspaceTab("history");
-  }, []);
+  useEffect(() => clearSplitPickerOpenSchedule, [clearSplitPickerOpenSchedule]);
 
-  const handleOpenHistoryTab = useCallback(() => {
-    const activeSession = sessions.find((session) => session.id === activeSessionId);
-    const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
-    setHistoryTabAnchorId((current) => current ?? activeSessionId);
-    setActiveWorkspaceTab("history");
-    void openHistory({
-      sourceFilter: resolveHistorySourceFilter(project?.cli_tool),
-      projectPath: project?.path ?? null,
-    });
-  }, [activeSessionId, openHistory, projects, sessions]);
+  const handleCloseSplitPicker = useCallback(() => {
+    clearSplitPickerOpenSchedule();
+    splitPickerOutsideGuardUntilRef.current = 0;
+    setSplitPicker(null);
+  }, [clearSplitPickerOpenSchedule]);
 
-  const handleCloseHistoryTab = useCallback(() => {
-    setActiveWorkspaceTab("terminal");
-    setHistoryTabAnchorId(null);
-    useHistoryStore.getState().closeHistory();
+  const shouldIgnoreSplitPickerOutsideInteraction = useCallback(() => {
+    return Date.now() < splitPickerOutsideGuardUntilRef.current;
   }, []);
 
   const handleNewTab = useCallback(async () => {
@@ -396,370 +923,212 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     setActiveWorkspaceTab("terminal");
   }, [useExternalTerminal, createSession]);
 
-  const handleSelectFromList = useCallback((sessionId: string) => {
-    if (sessionId === HISTORY_TAB_ID) {
-      activateHistoryTab();
-    } else {
-      setActive(sessionId);
-      setActiveWorkspaceTab("terminal");
-    }
-    setTabListOpen(false);
-  }, [activateHistoryTab, setActive]);
+  const handleActivateSession = useCallback((sessionId: string) => {
+    setActiveWorkspaceTab("terminal");
+    setActive(sessionId);
+  }, [setActive]);
 
-  const scrollTabs = useCallback(
-    (direction: "left" | "right") => {
-      const element = tabScrollRef.current;
-      if (!element) return;
+  const handleOpenHistoryTab = useCallback(() => {
+    const activeSession = sessions.find((session) => session.id === activeSessionId);
+    const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
+    setActiveWorkspaceTab("history");
+    void openHistory({
+      sourceFilter: resolveHistorySourceFilter(project?.cli_tool),
+      projectPath: project?.path ?? null,
+    });
+  }, [activeSessionId, openHistory, projects, sessions]);
 
-      const distance = Math.max(Math.floor(element.clientWidth * 0.72), 160);
-      element.scrollBy({
-        left: direction === "left" ? -distance : distance,
-        behavior: "smooth",
-      });
-      window.requestAnimationFrame(updateTabScrollState);
-    },
-    [updateTabScrollState]
-  );
+  const handleOpenSplitPicker = useCallback((sessionId: string, direction: TerminalPaneSplitDirection, anchor?: DOMRect) => {
+    clearSplitPickerOpenSchedule();
+    const x = anchor ? Math.min(Math.max(anchor.right, 16), window.innerWidth - 16) : window.innerWidth - 24;
+    const y = anchor ? Math.min(Math.max(anchor.bottom, 44), window.innerHeight - 16) : 56;
+    splitPickerOpenFrameRef.current = window.requestAnimationFrame(() => {
+      splitPickerOpenFrameRef.current = null;
+      splitPickerOpenTimerRef.current = window.setTimeout(() => {
+        splitPickerOpenTimerRef.current = null;
+        splitPickerOutsideGuardUntilRef.current = Date.now() + SPLIT_PICKER_OUTSIDE_GUARD_MS;
+        setSplitPicker({ sessionId, direction, x, y });
+      }, 0);
+    });
+  }, [clearSplitPickerOpenSchedule]);
 
-  const handleCloseOthers = useCallback(
-    (sessionId: string) => {
-      sessions.filter((s) => s.id !== sessionId).forEach((s) => closeSession(s.id));
-    },
-    [sessions, closeSession]
-  );
+  const handleSplitEmpty = useCallback(() => {
+    if (!splitPicker) return;
+    void splitTerminal(splitPicker.sessionId, splitPicker.direction, { title: "Terminal" });
+    handleCloseSplitPicker();
+    setActiveWorkspaceTab("terminal");
+  }, [handleCloseSplitPicker, splitPicker, splitTerminal]);
 
-  const handleSplit = useCallback(
-    (sessionId: string, direction: "horizontal" | "vertical") => {
-      const session = sessions.find((s) => s.id === sessionId);
-      const project = session?.projectId ? projects.find((p) => p.id === session.projectId) : undefined;
-      splitTerminal(sessionId, direction, project?.path, project?.shell);
-    },
-    [sessions, projects, splitTerminal]
-  );
-
-  const historyActive = historyOpen && activeWorkspaceTab === "history";
-  const showToolbarText = terminalToolbarVisibility.showText;
-  const sessionIds = sessions.map((s) => s.id);
-  const historyTabItem = { id: HISTORY_TAB_ID, title: "会话历史" };
-  const historyAnchorIndex = historyTabAnchorId && historyTabAnchorId !== HISTORY_TAB_START_ANCHOR_ID
-    ? sessions.findIndex((s) => s.id === historyTabAnchorId)
-    : -1;
-  const tabListItems = historyOpen
-    ? historyTabAnchorId === HISTORY_TAB_START_ANCHOR_ID
-      ? [historyTabItem, ...sessions]
-      : historyAnchorIndex >= 0
-        ? [
-            ...sessions.slice(0, historyAnchorIndex + 1),
-            historyTabItem,
-            ...sessions.slice(historyAnchorIndex + 1),
-          ]
-        : [...sessions, historyTabItem]
-    : sessions;
-  const sortableTabIds = historyOpen ? tabListItems.map((item) => item.id) : sessionIds;
-  const effectiveTerminalThemeName = terminalThemeMode === "follow-app" ? "auto" : terminalThemeName;
-  const terminalBridgeColor = getTerminalBackground(
-    effectiveTerminalThemeName,
-    resolvedTheme,
-    lightThemePalette,
-    darkThemePalette
-  );
-  const terminalWellStyle: CSSProperties = {
-    "--terminal-bridge-color": terminalBridgeColor,
-  } as CSSProperties;
-  const historyTabNode = historyOpen ? (
-    <SortableHistoryTab
-      isActive={historyActive}
-      onActivate={activateHistoryTab}
-      onClose={handleCloseHistoryTab}
-      onNewTab={() => void handleNewTab()}
-      onRegisterElement={registerTabElement}
-    />
-  ) : null;
+  const handleSplitProject = useCallback((project: Project) => {
+    if (!splitPicker) return;
+    void splitTerminal(splitPicker.sessionId, splitPicker.direction, buildProjectSplitOptions(project));
+    handleCloseSplitPicker();
+    setActiveWorkspaceTab("terminal");
+  }, [handleCloseSplitPicker, splitPicker, splitTerminal]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const activeId = active.id as string;
-    const overId = over.id as string;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const sourcePane = allPanes.find((pane) => pane.sessionIds.includes(activeId));
+    if (!sourcePane) return;
 
-    if (activeId === HISTORY_TAB_ID) {
-      const oldIndex = tabListItems.findIndex((item) => item.id === HISTORY_TAB_ID);
-      const overIndex = tabListItems.findIndex((item) => item.id === overId);
-      if (oldIndex < 0 || overIndex < 0) return;
-
-      const nextItems = [...tabListItems];
-      const [historyItem] = nextItems.splice(oldIndex, 1);
-      nextItems.splice(overIndex, 0, historyItem);
-      const nextIndex = nextItems.findIndex((item) => item.id === HISTORY_TAB_ID);
-      const previousItem = nextIndex > 0 ? nextItems[nextIndex - 1] : null;
-      setHistoryTabAnchorId(previousItem?.id ?? HISTORY_TAB_START_ANCHOR_ID);
+    if (overId.startsWith(PANE_DROP_PREFIX)) {
+      const targetPaneId = overId.slice(PANE_DROP_PREFIX.length);
+      if (targetPaneId !== sourcePane.id) moveSessionToPane(activeId, targetPaneId);
       return;
     }
 
-    if (overId === HISTORY_TAB_ID) return;
-    reorderSessions(activeId, overId);
-  }, [reorderSessions, tabListItems]);
-
-  useEffect(() => {
-    const element = tabScrollRef.current;
-    if (!element) return;
-
-    updateTabScrollState();
-    element.addEventListener("scroll", updateTabScrollState, { passive: true });
-
-    const resizeObserver = new ResizeObserver(updateTabScrollState);
-    resizeObserver.observe(element);
-
-    return () => {
-      element.removeEventListener("scroll", updateTabScrollState);
-      resizeObserver.disconnect();
-    };
-  }, [updateTabScrollState]);
-
-  useEffect(() => {
-    updateTabScrollState();
-  }, [sessions.length, historyOpen, updateTabScrollState]);
-
-  useEffect(() => {
-    if (!historyOpen && activeWorkspaceTab === "history") {
-      setActiveWorkspaceTab("terminal");
+    const targetPane = allPanes.find((pane) => pane.sessionIds.includes(overId));
+    if (!targetPane) return;
+    if (targetPane.id === sourcePane.id) {
+      reorderSessions(activeId, overId);
+      return;
     }
-    if (!historyOpen && historyTabAnchorId !== null) {
-      setHistoryTabAnchorId(null);
-    }
-  }, [activeWorkspaceTab, historyOpen, historyTabAnchorId]);
+    moveSessionToPane(activeId, targetPane.id, overId);
+  }, [allPanes, moveSessionToPane, reorderSessions]);
 
-  useEffect(() => {
-    if (!historyOpen) return;
-    setHistoryTabAnchorId((current) => current ?? activeSessionIdRef.current);
-    setActiveWorkspaceTab("history");
-  }, [focusGlobalSearchSeq, historyOpen]);
+  const renderToolbarActions = useCallback(() => (
+    <div className="ui-terminal-actions flex h-full shrink-0 items-center gap-2 px-2.5">
+      <button
+        onClick={handleNewTab}
+        className="ui-flat-action ui-toolbar-button ui-primary-action"
+        title="新建终端"
+        aria-label="新建终端"
+      >
+        <Plus size={12} strokeWidth={2} />
+        <Terminal size={14} strokeWidth={1.5} />
+        <span>新建</span>
+      </button>
+      {terminalToolbarVisibility.templates && <CommandTemplatePanel showText={showToolbarText} />}
+      {terminalToolbarVisibility.commandHistory && <CommandHistoryPanel compact showText={showToolbarText} />}
+      {terminalToolbarVisibility.fullscreen && onToggleFullscreen && (
+        <button
+          onClick={onToggleFullscreen}
+          className={showToolbarText ? "ui-flat-action ui-toolbar-button" : "ui-focus-ring ui-icon-action"}
+          data-active={fullscreen ? "true" : "false"}
+          title={fullscreen ? "退出沉浸式全屏" : "沉浸式全屏"}
+          aria-label={fullscreen ? "退出沉浸式全屏" : "进入沉浸式全屏"}
+          aria-pressed={fullscreen}
+        >
+          {fullscreen ? <Minimize2 size={14} strokeWidth={1.8} /> : <Maximize2 size={14} strokeWidth={1.8} />}
+          {showToolbarText && <span>{fullscreen ? "退出全屏" : "全屏"}</span>}
+        </button>
+      )}
+      {terminalToolbarVisibility.sessionHistory && (
+        <button
+          onClick={handleOpenHistoryTab}
+          className={
+            showToolbarText
+              ? `ui-flat-action ui-toolbar-button ${historyOpen ? "ui-primary-action" : "ui-history-primary"}`
+              : "ui-focus-ring ui-icon-action"
+          }
+          data-active={historyOpen ? "true" : "false"}
+          title="会话历史（Ctrl+K）"
+          aria-label="打开会话历史"
+          aria-controls="history-workspace"
+          aria-expanded={historyOpen}
+        >
+          <Search size={13} strokeWidth={1.8} />
+          {showToolbarText && <span>会话历史</span>}
+        </button>
+      )}
+    </div>
+  ), [
+    fullscreen,
+    handleNewTab,
+    handleOpenHistoryTab,
+    historyOpen,
+    onToggleFullscreen,
+    showToolbarText,
+    terminalToolbarVisibility.commandHistory,
+    terminalToolbarVisibility.fullscreen,
+    terminalToolbarVisibility.sessionHistory,
+    terminalToolbarVisibility.templates,
+  ]);
 
-  useEffect(() => {
-    const activeTabId = historyActive ? HISTORY_TAB_ID : activeSessionId;
-    if (!activeTabId) return;
-    const element = tabElementsRef.current.get(activeTabId);
-    if (!element) return;
-
-    element.scrollIntoView({ block: "nearest", inline: "nearest" });
-    window.requestAnimationFrame(updateTabScrollState);
-  }, [activeSessionId, historyActive, sessions.length, updateTabScrollState]);
-
-  useEffect(() => {
-    if (!tabScrollState.hasOverflow && tabListOpen) setTabListOpen(false);
-  }, [tabListOpen, tabScrollState.hasOverflow]);
+  const renderLeaf = useCallback((pane: TerminalPaneLeaf) => (
+    <PaneLeafView
+      key={pane.id}
+      pane={pane}
+      sessions={sessions}
+      allPanes={allPanes}
+      activeSessionId={activeSessionId}
+      historyActive={historyActive}
+      editingSessionId={editingSessionId}
+      tabNotifications={tabNotifications}
+      tabStatusDetails={tabStatusDetails}
+      fontSize={fontSize}
+      fontFamily={fontFamily}
+      resolvedTheme={resolvedTheme}
+      terminalThemeName={effectiveTerminalThemeName}
+      lightThemePalette={lightThemePalette}
+      darkThemePalette={darkThemePalette}
+      terminalBackgroundEnabled={terminalBackgroundEnabled}
+      terminalBackgroundImagePath={terminalBackgroundImagePath}
+      hiddenBackgroundSessionIds={hiddenBackgroundSessionIds}
+      onActivateSession={handleActivateSession}
+      onCloseSession={closeSession}
+      onStartEdit={setEditingSessionId}
+      onSubmitEdit={(sessionId, title) => {
+        renameSession(sessionId, title);
+        setEditingSessionId(null);
+      }}
+      onCancelEdit={() => setEditingSessionId(null)}
+      onNewTab={() => void handleNewTab()}
+      onOpenSplitPicker={handleOpenSplitPicker}
+      onUnsplit={(sessionId) => void unsplitTerminal(sessionId)}
+      onMoveToPane={moveSessionToPane}
+      onHideBackground={hideBackgroundForSession}
+      onShowBackground={showBackgroundForSession}
+      hideTabBar={false}
+    />
+  ), [
+    activeSessionId,
+    allPanes,
+    closeSession,
+    darkThemePalette,
+    editingSessionId,
+    effectiveTerminalThemeName,
+    fontFamily,
+    fontSize,
+    handleActivateSession,
+    handleNewTab,
+    handleOpenSplitPicker,
+    hiddenBackgroundSessionIds,
+    hideBackgroundForSession,
+    historyActive,
+    lightThemePalette,
+    moveSessionToPane,
+    renameSession,
+    resolvedTheme,
+    sessions,
+    showBackgroundForSession,
+    tabNotifications,
+    tabStatusDetails,
+    terminalBackgroundEnabled,
+    terminalBackgroundImagePath,
+    unsplitTerminal,
+  ]);
 
   return (
-    <div className="ui-terminal-tabs-shell flex h-full min-h-0 flex-col" data-fullscreen={fullscreen ? "true" : "false"}>
-      <div className="ui-terminal-chrome">
-        {tabScrollState.hasOverflow && (
-          <button
-            type="button"
-            onClick={() => scrollTabs("left")}
-            disabled={!tabScrollState.canScrollLeft}
-            className="ui-focus-ring ui-icon-action ui-terminal-tab-scroll-button ui-terminal-tab-scroll-button-left"
-            title="向左滚动终端 Tab"
-            aria-label="向左滚动终端 Tab"
-          >
-            <ChevronRight size={14} strokeWidth={1.8} className="rotate-180" />
-          </button>
-        )}
-        <div
-          ref={tabScrollRef}
-          className="ui-terminal-tab-scroll flex h-full min-w-0 flex-1 items-center overflow-x-auto px-1.5"
-          data-can-scroll-left={tabScrollState.canScrollLeft ? "true" : "false"}
-          data-can-scroll-right={tabScrollState.canScrollRight ? "true" : "false"}
-        >
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-            <SortableContext items={sortableTabIds} strategy={horizontalListSortingStrategy}>
-              {tabListItems.map((item) => {
-                if (item.id === HISTORY_TAB_ID) {
-                  return <div key={HISTORY_TAB_ID} className="contents">{historyTabNode}</div>;
-                }
+    <div
+      className="ui-terminal-tabs-shell flex h-full min-h-0 flex-col"
+      data-fullscreen={fullscreen ? "true" : "false"}
+      style={terminalWellStyle}
+    >
+      <SplitProjectPicker
+        picker={splitPicker}
+        projects={projects}
+        onSelectEmpty={handleSplitEmpty}
+        onSelectProject={handleSplitProject}
+        onClose={handleCloseSplitPicker}
+        shouldIgnoreOutsideInteraction={shouldIgnoreSplitPickerOutsideInteraction}
+      />
 
-                const s = item;
-                const isSplit = !!splits[s.id];
-                return (
-                  <SortableTab
-                    key={s.id}
-                    id={s.id}
-                    title={s.title}
-                    isActive={!historyActive && s.id === activeSessionId}
-                    isEditing={editingSessionId === s.id}
-                    notification={tabNotifications[s.id] ?? "none"}
-                    statusUpdatedAt={tabStatusDetails[s.id]?.updatedAt ?? null}
-                    onActivate={() => {
-                      setActiveWorkspaceTab("terminal");
-                      setActive(s.id);
-                    }}
-                    onClose={() => closeSession(s.id)}
-                    onStartEdit={() => setEditingSessionId(s.id)}
-                    onSubmitEdit={(title) => {
-                      renameSession(s.id, title);
-                      setEditingSessionId(null);
-                    }}
-                    onCancelEdit={() => setEditingSessionId(null)}
-                    onRegisterElement={registerTabElement}
-                    menuContent={
-                      <>
-                        <ContextMenuItem
-                          onSelect={() => {
-                            setActive(s.id);
-                            closeSession(s.id);
-                          }}
-                        >
-                          关闭终端
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onSelect={() => {
-                            setActive(s.id);
-                            handleCloseOthers(s.id);
-                          }}
-                        >
-                          关闭其它终端
-                        </ContextMenuItem>
-                        <ContextMenuItem onSelect={() => void handleNewTab()}>
-                          新建终端
-                        </ContextMenuItem>
-                        {terminalBackgroundEnabled && terminalBackgroundImagePath && (
-                          hiddenBackgroundSessionIds.has(s.id) ? (
-                            <ContextMenuItem onSelect={() => showBackgroundForSession(s.id)}>
-                              显示背景图
-                            </ContextMenuItem>
-                          ) : (
-                            <ContextMenuItem onSelect={() => hideBackgroundForSession(s.id)}>
-                              隐藏背景图
-                            </ContextMenuItem>
-                          )
-                        )}
-                        <ContextMenuSeparator />
-                        {isSplit ? (
-                          <ContextMenuItem onSelect={() => unsplitTerminal(s.id)}>
-                            取消分屏
-                          </ContextMenuItem>
-                        ) : (
-                          <>
-                            <ContextMenuItem onSelect={() => handleSplit(s.id, "horizontal")}>
-                              水平分屏
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => handleSplit(s.id, "vertical")}>
-                              垂直分屏
-                            </ContextMenuItem>
-                          </>
-                        )}
-                      </>
-                    }
-                  />
-                );
-              })}
-            </SortableContext>
-          </DndContext>
-        </div>
-        {tabScrollState.hasOverflow && (
-          <button
-            type="button"
-            onClick={() => scrollTabs("right")}
-            disabled={!tabScrollState.canScrollRight}
-            className="ui-focus-ring ui-icon-action ui-terminal-tab-scroll-button ui-terminal-tab-scroll-button-right"
-            title="向右滚动终端 Tab"
-            aria-label="向右滚动终端 Tab"
-          >
-            <ChevronRight size={14} strokeWidth={1.8} />
-          </button>
-        )}
-        <div className="ui-terminal-actions flex h-full shrink-0 items-center gap-2 px-2.5">
-          {tabScrollState.hasOverflow && (
-            <Popover open={tabListOpen} onOpenChange={setTabListOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  className="ui-focus-ring ui-icon-action"
-                  data-active={tabListOpen ? "true" : "false"}
-                  title="更多终端 Tab"
-                  aria-label="打开终端 Tab 列表"
-                  aria-expanded={tabListOpen}
-                  aria-controls="terminal-tab-list"
-                >
-                  <ChevronDown size={14} strokeWidth={1.8} />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent id="terminal-tab-list" align="end" className="w-72">
-                <div className="flex items-center justify-between px-3 py-2">
-                  <span className="text-xs font-semibold text-on-surface">终端 Tab</span>
-                  <span className="text-[10px] text-on-surface-variant">{tabListItems.length}</span>
-                </div>
-                <div className="max-h-72 overflow-y-auto p-1.5">
-                  {tabListItems.map((session) => {
-                    const isHistoryTab = session.id === HISTORY_TAB_ID;
-                    const notification = isHistoryTab ? "none" : (tabNotifications[session.id] ?? "none");
-                    const isActive = isHistoryTab ? historyActive : !historyActive && session.id === activeSessionId;
-                    return (
-                      <button
-                        key={session.id}
-                        onClick={() => handleSelectFromList(session.id)}
-                        className="ui-interactive flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-on-surface-variant"
-                        data-selected={isActive ? "true" : "false"}
-                        aria-current={isActive ? "page" : undefined}
-                        title={session.title}
-                      >
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: TAB_NOTIFICATION_COLORS[notification] }}
-                          aria-label={TAB_NOTIFICATION_LABELS[notification]}
-                          title={TAB_NOTIFICATION_LABELS[notification]}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-on-surface">{session.title}</span>
-                        {isActive && <span className="shrink-0 text-[10px] text-primary">当前</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </PopoverContent>
-            </Popover>
-          )}
-          <button
-            onClick={handleNewTab}
-            className="ui-flat-action ui-toolbar-button ui-primary-action"
-            title="新建终端"
-            aria-label="新建终端"
-          >
-            <Plus size={12} strokeWidth={2} />
-            <Terminal size={14} strokeWidth={1.5} />
-            <span>新建</span>
-          </button>
-          {terminalToolbarVisibility.templates && <CommandTemplatePanel showText={showToolbarText} />}
-          {terminalToolbarVisibility.commandHistory && <CommandHistoryPanel compact showText={showToolbarText} />}
-          {terminalToolbarVisibility.fullscreen && onToggleFullscreen && (
-            <button
-              onClick={onToggleFullscreen}
-              className={showToolbarText ? "ui-flat-action ui-toolbar-button" : "ui-focus-ring ui-icon-action"}
-              data-active={fullscreen ? "true" : "false"}
-              title={fullscreen ? "退出沉浸式全屏" : "沉浸式全屏"}
-              aria-label={fullscreen ? "退出沉浸式全屏" : "进入沉浸式全屏"}
-              aria-pressed={fullscreen}
-            >
-              {fullscreen ? <Minimize2 size={14} strokeWidth={1.8} /> : <Maximize2 size={14} strokeWidth={1.8} />}
-              {showToolbarText && <span>{fullscreen ? "退出全屏" : "全屏"}</span>}
-            </button>
-          )}
-          {terminalToolbarVisibility.sessionHistory && (
-            <button
-              onClick={handleOpenHistoryTab}
-              className={
-                showToolbarText
-                  ? `ui-flat-action ui-toolbar-button ${historyOpen ? "ui-primary-action" : "ui-history-primary"}`
-                  : "ui-focus-ring ui-icon-action"
-              }
-              data-active={historyOpen ? "true" : "false"}
-              title="会话历史（Ctrl+K）"
-              aria-label="打开会话历史 Tab"
-              aria-controls="history-workspace"
-              aria-expanded={historyOpen}
-            >
-              <Search size={13} strokeWidth={1.8} />
-              {showToolbarText && <span>会话历史</span>}
-            </button>
-          )}
-        </div>
+      <div className="ui-terminal-chrome ui-terminal-global-chrome flex h-10 shrink-0 items-center justify-end" data-chrome-variant="global">
+        {renderToolbarActions()}
       </div>
 
       <div className={`relative flex-1 min-h-0 overflow-hidden ${fullscreen ? "px-0 pb-0 pt-0" : "px-3 pb-3 pt-3"}`}>
@@ -774,27 +1143,13 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
         <div
           className={`ui-terminal-well absolute min-h-0 ${fullscreen ? "inset-x-0 bottom-0 top-0" : "inset-x-3 bottom-3 top-3"}`}
           data-terminal-mode={terminalThemeMode}
-          style={{ ...terminalWellStyle, display: historyActive ? "none" : "block" }}
+          style={{ display: historyActive ? "none" : "block" }}
         >
-          {sessions.map((s) => (
-            <div
-              key={s.id}
-              className="absolute inset-0"
-              style={{ display: s.id === activeSessionId ? "block" : "none" }}
-            >
-              <SplitTerminalView
-                sessionId={s.id}
-                split={splits[s.id]}
-                isActive={!historyActive && s.id === activeSessionId}
-                fontSize={fontSize}
-                fontFamily={fontFamily}
-                resolvedTheme={resolvedTheme}
-                terminalThemeName={effectiveTerminalThemeName}
-                lightThemePalette={lightThemePalette}
-                darkThemePalette={darkThemePalette}
-              />
-            </div>
-          ))}
+          {paneTree && sessions.length > 0 ? (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SplitTerminalView node={paneTree} renderLeaf={renderLeaf} />
+            </DndContext>
+          ) : null}
           {sessions.length === 0 && !useExternalTerminal && (
             <div className="flex h-full items-center justify-center">
               <EmptyState

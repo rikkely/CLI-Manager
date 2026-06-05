@@ -60,7 +60,6 @@ export function CommandPalette() {
   const sessions = useTerminalStore((s) => s.sessions);
   const createSession = useTerminalStore((s) => s.createSession);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
-  const splits = useTerminalStore((s) => s.splits);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
   const unsplitTerminal = useTerminalStore((s) => s.unsplitTerminal);
   const setTheme = useSettingsStore((s) => s.setTheme);
@@ -104,43 +103,33 @@ export function CommandPalette() {
     });
 
     if (viewMode !== "compact" && activeSessionId) {
-      const hasSplit = !!splits[activeSessionId];
-      if (!hasSplit) {
-        result.push({
-          id: "action:split-h",
-          label: "水平分屏",
-          description: "将当前终端左右分割",
-          category: "操作",
-          action: () => {
-            const session = useTerminalStore.getState().sessions.find((s) => s.id === activeSessionId);
-            const project = session?.projectId
-              ? useProjectStore.getState().projects.find((p) => p.id === session.projectId)
-              : undefined;
-            splitTerminal(activeSessionId, "horizontal", project?.path, project?.shell);
-          },
-        });
-        result.push({
-          id: "action:split-v",
-          label: "垂直分屏",
-          description: "将当前终端上下分割",
-          category: "操作",
-          action: () => {
-            const session = useTerminalStore.getState().sessions.find((s) => s.id === activeSessionId);
-            const project = session?.projectId
-              ? useProjectStore.getState().projects.find((p) => p.id === session.projectId)
-              : undefined;
-            splitTerminal(activeSessionId, "vertical", project?.path, project?.shell);
-          },
-        });
-      } else {
-        result.push({
-          id: "action:unsplit",
-          label: "取消分屏",
-          description: "关闭分屏的第二个终端",
-          category: "操作",
-          action: () => unsplitTerminal(activeSessionId),
-        });
-      }
+      result.push({
+        id: "action:split-right",
+        label: "Split Right",
+        description: "在当前 Pane 右侧创建空终端",
+        category: "操作",
+        action: () => {
+          void splitTerminal(activeSessionId, "horizontal", { title: "Terminal" });
+        },
+      });
+      result.push({
+        id: "action:split-down",
+        label: "Split Down",
+        description: "在当前 Pane 下方创建空终端",
+        category: "操作",
+        action: () => {
+          void splitTerminal(activeSessionId, "vertical", { title: "Terminal" });
+        },
+      });
+      result.push({
+        id: "action:unsplit",
+        label: "Unsplit",
+        description: "按设置合并或关闭当前 Pane",
+        category: "操作",
+        action: () => {
+          void unsplitTerminal(activeSessionId);
+        },
+      });
     }
 
     result.push({
@@ -207,7 +196,7 @@ export function CommandPalette() {
     }
 
     return result;
-  }, [projects, templates, activeSessionId, splits, resolvedTheme, createSession, splitTerminal, unsplitTerminal, setTheme, viewMode]);
+  }, [projects, templates, activeSessionId, resolvedTheme, createSession, splitTerminal, unsplitTerminal, setTheme, viewMode]);
 
   const queryLower = useMemo(() => query.trim().toLowerCase(), [query]);
 

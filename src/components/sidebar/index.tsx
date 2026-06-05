@@ -2,8 +2,9 @@
 import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { useProjectStore } from "../../stores/projectStore";
-import { useTerminalStore, type SessionStatus } from "../../stores/terminalStore";
+import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
 import { useSettingsStore } from "../../stores/settingsStore";
+import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
 import type { Project, TreeNode as TNode, Group } from "../../lib/types";
 import { ConfigModal } from "../ConfigModal";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -39,6 +40,28 @@ function normalizePersistedSidebarWidth(width: number): number {
   return clampExpandedSidebarWidth(width);
 }
 
+function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
+  const title = project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name;
+  let envVars: Record<string, string> | undefined;
+  try {
+    const parsed = JSON.parse(project.env_vars || "{}");
+    if (typeof parsed === "object" && parsed !== null && Object.keys(parsed).length > 0) {
+      envVars = parsed as Record<string, string>;
+    }
+  } catch {
+    // ignore invalid env json
+  }
+
+  return {
+    projectId: project.id,
+    cwd: project.path,
+    title,
+    startupCmd: project.startup_cmd || project.cli_tool || undefined,
+    envVars,
+    shell: project.shell && project.shell !== "powershell" ? project.shell : undefined,
+  };
+}
+
 export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: SidebarProps) {
   const {
     tree,
@@ -65,6 +88,7 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   const moveGroupToParent = useProjectStore((s) => s.moveGroupToParent);
   const moveProjectToGroup = useProjectStore((s) => s.moveProjectToGroup);
   const createSession = useTerminalStore((s) => s.createSession);
+  const splitTerminal = useTerminalStore((s) => s.splitTerminal);
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const setActiveSession = useTerminalStore((s) => s.setActive);
@@ -136,6 +160,7 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     | { kind: "group"; groupId: string; groupName: string; x: number; y: number }
   >(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuOpenedAtRef = useRef(0);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [newGroupParentId, setNewGroupParentId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -373,6 +398,7 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   useEffect(() => {
     if (!contextMenu) return;
     const handler = (e: Event) => {
+      if (Date.now() - contextMenuOpenedAtRef.current < 120) return;
       if (contextMenuRef.current && contextMenuRef.current.contains(e.target as Node)) return;
       setContextMenu(null);
     };
@@ -449,20 +475,8 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   }, []);
 
   const openProjectInternal = async (project: Project) => {
-    const title = project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name;
-    let envVars: Record<string, string> | undefined;
-    try {
-      const parsed = JSON.parse(project.env_vars);
-      if (typeof parsed === "object" && parsed !== null && Object.keys(parsed).length > 0) {
-        envVars = parsed;
-      }
-    } catch {
-      // ignore invalid env json
-    }
-
-    const cmd = project.startup_cmd || project.cli_tool || undefined;
-    const shell = project.shell && project.shell !== "powershell" ? project.shell : undefined;
-    await createSession(project.id, project.path, title, cmd, envVars, shell);
+    const options = buildProjectSplitOptions(project);
+    await createSession(options.projectId, options.cwd, options.title, options.startupCmd, options.envVars, options.shell);
   };
 
   const openProjects = async (items: Project[]) => {
@@ -482,6 +496,14 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
       await openProjects([project]);
     },
     [openProjects]
+  );
+
+  const handleSplitProject = useCallback(
+    async (project: Project, direction: TerminalPaneSplitDirection) => {
+      if (!activeSessionId || compactMode || useExternalTerminal) return;
+      await splitTerminal(activeSessionId, direction, buildProjectSplitOptions(project));
+    },
+    [activeSessionId, compactMode, splitTerminal, useExternalTerminal]
   );
 
   const handleCloneProject = useCallback((project: Project) => {
@@ -557,12 +579,16 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
 
   const handleContextMenuProject = useCallback((e: ReactMouseEvent, project: Project) => {
     e.preventDefault();
+    e.stopPropagation();
+    contextMenuOpenedAtRef.current = Date.now();
     setSelectedId(project.id);
     setContextMenu({ kind: "project", project, x: e.clientX, y: e.clientY });
   }, []);
 
   const handleContextMenuGroup = useCallback((e: ReactMouseEvent, groupId: string, groupName: string) => {
     e.preventDefault();
+    e.stopPropagation();
+    contextMenuOpenedAtRef.current = Date.now();
     setContextMenu({ kind: "group", groupId, groupName, x: e.clientX, y: e.clientY });
   }, []);
 
@@ -780,7 +806,20 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
 
       {contextMenu && (
         <Portal>
-          <div className="context-menu" style={{ left: menuX, top: menuY }} ref={contextMenuRef} role="menu">
+          <div
+            className="context-menu"
+            style={{ left: menuX, top: menuY }}
+            ref={contextMenuRef}
+            role="menu"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
             {contextMenu.kind === "project" && (
               <>
                 <button
@@ -792,6 +831,28 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
                   }}
                 >
                   {compactMode ? "打开外部终端" : "打开终端"}
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  disabled={compactMode || useExternalTerminal || !activeSessionId}
+                  onClick={() => {
+                    void handleSplitProject(contextMenu.project, "horizontal");
+                    setContextMenu(null);
+                  }}
+                >
+                  Split Right
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  disabled={compactMode || useExternalTerminal || !activeSessionId}
+                  onClick={() => {
+                    void handleSplitProject(contextMenu.project, "vertical");
+                    setContextMenu(null);
+                  }}
+                >
+                  Split Down
                 </button>
                 <button
                   className="context-menu-item"

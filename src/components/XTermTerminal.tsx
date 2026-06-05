@@ -361,10 +361,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     pasteTarget.addEventListener("paste", onPaste, pasteListenerOptions);
 
     const isCodexNewlineSession = () => {
-      const terminalState = useTerminalStore.getState();
-      const primarySessionId =
-        Object.entries(terminalState.splits).find(([, split]) => split.secondSessionId === sessionId)?.[0] ?? sessionId;
-      const session = terminalState.sessions.find((item) => item.id === primarySessionId);
+      const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
       const project = session?.projectId
         ? useProjectStore.getState().projects.find((item) => item.id === session.projectId)
         : null;

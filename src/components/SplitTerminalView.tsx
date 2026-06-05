@@ -1,66 +1,44 @@
-import { useRef, useCallback } from "react";
-import { XTermTerminal } from "./XTermTerminal";
-import { useTerminalStore, type SplitState } from "../stores/terminalStore";
-import type { LightThemePalette, DarkThemePalette } from "../stores/settingsStore";
+import { useCallback, useRef, type ReactNode } from "react";
+import { useTerminalStore } from "../stores/terminalStore";
+import type { TerminalPaneLeaf, TerminalPaneNode, TerminalPaneSplit } from "../stores/terminalPaneTree";
 
 interface Props {
-  sessionId: string;
-  split: SplitState | undefined;
-  isActive?: boolean;
-  fontSize: number;
-  fontFamily: string;
-  resolvedTheme: "dark" | "light";
-  terminalThemeName: string;
-  lightThemePalette: LightThemePalette;
-  darkThemePalette: DarkThemePalette;
+  node: TerminalPaneNode;
+  renderLeaf: (leaf: TerminalPaneLeaf) => ReactNode;
 }
 
-export function SplitTerminalView({
-  sessionId,
-  split,
-  isActive,
-  fontSize,
-  fontFamily,
-  resolvedTheme,
-  terminalThemeName,
-  lightThemePalette,
-  darkThemePalette,
-}: Props) {
+const DIVIDER_SIZE = 4;
+
+function SplitNodeView({ node, renderLeaf }: Props) {
   const setSplitRatio = useTerminalStore((s) => s.setSplitRatio);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
+    (split: TerminalPaneSplit, e: React.MouseEvent) => {
       e.preventDefault();
       const container = containerRef.current;
-      if (!container || !split) return;
+      if (!container) return;
 
       const rect = container.getBoundingClientRect();
-      const isH = split.direction === "horizontal";
+      const isHorizontal = split.direction === "horizontal";
       let latestRatio = split.ratio;
       let rafId: number | null = null;
 
       const flush = () => {
         rafId = null;
-        setSplitRatio(sessionId, latestRatio);
+        setSplitRatio(split.id, latestRatio);
       };
 
       const onMove = (ev: MouseEvent) => {
-        latestRatio = isH
+        latestRatio = isHorizontal
           ? (ev.clientX - rect.left) / rect.width
           : (ev.clientY - rect.top) / rect.height;
-        if (rafId === null) {
-          rafId = requestAnimationFrame(flush);
-        }
+        if (rafId === null) rafId = requestAnimationFrame(flush);
       };
 
       const onUp = () => {
-        if (rafId !== null) {
-          cancelAnimationFrame(rafId);
-          rafId = null;
-        }
-        // Final commit on release; persists once instead of per-mousemove
-        setSplitRatio(sessionId, latestRatio);
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        setSplitRatio(split.id, latestRatio);
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
         document.body.style.cursor = "";
@@ -69,66 +47,43 @@ export function SplitTerminalView({
 
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
-      document.body.style.cursor = isH ? "col-resize" : "row-resize";
+      document.body.style.cursor = isHorizontal ? "col-resize" : "row-resize";
       document.body.style.userSelect = "none";
     },
-    [sessionId, split, setSplitRatio],
+    [setSplitRatio]
   );
 
-  if (!split) {
-    return (
-      <XTermTerminal
-        sessionId={sessionId}
-        isActive={isActive}
-        fontSize={fontSize}
-        fontFamily={fontFamily}
-        resolvedTheme={resolvedTheme}
-        terminalThemeName={terminalThemeName}
-        lightThemePalette={lightThemePalette}
-        darkThemePalette={darkThemePalette}
-      />
-    );
-  }
+  if (node.type === "leaf") return <>{renderLeaf(node)}</>;
 
-  const isH = split.direction === "horizontal";
-  const first = `${split.ratio * 100}%`;
-  const second = `${(1 - split.ratio) * 100}%`;
+  const isHorizontal = node.direction === "horizontal";
+  const first = `calc(${node.ratio * 100}% - ${DIVIDER_SIZE / 2}px)`;
+  const second = `calc(${(1 - node.ratio) * 100}% - ${DIVIDER_SIZE / 2}px)`;
 
   return (
-    <div ref={containerRef} className="w-full h-full flex" style={{ flexDirection: isH ? "row" : "column" }}>
-      <div className="overflow-hidden" style={{ [isH ? "width" : "height"]: first }}>
-        <XTermTerminal
-          sessionId={sessionId}
-          isActive={isActive}
-          fontSize={fontSize}
-          fontFamily={fontFamily}
-          resolvedTheme={resolvedTheme}
-          terminalThemeName={terminalThemeName}
-          lightThemePalette={lightThemePalette}
-          darkThemePalette={darkThemePalette}
-        />
+    <div
+      ref={containerRef}
+      className="flex h-full min-h-0 w-full min-w-0"
+      style={{ flexDirection: isHorizontal ? "row" : "column" }}
+    >
+      <div className="min-h-0 min-w-0 overflow-hidden" style={{ [isHorizontal ? "width" : "height"]: first }}>
+        <SplitNodeView node={node.first} renderLeaf={renderLeaf} />
       </div>
       <div
-        onMouseDown={handleDragStart}
+        onMouseDown={(event) => handleDragStart(node, event)}
         className="shrink-0 hover:opacity-100 transition-colors"
         style={{
-          [isH ? "width" : "height"]: "4px",
+          [isHorizontal ? "width" : "height"]: `${DIVIDER_SIZE}px`,
           backgroundColor: "var(--border)",
-          cursor: isH ? "col-resize" : "row-resize",
+          cursor: isHorizontal ? "col-resize" : "row-resize",
         }}
       />
-      <div className="overflow-hidden" style={{ [isH ? "width" : "height"]: second }}>
-        <XTermTerminal
-          sessionId={split.secondSessionId}
-          isActive={isActive}
-          fontSize={fontSize}
-          fontFamily={fontFamily}
-          resolvedTheme={resolvedTheme}
-          terminalThemeName={terminalThemeName}
-          lightThemePalette={lightThemePalette}
-          darkThemePalette={darkThemePalette}
-        />
+      <div className="min-h-0 min-w-0 overflow-hidden" style={{ [isHorizontal ? "width" : "height"]: second }}>
+        <SplitNodeView node={node.second} renderLeaf={renderLeaf} />
       </div>
     </div>
   );
+}
+
+export function SplitTerminalView(props: Props) {
+  return <SplitNodeView {...props} />;
 }

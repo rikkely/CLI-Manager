@@ -89,10 +89,9 @@ export function useKeyboardShortcuts(options: KeyboardShortcutOptions = {}) {
         if (viewMode === "compact" || (isEditingTarget && !isXtermTarget)) return;
         e.preventDefault();
         if (sessions.length < 2) return;
-        const idx = sessions.findIndex((s) => s.id === activeSessionId);
         const delta = combo === shortcuts.nextTab ? 1 : -1;
-        const next = (idx + delta + sessions.length) % sessions.length;
-        setActive(sessions[next].id);
+        const nextSessionId = terminalState.getNextSessionIdForShortcut(delta);
+        if (nextSessionId) setActive(nextSessionId);
         return;
       }
 

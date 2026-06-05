@@ -2,11 +2,29 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-import type { TerminalSession, PersistedSplit, Project } from "../lib/types";
+import type { TerminalSession, Project } from "../lib/types";
 import { logError, logInfo } from "../lib/logger";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
 import { normalizeShellKey } from "../lib/shell";
+import {
+  addSessionToPaneTree,
+  collectPaneLeaves,
+  createSinglePaneTree,
+  findFirstSessionId,
+  findPaneLeaf,
+  findPaneLeafBySession,
+  getNextSessionIdForShortcut as resolveNextSessionIdForShortcut,
+  moveSessionToPane as moveSessionToPaneTree,
+  removeSessionFromPaneTree,
+  reorderSessionInPane,
+  resizePaneSplit,
+  setPaneActiveSession,
+  splitPaneLeaf,
+  unsplitPaneLeaf,
+  type TerminalPaneNode,
+  type TerminalPaneSplitDirection,
+} from "./terminalPaneTree";
 
 export type SessionStatus = "running" | "exited" | "error";
 export type CliHookSource = "claude" | "codex";
@@ -61,6 +79,15 @@ export interface SplitState {
   ratio: number;
 }
 
+export interface SplitTerminalOptions {
+  projectId?: string;
+  cwd?: string;
+  title?: string;
+  startupCmd?: string;
+  envVars?: Record<string, string>;
+  shell?: string;
+}
+
 interface PtyStatusPayload {
   status: string;
   exit_code: number | null;
@@ -69,6 +96,8 @@ interface PtyStatusPayload {
 interface TerminalStore {
   sessions: TerminalSession[];
   activeSessionId: string | null;
+  paneTree: TerminalPaneNode | null;
+  activePaneId: string | null;
   sessionStatuses: Record<string, SessionStatus>;
   statusListeners: Record<string, UnlistenFn>;
   tabNotifications: Record<string, TabNotificationState>;
@@ -83,10 +112,12 @@ interface TerminalStore {
   handleCliHookEvent: (payload: CliHookPayload) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
   reorderSessions: (fromId: string, toId: string) => void;
+  moveSessionToPane: (sessionId: string, targetPaneId: string, beforeSessionId?: string) => void;
   renameSession: (id: string, title: string) => void;
-  splitTerminal: (sessionId: string, direction: "horizontal" | "vertical", cwd?: string, shell?: string) => Promise<void>;
+  splitTerminal: (sessionId: string, direction: TerminalPaneSplitDirection, options?: SplitTerminalOptions) => Promise<string | null>;
   unsplitTerminal: (sessionId: string) => Promise<void>;
-  setSplitRatio: (sessionId: string, ratio: number) => void;
+  setSplitRatio: (splitId: string, ratio: number) => void;
+  getNextSessionIdForShortcut: (delta: 1 | -1) => string | null;
   restoreSessions: (projectMap: Map<string, Project>, projectHealth: Record<string, boolean>) => Promise<void>;
   hideBackgroundForSession: (sessionId: string) => void;
   showBackgroundForSession: (sessionId: string) => void;
@@ -97,6 +128,17 @@ let restoreInProgress = false;
 
 // setActive 防抖：高频切换标签时合并持久化写入
 let saveActiveIdTimer: ReturnType<typeof setTimeout> | null = null;
+let paneIdSeq = 0;
+
+function createPaneId() {
+  paneIdSeq += 1;
+  return `pane-${Date.now().toString(36)}-${paneIdSeq.toString(36)}`;
+}
+
+function createSplitSessionTitle(options?: SplitTerminalOptions) {
+  return options?.title ?? "Split Terminal";
+}
+
 function scheduleSaveActiveId(id: string | null) {
   if (saveActiveIdTimer !== null) clearTimeout(saveActiveIdTimer);
   saveActiveIdTimer = setTimeout(() => {
@@ -220,6 +262,8 @@ function buildPtyEnvVars(envVars?: Record<string, string> | null, shell?: string
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   sessions: [],
   activeSessionId: null,
+  paneTree: null,
+  activePaneId: null,
   sessionStatuses: {},
   statusListeners: {},
   tabNotifications: {},
@@ -271,9 +315,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     });
 
     const newSessions = [...get().sessions, session];
+    const paneResult = addSessionToPaneTree(get().paneTree, get().activePaneId, sessionId, createPaneId);
     set({
       sessions: newSessions,
       activeSessionId: sessionId,
+      paneTree: paneResult.tree,
+      activePaneId: paneResult.activePaneId,
       sessionStatuses: { ...get().sessionStatuses, [sessionId]: "running" },
       statusListeners: { ...get().statusListeners, [sessionId]: unlisten },
     });
@@ -300,8 +347,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   closeSession: async (id) => {
-    const split = get().splits[id];
-    const ptySessionIds = split ? [split.secondSessionId, id] : [id];
+    const ptySessionIds = [id];
 
     // 必须在 set sessions 之前记录原索引，否则后续 findIndex 永远返回 -1，
     // 导致 persistedSplits 永远清不掉（历史 bug）。
@@ -312,54 +358,46 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNotifications = { ...get().tabNotifications };
     const newTabStatuses = { ...get().tabStatuses };
     const newTabStatusDetails = { ...get().tabStatusDetails };
-    const newSplits = { ...get().splits };
+    const nextPaneTree = removeSessionFromPaneTree(get().paneTree, id);
+    const nextActiveId =
+      get().activeSessionId === id
+        ? findFirstSessionId(nextPaneTree)
+        : get().activeSessionId;
+    const activePane = nextActiveId ? findPaneLeafBySession(nextPaneTree, nextActiveId) : null;
 
     delete newStatuses[id];
     delete newListeners[id];
     delete newNotifications[id];
     delete newTabStatuses[id];
     delete newTabStatusDetails[id];
-    delete newSplits[id];
-    if (split) {
-      delete newStatuses[split.secondSessionId];
-      delete newListeners[split.secondSessionId];
-      delete newNotifications[split.secondSessionId];
-      delete newTabStatuses[split.secondSessionId];
-      delete newTabStatusDetails[split.secondSessionId];
-    }
 
     // Drop in-memory background overrides for closed sessions (R8).
     const prevHidden = get().hiddenBackgroundSessionIds;
     let newHidden = prevHidden;
-    if (prevHidden.has(id) || (split && prevHidden.has(split.secondSessionId))) {
+    if (prevHidden.has(id)) {
       newHidden = new Set(prevHidden);
       newHidden.delete(id);
-      if (split) newHidden.delete(split.secondSessionId);
     }
 
-    if (split) get().statusListeners[split.secondSessionId]?.();
     get().statusListeners[id]?.();
-
-    const newActiveId =
-      get().activeSessionId === id
-        ? remaining[remaining.length - 1]?.id ?? null
-        : get().activeSessionId;
 
     set({
       sessions: remaining,
-      activeSessionId: newActiveId,
+      activeSessionId: nextActiveId,
+      paneTree: nextPaneTree,
+      activePaneId: activePane?.id ?? collectPaneLeaves(nextPaneTree)[0]?.id ?? null,
       sessionStatuses: newStatuses,
       statusListeners: newListeners,
       tabNotifications: newNotifications,
       tabStatuses: newTabStatuses,
       tabStatusDetails: newTabStatusDetails,
-      splits: newSplits,
+      splits: {},
       ...(newHidden !== prevHidden ? { hiddenBackgroundSessionIds: newHidden } : {}),
     });
 
     try {
       await useSessionStore.getState().saveSessions(remaining);
-      await useSessionStore.getState().saveActiveSessionId(newActiveId);
+      await useSessionStore.getState().saveActiveSessionId(nextActiveId);
 
       // 更新 splits（移除已关闭主会话对应的 split），使用关闭前记录的索引
       if (closedIndex >= 0) {
@@ -378,7 +416,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   setActive: (id) => {
-    set({ activeSessionId: id });
+    const paneResult = setPaneActiveSession(get().paneTree, id);
+    set({ activeSessionId: id, paneTree: paneResult.tree, activePaneId: paneResult.activePaneId ?? get().activePaneId });
     scheduleSaveActiveId(id);
   },
 
@@ -424,14 +463,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   reorderSessions: (fromId, toId) => {
-    const list = [...get().sessions];
-    const fromIdx = list.findIndex((s) => s.id === fromId);
-    const toIdx = list.findIndex((s) => s.id === toId);
-    if (fromIdx < 0 || toIdx < 0) return;
-    const [moved] = list.splice(fromIdx, 1);
-    list.splice(toIdx, 0, moved);
-    set({ sessions: list });
-    useSessionStore.getState().saveSessions(list).catch(() => {});
+    const pane = findPaneLeafBySession(get().paneTree, fromId);
+    if (!pane || !pane.sessionIds.includes(toId)) return;
+    const nextTree = reorderSessionInPane(get().paneTree, pane.id, fromId, toId);
+    set({ paneTree: nextTree, activePaneId: pane.id, activeSessionId: fromId });
+    scheduleSaveActiveId(fromId);
+  },
+
+  moveSessionToPane: (sessionId, targetPaneId, beforeSessionId) => {
+    const sourcePane = findPaneLeafBySession(get().paneTree, sessionId);
+    const targetPane = findPaneLeaf(get().paneTree, targetPaneId);
+    if (!sourcePane || !targetPane || sourcePane.id === targetPane.id) return;
+    const result = moveSessionToPaneTree(get().paneTree, sourcePane.id, targetPane.id, sessionId, beforeSessionId);
+    set({ paneTree: result.tree, activePaneId: result.activePaneId, activeSessionId: sessionId });
+    scheduleSaveActiveId(sessionId);
   },
 
   renameSession: (id, title) => {
@@ -449,18 +494,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     useSessionStore.getState().saveSessions(nextSessions).catch(() => {});
   },
 
-  splitTerminal: async (sessionId, direction, cwd, shell) => {
-    if (get().splits[sessionId]) return;
+  splitTerminal: async (sessionId, direction, options) => {
+    const paneTree = get().paneTree;
+    const targetPane = findPaneLeafBySession(paneTree, sessionId);
+    if (!targetPane || !paneTree) return null;
 
-    const normalizedInputShell = normalizeShellKey(shell);
+    const normalizedInputShell = normalizeShellKey(options?.shell);
     const normalizedDefaultShell = normalizeShellKey(useSettingsStore.getState().defaultShell);
-    const resolvedShell = normalizedInputShell ?? (normalizedDefaultShell ?? null);
+    const resolvedShell = normalizedInputShell ?? (options?.projectId ? null : (normalizedDefaultShell ?? null));
 
-    let secondSessionId: string;
+    let splitSessionId: string;
     try {
-      secondSessionId = await invoke<string>("pty_create", {
-        cwd: cwd ?? null,
-        envVars: buildPtyEnvVars(null, resolvedShell),
+      splitSessionId = await invoke<string>("pty_create", {
+        cwd: options?.cwd ?? null,
+        envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell),
         shell: resolvedShell,
       });
     } catch (err) {
@@ -468,7 +515,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       toast.error("创建分屏终端失败", { description });
       logError("pty_create invoke failed for split terminal", {
         sessionId,
-        cwd: cwd ?? null,
+        cwd: options?.cwd ?? null,
         shell: resolvedShell,
         err,
       });
@@ -476,104 +523,115 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
 
     const splitSession: TerminalSession = {
-      id: secondSessionId,
-      title: "Split Terminal",
-      cwd,
+      id: splitSessionId,
+      projectId: options?.projectId,
+      title: createSplitSessionTitle(options),
+      cwd: options?.cwd,
       shell: resolvedShell,
+      envVars: options?.envVars,
+      startupCmd: options?.startupCmd,
     };
 
-    const unlisten = await listen<PtyStatusPayload>(`pty-status-${secondSessionId}`, (event) => {
+    const unlisten = await listen<PtyStatusPayload>(`pty-status-${splitSessionId}`, (event) => {
       const status = event.payload.status as SessionStatus;
       logTerminalExitStatus(splitSession, event.payload);
       set((state) => ({
-        sessionStatuses: { ...state.sessionStatuses, [secondSessionId]: status },
+        sessionStatuses: { ...state.sessionStatuses, [splitSessionId]: status },
       }));
     });
 
+    const paneResult = splitPaneLeaf(paneTree, targetPane.id, direction, splitSessionId, createPaneId);
+    const newSessions = [...get().sessions, splitSession];
     set((state) => ({
-      splits: {
-        ...state.splits,
-        [sessionId]: { direction, secondSessionId, ratio: 0.5 },
-      },
-      sessionStatuses: { ...state.sessionStatuses, [secondSessionId]: "running" },
-      statusListeners: { ...state.statusListeners, [secondSessionId]: unlisten },
+      sessions: newSessions,
+      activeSessionId: splitSessionId,
+      paneTree: paneResult.tree,
+      activePaneId: paneResult.activePaneId,
+      splits: {},
+      sessionStatuses: { ...state.sessionStatuses, [splitSessionId]: "running" },
+      statusListeners: { ...state.statusListeners, [splitSessionId]: unlisten },
     }));
 
-    // 持久化分屏信息
-    const primaryIndex = get().sessions.findIndex((s) => s.id === sessionId);
-    if (primaryIndex >= 0) {
-      const currentSplits = useSessionStore.getState().splits;
-      const newPersistedSplits: PersistedSplit[] = [
-        ...currentSplits.filter((s) => s.primarySessionIndex !== primaryIndex),
-        {
-          primarySessionIndex: primaryIndex,
-          direction,
-          secondSessionCwd: cwd,
-          secondSessionShell: resolvedShell,
-          ratio: 0.5,
-        },
-      ];
-      await useSessionStore.getState().saveSplits(newPersistedSplits);
+    await useSessionStore.getState().saveSessions(newSessions);
+    await useSessionStore.getState().saveActiveSessionId(splitSessionId);
+    await useSessionStore.getState().saveSplits([]);
+
+    if (options?.startupCmd) {
+      setTimeout(() => {
+        invoke("pty_write", { sessionId: splitSessionId, data: options.startupCmd + "\r" }).catch((err) => {
+          toast.error("启动命令写入失败", { description: String(err) });
+          logError("Failed to write split startup command", {
+            sessionId: splitSessionId,
+            hasStartupCmd: true,
+            startupCmdSummary: summarizeStartupCmd(options.startupCmd),
+            err,
+          });
+        });
+      }, 500);
     }
+
+    return splitSessionId;
   },
 
   unsplitTerminal: async (sessionId) => {
-    const split = get().splits[sessionId];
-    if (!split) return;
+    const pane = findPaneLeafBySession(get().paneTree, sessionId);
+    if (!pane) return;
+    const behavior = useSettingsStore.getState().unsplitBehavior;
+    const result = unsplitPaneLeaf(get().paneTree, pane.id, behavior);
+    const closedSessionIds = result.closedSessionIds;
 
-    get().statusListeners[split.secondSessionId]?.();
-    await invoke("pty_close", { sessionId: split.secondSessionId }).catch(() => {});
+    for (const closedSessionId of closedSessionIds) {
+      get().statusListeners[closedSessionId]?.();
+    }
 
     const newStatuses = { ...get().sessionStatuses };
     const newListeners = { ...get().statusListeners };
     const newNotifications = { ...get().tabNotifications };
     const newTabStatuses = { ...get().tabStatuses };
     const newTabStatusDetails = { ...get().tabStatusDetails };
-    const newSplits = { ...get().splits };
-    delete newStatuses[split.secondSessionId];
-    delete newListeners[split.secondSessionId];
-    delete newNotifications[split.secondSessionId];
-    delete newTabStatuses[split.secondSessionId];
-    delete newTabStatusDetails[split.secondSessionId];
-    delete newSplits[sessionId];
+    const newHidden = new Set(get().hiddenBackgroundSessionIds);
+    for (const closedSessionId of closedSessionIds) {
+      delete newStatuses[closedSessionId];
+      delete newListeners[closedSessionId];
+      delete newNotifications[closedSessionId];
+      delete newTabStatuses[closedSessionId];
+      delete newTabStatusDetails[closedSessionId];
+      newHidden.delete(closedSessionId);
+    }
 
+    const closedSet = new Set(closedSessionIds);
+    const remaining = get().sessions.filter((session) => !closedSet.has(session.id));
     set({
+      sessions: remaining,
+      activeSessionId: result.activeSessionId,
+      paneTree: result.tree,
+      activePaneId: result.activePaneId,
       sessionStatuses: newStatuses,
       statusListeners: newListeners,
       tabNotifications: newNotifications,
       tabStatuses: newTabStatuses,
       tabStatusDetails: newTabStatusDetails,
-      splits: newSplits,
+      splits: {},
+      hiddenBackgroundSessionIds: newHidden,
     });
 
-    // 更新持久化 splits
-    const primaryIndex = get().sessions.findIndex((s) => s.id === sessionId);
-    const persistedSplits = useSessionStore.getState().splits.filter(
-      (s) => s.primarySessionIndex !== primaryIndex
-    );
-    await useSessionStore.getState().saveSplits(persistedSplits);
+    await useSessionStore.getState().saveSessions(remaining);
+    await useSessionStore.getState().saveActiveSessionId(result.activeSessionId);
+    await useSessionStore.getState().saveSplits([]);
+
+    for (const closedSessionId of closedSessionIds) {
+      void invoke("pty_close", { sessionId: closedSessionId }).catch((err) => {
+        logError("pty_close invoke failed while unsplitting pane", { sessionId: closedSessionId, err });
+      });
+    }
   },
 
-  setSplitRatio: (sessionId, ratio) => {
-    const split = get().splits[sessionId];
-    if (!split) return;
-    const clampedRatio = Math.max(0.2, Math.min(0.8, ratio));
-    set((state) => ({
-      splits: {
-        ...state.splits,
-        [sessionId]: { ...split, ratio: clampedRatio },
-      },
-    }));
+  setSplitRatio: (splitId, ratio) => {
+    set((state) => ({ paneTree: resizePaneSplit(state.paneTree, splitId, ratio) }));
+  },
 
-    // 更新持久化 ratio
-    const primaryIndex = get().sessions.findIndex((s) => s.id === sessionId);
-    if (primaryIndex >= 0) {
-      const currentSplits = useSessionStore.getState().splits;
-      const newPersistedSplits = currentSplits.map((s) =>
-        s.primarySessionIndex === primaryIndex ? { ...s, ratio: clampedRatio } : s
-      );
-      useSessionStore.getState().saveSplits(newPersistedSplits).catch(() => {});
-    }
+  getNextSessionIdForShortcut: (delta) => {
+    return resolveNextSessionIdForShortcut(get().paneTree, get().activePaneId, get().activeSessionId, delta);
   },
 
   restoreSessions: async (projectMap, projectHealth) => {
@@ -584,7 +642,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     try {
       const sessionStore = useSessionStore.getState();
       const persistedSessions = sessionStore.sessions;
-      const persistedSplits = sessionStore.splits;
       const persistedActiveId = sessionStore.activeSessionId;
 
       if (persistedSessions.length === 0) return;
@@ -592,7 +649,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const restoredSessions: TerminalSession[] = [];
     const restoredStatuses: Record<string, SessionStatus> = {};
     const restoredListeners: Record<string, UnlistenFn> = {};
-    const restoredSplits: Record<string, SplitState> = {};
     const skippedSessions: string[] = [];
 
     const newIdMap: Record<string, string> = {}; // oldId -> newId
@@ -680,61 +736,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }
     }
 
-    // 恢复分屏
-    for (const ps of persistedSplits) {
-      const oldPrimaryId = persistedSessions[ps.primarySessionIndex]?.id;
-      const newPrimaryId = newIdMap[oldPrimaryId];
-      if (!newPrimaryId) continue;
-
-      // 创建第二个终端
-      const normalizedShell = normalizeShellKey(ps.secondSessionShell);
-      const resolvedShell = normalizedShell ?? normalizeShellKey(useSettingsStore.getState().defaultShell) ?? null;
-
-      let secondSessionId: string;
-      try {
-        secondSessionId = await invoke<string>("pty_create", {
-          cwd: ps.secondSessionCwd ?? null,
-          envVars: buildPtyEnvVars(null, resolvedShell),
-          shell: resolvedShell,
-        });
-      } catch (err) {
-        logError("Failed to restore split session", { split: ps, err });
-        continue;
-      }
-
-      const restoredSplitSession: TerminalSession = {
-        id: secondSessionId,
-        title: "Split Terminal",
-        cwd: ps.secondSessionCwd,
-        shell: resolvedShell,
-      };
-
-      const unlisten = await (async () => {
-        try {
-          return await listen<PtyStatusPayload>(`pty-status-${secondSessionId}`, (event) => {
-            const status = event.payload.status as SessionStatus;
-            logTerminalExitStatus(restoredSplitSession, event.payload);
-            useTerminalStore.setState((state) => ({
-              sessionStatuses: { ...state.sessionStatuses, [secondSessionId]: status },
-            }));
-          });
-        } catch (err) {
-          logError("Failed to register split status listener", { sessionId: secondSessionId, err });
-          await invoke("pty_close", { sessionId: secondSessionId }).catch(() => {});
-          return null;
-        }
-      })();
-      if (!unlisten) continue;
-
-      restoredSplits[newPrimaryId] = {
-        direction: ps.direction,
-        secondSessionId,
-        ratio: ps.ratio,
-      };
-      restoredStatuses[secondSessionId] = "running";
-      restoredListeners[secondSessionId] = unlisten;
-    }
-
     // 确定恢复后的 activeSessionId
     let newActiveId: string | null = null;
     if (persistedActiveId && newIdMap[persistedActiveId]) {
@@ -743,12 +744,18 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       newActiveId = restoredSessions[restoredSessions.length - 1].id;
     }
 
+    const restoredPaneTree = restoredSessions.length > 0
+      ? createSinglePaneTree(restoredSessions.map((session) => session.id), newActiveId, createPaneId)
+      : null;
+
     set({
       sessions: restoredSessions,
       activeSessionId: newActiveId,
+      paneTree: restoredPaneTree,
+      activePaneId: restoredPaneTree?.id ?? null,
       sessionStatuses: restoredStatuses,
       statusListeners: restoredListeners,
-      splits: restoredSplits,
+      splits: {},
     });
 
     // 更新 sessionStore 的持久化数据（使用新 ID）
@@ -756,23 +763,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       ...s,
       id: s.id, // 已经是新 ID
     }));
-    const updatedPersistedSplits = persistedSplits
-      .filter((ps) => {
-        const oldPrimaryId = persistedSessions[ps.primarySessionIndex]?.id;
-        return newIdMap[oldPrimaryId] && restoredSplits[newIdMap[oldPrimaryId]];
-      })
-      .map((ps) => {
-        const oldPrimaryId = persistedSessions[ps.primarySessionIndex]?.id;
-        const newPrimaryId = newIdMap[oldPrimaryId];
-        const newPrimaryIndex = restoredSessions.findIndex((s) => s.id === newPrimaryId);
-        return {
-          ...ps,
-          primarySessionIndex: newPrimaryIndex,
-        };
-      });
-
     await sessionStore.saveSessions(updatedPersistedSessions);
-    await sessionStore.saveSplits(updatedPersistedSplits);
+    await sessionStore.saveSplits([]);
     await sessionStore.saveActiveSessionId(newActiveId);
 
     // 显示恢复结果提示
