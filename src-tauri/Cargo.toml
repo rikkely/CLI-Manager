@@ -1,6 +1,6 @@
 [package]
 name = "cli-manager"
-version = "0.2.5"
+version = "0.2.6"
 description = "A lightweight desktop app for managing CLI tools across multiple projects"
 authors = ["you"]
 edition = "2021"
@@ -38,6 +38,8 @@ sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 memchr = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [dev-dependencies]
 tempfile = "3"

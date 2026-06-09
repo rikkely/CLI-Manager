@@ -53,6 +53,18 @@ At the time this guide was added, the repo had mismatched version metadata:
 
 So future version bumps must explicitly fix both root entries in `package-lock.json`, or regenerate the lockfile.
 
+## Updater Release Check
+
+Before tagging a release that should be installable through the in-app updater:
+
+- [ ] Read [`../backend/tauri-updater-contracts.md`](../backend/tauri-updater-contracts.md).
+- [ ] Confirm GitHub Actions has `TAURI_SIGNING_PRIVATE_KEY`; add `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only if the signing key has a password.
+- [ ] Keep `src-tauri/tauri.conf.json` `plugins.updater.pubkey` as the public key matching that private key.
+- [ ] Keep `bundle.createUpdaterArtifacts = true` so release artifacts include updater metadata.
+- [ ] Do not commit the private key or paste it into config/docs.
+- [ ] After release, verify GitHub Release contains `latest.json` and signature-backed updater assets.
+- [ ] Remember that existing versions without updater support cannot auto-install the first updater-enabled release; users must install that one manually.
+
 ## Acceptance Check
 
 A version update is complete only when these values are identical:

@@ -21,6 +21,8 @@
     "core:window:allow-set-size",
     "core:window:allow-start-dragging",
     "opener:default",
+    "updater:default",
+    "process:allow-restart",
     "sql:default",
     "sql:allow-execute",
     "sql:allow-select",

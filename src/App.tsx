@@ -22,7 +22,6 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useUpdateStore } from "./stores/updateStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
 import { createPerfMarker, logWarn } from "./lib/logger";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 const appStartAt =
@@ -190,7 +189,7 @@ function showClaudeHookToast(payload: CliHookPayload, tabId: string): void {
   );
 }
 
-function runDeferredStartupTasks(): void {
+function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): void {
   if (!startupBaseReady || !firstScreenPerfReported || deferredStartupTasksStarted) return;
   deferredStartupTasksStarted = true;
 
@@ -212,13 +211,11 @@ function runDeferredStartupTasks(): void {
         const updateInfo = await updateStore.checkUpdate({ silent: true });
         if (!updateInfo) return;
         toast.info(`发现新版本 V${updateInfo.version}`, {
-          description: "点击前往 Release 页面下载更新",
-          action: updateInfo.downloadUrl
+          description: "可在设置页查看说明并下载安装，安装前会再次确认。",
+          action: openSettings
             ? {
-                label: "前往更新",
-                onClick: () => {
-                  void openUrl(updateInfo.downloadUrl);
-                },
+                label: "查看更新",
+                onClick: () => openSettings("general"),
               }
             : undefined,
           duration: 12000,
@@ -249,6 +246,11 @@ function App() {
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
   const restoreWindowWidthRef = useRef<number | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
+
+  const handleOpenSettings = useCallback((tab?: SettingsTab) => {
+    setSettingsInitialTab(tab ?? "general");
+    setSettingsOpen(true);
+  }, []);
 
   useEffect(() => {
     closeBehaviorRef.current = closeBehavior;
@@ -325,12 +327,12 @@ function App() {
       await useSessionStore.getState().clear();
 
       startupBaseReady = true;
-      runDeferredStartupTasks();
+      runDeferredStartupTasks(handleOpenSettings);
     };
     init().catch((err) => {
       toast.error("初始化失败", { description: String(err) });
     });
-  }, [loadSettings]);
+  }, [handleOpenSettings, loadSettings]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", resolvedTheme);
@@ -553,14 +555,14 @@ function App() {
           resolvedTheme,
           viewMode,
         });
-        runDeferredStartupTasks();
+        runDeferredStartupTasks(handleOpenSettings);
       });
     });
     return () => {
       window.cancelAnimationFrame(raf1);
       window.cancelAnimationFrame(raf2);
     };
-  }, [resolvedTheme, viewMode]);
+  }, [handleOpenSettings, resolvedTheme, viewMode]);
 
   if (!settingsLoaded) {
     return <div className="ui-workspace-shell flex h-screen flex-col" />;
@@ -575,10 +577,7 @@ function App() {
       {viewMode === "compact" ? (
         <div id="main-content" className="flex min-h-0 flex-1" tabIndex={-1}>
           <Sidebar
-            onOpenSettings={(tab) => {
-              setSettingsInitialTab(tab ?? "general");
-              setSettingsOpen(true);
-            }}
+            onOpenSettings={handleOpenSettings}
             onOpenStats={handleOpenStats}
             compactMode
           />
@@ -587,10 +586,7 @@ function App() {
         <div className="flex min-h-0 flex-1">
           {!terminalFullscreen && (
             <Sidebar
-              onOpenSettings={(tab) => {
-                setSettingsInitialTab(tab ?? "general");
-                setSettingsOpen(true);
-              }}
+              onOpenSettings={handleOpenSettings}
               onOpenStats={handleOpenStats}
             />
           )}
