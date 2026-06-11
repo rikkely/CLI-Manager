@@ -198,6 +198,7 @@ function App() {
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
+  const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
   const viewMode = useSettingsStore((s) => s.viewMode);
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
@@ -356,6 +357,44 @@ function App() {
       styleEl.textContent = "";
     }
   }, [uiFontFamily]);
+
+  useEffect(() => {
+    const root = document.documentElement.style;
+    const bodySize = uiFontSize;
+    const metaSize = Math.max(9, bodySize - 1);
+    const microSize = Math.max(8, bodySize - 2);
+    const textSmSize = bodySize + 1;
+    const textBaseSize = bodySize + 3;
+
+    root.setProperty("--font-size-ui", `${bodySize}px`);
+    root.setProperty("--font-size-body", `${bodySize}px`);
+    root.setProperty("--font-size-section-title", `${bodySize}px`);
+    root.setProperty("--font-size-meta", `${metaSize}px`);
+    root.setProperty("--font-size-micro", `${microSize}px`);
+    root.setProperty("--font-size-app-title", `${bodySize + 2}px`);
+    root.setProperty("--text-xs", `${metaSize}px`);
+    root.setProperty("--text-sm", `${textSmSize}px`);
+    root.setProperty("--text-base", `${textBaseSize}px`);
+    root.setProperty("--mantine-font-size-xs", `${metaSize}px`);
+    root.setProperty("--mantine-font-size-sm", `${textSmSize}px`);
+    root.setProperty("--mantine-font-size-md", `${textBaseSize}px`);
+    root.setProperty("--mantine-font-size-lg", `${bodySize + 5}px`);
+    root.setProperty("--mantine-font-size-xl", `${bodySize + 7}px`);
+
+    const styleId = "ui-font-size-override";
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = `
+      body {
+        font-size: var(--font-size-body) !important;
+        line-height: var(--line-height-body) !important;
+      }
+    `;
+  }, [uiFontSize]);
 
   // 跟随系统主题：监听放在 effect 中，确保挂载/卸载严格成对，避免 store.load 中残留 listener
   useEffect(() => {

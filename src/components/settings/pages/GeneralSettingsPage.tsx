@@ -5,9 +5,11 @@ import {
   Button,
   Card,
   Group,
+  NumberInput,
   SegmentedControl,
   Select,
   SimpleGrid,
+  Slider,
   Stack,
   Switch,
   Text,
@@ -16,6 +18,8 @@ import {
 } from "@mantine/core";
 import {
   useSettingsStore,
+  UI_FONT_SIZE_MAX,
+  UI_FONT_SIZE_MIN,
   type CloseBehavior,
   type DarkThemePalette,
   type LightThemePalette,
@@ -173,6 +177,11 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; label: string }
 ];
 
 type TerminalToolbarOptionKey = Exclude<keyof TerminalToolbarVisibilitySettings, "showText">;
+
+function clampUiFontSize(value: number) {
+  if (!Number.isFinite(value)) return UI_FONT_SIZE_MIN;
+  return Math.min(UI_FONT_SIZE_MAX, Math.max(UI_FONT_SIZE_MIN, value));
+}
 
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
@@ -390,6 +399,7 @@ export function GeneralSettingsPage() {
   const theme = useSettingsStore((s) => s.theme);
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
+  const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
@@ -400,8 +410,13 @@ export function GeneralSettingsPage() {
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
   const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
   const showProjectTreeBadges = useSettingsStore((s) => s.showProjectTreeBadges);
+  const [uiFontSizeDraft, setUiFontSizeDraft] = useState(uiFontSize);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
+  useEffect(() => {
+    setUiFontSizeDraft(uiFontSize);
+  }, [uiFontSize]);
+
   const [uiTextColorDraft, setUiTextColorDraft] = useState(uiTextColor);
 
   useEffect(() => {
@@ -417,6 +432,13 @@ export function GeneralSettingsPage() {
     if (next !== "" && !HEX_COLOR_PATTERN.test(next)) return;
     if (next !== uiTextColor) {
       void update("uiTextColor", next);
+  const commitUiFontSize = (value = uiFontSizeDraft) => {
+    const next = clampUiFontSize(value);
+    setUiFontSizeDraft(next);
+    if (next !== uiFontSize) {
+      void update("uiFontSize", next);
+    }
+  };
     }
   };
   const isCustomUiFontFamily = useMemo(
@@ -520,6 +542,40 @@ export function GeneralSettingsPage() {
               size="xs"
               aria-label="应用字体"
               description="影响除终端外的应用整体界面字体；终端字体在「终端设置」中单独配置。"
+            <Stack gap={6}>
+              <Group justify="space-between" align="center">
+                <Text size="xs" c="var(--on-surface-variant)">
+                  应用字体大小
+                </Text>
+                <NumberInput
+                  min={UI_FONT_SIZE_MIN}
+                  max={UI_FONT_SIZE_MAX}
+                  value={uiFontSizeDraft}
+                  onChange={(value) => setUiFontSizeDraft(typeof value === "number" ? value : Number(value))}
+                  onBlur={() => commitUiFontSize()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitUiFontSize();
+                  }}
+                  size="xs"
+                  w={84}
+                  aria-label="应用字体大小数值"
+                />
+              </Group>
+              <Slider
+                min={UI_FONT_SIZE_MIN}
+                max={UI_FONT_SIZE_MAX}
+                step={1}
+                value={uiFontSizeDraft}
+                onChange={setUiFontSizeDraft}
+                onChangeEnd={(value) => commitUiFontSize(value)}
+                color="cliPrimary"
+                aria-label="应用字体大小滑杆"
+              />
+              <Text size="xs" c="var(--text-muted)">
+                影响除内置终端外的应用界面；终端字号仍在「终端设置」中单独配置。
+              </Text>
+            </Stack>
+
             />
 
             <Stack gap={6}>

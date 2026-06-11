@@ -50,11 +50,15 @@
   --font-sans: var(--font-ui-sans);
   --font-mono: var(--font-ui-mono);
 
-  --font-size-app-title: 15px;
-  --font-size-section-title: 13px;
-  --font-size-body: 13px;
-  --font-size-meta: 12px;
-  --font-size-micro: 11px;
+  --font-size-ui: 13px;
+  --font-size-app-title: calc(var(--font-size-ui) + 2px);
+  --font-size-section-title: var(--font-size-ui);
+  --font-size-body: var(--font-size-ui);
+  --font-size-meta: calc(var(--font-size-ui) - 1px);
+  --font-size-micro: calc(var(--font-size-ui) - 2px);
+  --text-xs: var(--font-size-meta);
+  --text-sm: calc(var(--font-size-ui) + 1px);
+  --text-base: calc(var(--font-size-ui) + 3px);
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;

@@ -63,26 +63,33 @@ export function AppMantineThemeProvider({ children }: AppMantineThemeProviderPro
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
+  const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const primaryColor =
     resolvedTheme === "dark" ? DARK_PRIMARY_COLORS[darkThemePalette] : LIGHT_PRIMARY_COLORS[lightThemePalette];
 
-  const mantineTheme = useMemo(
-    () =>
-      createTheme({
-        colors: {
-          cliPrimary: buildPrimaryShades(primaryColor),
-        },
-        primaryColor: "cliPrimary",
-        primaryShade: 6,
+  const mantineTheme = useMemo(() => {
+    const metaSize = Math.max(9, uiFontSize - 1);
+    return createTheme({
+      colors: {
+        cliPrimary: buildPrimaryShades(primaryColor),
+      },
+      primaryColor: "cliPrimary",
+      primaryShade: 6,
+      fontFamily: uiFontFamily,
+      fontFamilyMonospace: uiFontFamily,
+      fontSizes: {
+        xs: `${metaSize}px`,
+        sm: `${uiFontSize + 1}px`,
+        md: `${uiFontSize + 3}px`,
+        lg: `${uiFontSize + 5}px`,
+        xl: `${uiFontSize + 7}px`,
+      },
+      headings: {
         fontFamily: uiFontFamily,
-        fontFamilyMonospace: uiFontFamily,
-        headings: {
-          fontFamily: uiFontFamily,
-        },
-        defaultRadius: "md",
-      }),
-    [primaryColor, uiFontFamily]
-  );
+      },
+      defaultRadius: "md",
+    });
+  }, [primaryColor, uiFontFamily, uiFontSize]);
 
   return (
     <MantineProvider theme={mantineTheme} defaultColorScheme={resolvedTheme} forceColorScheme={resolvedTheme}>

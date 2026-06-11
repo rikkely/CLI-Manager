@@ -28,6 +28,9 @@ export type TerminalThemeMode = "follow-app" | "independent";
 export type SidebarDensity = "compact" | "comfortable";
 export type ViewMode = "standard" | "compact";
 export type CloseBehavior = "ask" | "minimize" | "exit";
+export const UI_FONT_SIZE_MIN = 11;
+export const UI_FONT_SIZE_MAX = 18;
+export const UI_FONT_SIZE_DEFAULT = 13;
 export type ShortcutAction =
   | "newTerminal"
   | "closeTerminal"
@@ -118,6 +121,7 @@ interface Settings {
   fontSize: number;
   fontFamily: string;
   uiFontFamily: string;
+  uiFontSize: number;
   uiTextColor: string;
   defaultShell: string;
   sidebarWidth: number;
@@ -166,6 +170,7 @@ const DEFAULTS: Settings = {
   fontFamily: "Cascadia Code, Consolas, monospace",
   uiFontFamily:
     "\"Segoe UI Variable\", \"Segoe UI\", -apple-system, BlinkMacSystemFont, \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+  uiFontSize: UI_FONT_SIZE_DEFAULT,
   uiTextColor: "",
   defaultShell: "powershell.exe",
   sidebarWidth: 280,
@@ -400,6 +405,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       entries.uiTextColor = DEFAULTS.uiTextColor;
       await s.set("uiTextColor", DEFAULTS.uiTextColor);
     }
+    entries.uiFontSize = clampNumber(
+      entries.uiFontSize,
+      UI_FONT_SIZE_MIN,
+      UI_FONT_SIZE_MAX,
+      DEFAULTS.uiFontSize
+    );
 
     entries.keyboardShortcuts = migrateKeyboardShortcuts(entries.keyboardShortcuts);
 
