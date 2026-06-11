@@ -310,6 +310,22 @@
   --warning: #b07a22;
 }
 
+/* Light theme - Emerald Mist (微冷雾白 + 翡翠绿) */
+[data-theme="light"][data-light-palette="emerald-mist"] {
+  --bg-primary: #fbfdfc;
+  --bg-secondary: #f1f5f3;
+  --bg-tertiary: #e6ece9;
+  --text-primary: #18211d;
+  --text-secondary: #3c4742;
+  --text-muted: #687570;
+  --accent: #039d74;
+  --accent-hover: #0bb085;
+  --border: #d3dcd8;
+  --danger: #c0323c;
+  --success: #2f8f62;
+  --warning: #b8842a;
+}
+
 /* Light theme - SaaS Analytics Dashboard */
 [data-theme="light"][data-light-palette="saas-analytics-dashboard"] {
   --bg-primary: #f8fafc;
@@ -810,14 +826,16 @@ samp,
   box-shadow: none;
 }
 
-.ui-selection-card {
+.ui-selection-card,
+.ui-selection-card.ui-selection-card {
   position: relative;
   background-color: var(--surface-container-low);
-  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   color: var(--on-surface-variant);
 }
 
-.ui-selection-card[data-selected="true"] {
+.ui-selection-card[data-selected="true"],
+.ui-selection-card.ui-selection-card[data-selected="true"] {
   background-color: var(--surface-container-low);
   border-color: var(--interactive-selected-border);
   color: var(--on-surface);
@@ -1183,8 +1201,8 @@ samp,
 }
 
 .ui-tree-item-actions .icon-btn {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 8px;
   background-color: color-mix(in srgb, var(--surface-container-lowest) 68%, transparent);
 }

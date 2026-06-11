@@ -9,6 +9,7 @@ export type LightThemePalette =
   | "warm-paper"
   | "cream-green"
   | "ink-red"
+  | "emerald-mist"
   | "saas-analytics-dashboard"
   | "apple-pure"
   | "apple-mist"

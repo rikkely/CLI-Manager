@@ -39,7 +39,12 @@ export function SettingsTopBar({
           )}
           <button
             onClick={onClose}
-            className="ui-interactive shrink-0 rounded-xl border border-border bg-surface-container-high px-2.5 py-1.5 text-xs font-medium text-on-surface-variant"
+            className="ui-interactive shrink-0 rounded-xl border px-2.5 py-1.5 text-xs font-medium"
+            style={{
+              borderColor: "color-mix(in srgb, var(--primary) 38%, transparent)",
+              backgroundColor: "color-mix(in srgb, var(--primary) 8%, transparent)",
+              color: "var(--primary)",
+            }}
             aria-label="关闭设置窗口"
           >
             关闭

@@ -148,6 +148,25 @@ const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
 
 ## Common Mistakes
 
+### Common Mistake: Setting only `borderColor` on Mantine selection cards
+
+**Symptom**: A settings option card looks borderless even though it has Tailwind `border` or a shared class such as `ui-selection-card`.
+
+**Cause**: Mantine component styles can reset the button/card border after app CSS is bundled, especially on `UnstyledButton`. Setting only `borderColor` does not restore border width/style when the shorthand `border` has been reset to `0`.
+
+**Fix**: Put the full border contract in the shared class and make it specific enough to beat Mantine's base selector:
+
+```css
+.ui-selection-card,
+.ui-selection-card.ui-selection-card {
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+}
+```
+
+Selected variants may keep overriding `border-color`, but the base rule must own width and style.
+
+**Prevention**: When a Mantine-backed settings card appears borderless, inspect the computed `border-width` and `border-style` before changing colors.
+
 ### Gotcha: xterm.js `allowTransparency` is a construction-time option
 
 **Symptom**: After toggling a "transparent background" feature on a live `Terminal` instance, the background stays opaque even though `theme.background` was updated to `rgba(...)`.

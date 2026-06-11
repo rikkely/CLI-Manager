@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { isTauri } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -7,9 +7,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/sidebar";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { CommandPalette } from "./components/CommandPalette";
-import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
-import { StatsPanel } from "./components/stats/StatsPanel";
-import { CcusageStatsPanel } from "./components/stats/CcusageStatsPanel";
+import type { SettingsTab } from "./components/SettingsModal";
+const SettingsModal = lazy(() =>
+  import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
+);
+const StatsPanel = lazy(() =>
+  import("./components/stats/StatsPanel").then((module) => ({ default: module.StatsPanel }))
+);
+const CcusageStatsPanel = lazy(() =>
+  import("./components/stats/CcusageStatsPanel").then((module) => ({ default: module.CcusageStatsPanel }))
+);
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { CloseConfirmDialog } from "./components/CloseConfirmDialog";
 import { AlertTriangle, Check, X } from "./components/icons";
@@ -30,6 +37,7 @@ const appStartAt =
     ? performance.now()
     : Date.now();
 let firstScreenPerfReported = false;
+let firstScreenShown = false;
 let startupBaseReady = false;
 let deferredStartupTasksStarted = false;
 let startupUpdateChecked = false;
@@ -207,6 +215,7 @@ function App() {
   const openHistory = useHistoryStore((s) => s.openHistory);
   const openHistorySession = useHistoryStore((s) => s.openSession);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsEverOpened, setSettingsEverOpened] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [statsOpen, setStatsOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
@@ -217,6 +226,7 @@ function App() {
   const handleOpenSettings = useCallback((tab?: SettingsTab) => {
     setSettingsInitialTab(tab ?? "general");
     setSettingsOpen(true);
+    setSettingsEverOpened(true);
   }, []);
 
   useEffect(() => {
@@ -276,6 +286,17 @@ function App() {
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
     };
+  }, []);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    const fallbackTimer = setTimeout(() => {
+      if (!firstScreenShown) {
+        firstScreenShown = true;
+        void getCurrentWindow().show().catch((err) => logWarn("Failed to show window (fallback timeout)", err));
+      }
+    }, 3000);
+    return () => clearTimeout(fallbackTimer);
   }, []);
 
   useEffect(() => {
@@ -561,6 +582,10 @@ function App() {
           viewMode,
         });
         runDeferredStartupTasks(handleOpenSettings);
+        if (IN_TAURI && !firstScreenShown) {
+          firstScreenShown = true;
+          void getCurrentWindow().show().catch((err) => logWarn("Failed to show window after first screen", err));
+        }
       });
     });
     return () => {
@@ -601,16 +626,21 @@ function App() {
         </div>
       )}
       <CommandPalette />
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />
-      {ccusageAnalyticsEnabled ? (
-        <CcusageStatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} />
-      ) : (
-        <StatsPanel
-          open={statsOpen}
-          onClose={() => setStatsOpen(false)}
-          onOpenSession={handleOpenStatsSession}
-        />
-      )}
+      <Suspense fallback={null}>
+        {settingsEverOpened && (
+          <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />
+        )}
+        {statsOpen &&
+          (ccusageAnalyticsEnabled ? (
+            <CcusageStatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} />
+          ) : (
+            <StatsPanel
+              open={statsOpen}
+              onClose={() => setStatsOpen(false)}
+              onOpenSession={handleOpenStatsSession}
+            />
+          ))}
+      </Suspense>
       <CloseConfirmDialog
         open={closeDialogOpen}
         onMinimize={handleCloseDialogMinimize}

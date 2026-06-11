@@ -23,10 +23,16 @@ export function SettingsNav<T extends string>({ tabs, activeTab, onChange }: Set
               key={tab.id}
               onClick={() => onChange(tab.id)}
               className={`ui-interactive whitespace-nowrap rounded-xl px-3 py-2 text-left text-sm ${
-                active
-                  ? "ui-surface-card ui-bloom-shadow font-semibold text-on-surface"
-                  : "font-medium text-on-surface-variant"
+                active ? "font-semibold text-on-surface" : "font-medium text-on-surface-variant"
               }`}
+              style={
+                active
+                  ? {
+                      backgroundColor: "var(--interactive-selected-bg)",
+                      boxShadow: "inset 0 0 0 1px var(--interactive-selected-border)",
+                    }
+                  : undefined
+              }
               aria-pressed={active}
             >
               {tab.label}

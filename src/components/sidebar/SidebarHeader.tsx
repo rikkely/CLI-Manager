@@ -49,7 +49,7 @@ export function SidebarHeader({
 
   return (
     <div className={`flex items-center justify-between ${compact ? "px-2.5 pb-1.5 pt-2.5" : "px-3 pb-2 pt-3"}`}>
-      <span className="text-[12px] font-semibold tracking-[0.03em] text-on-surface-variant">Projects</span>
+      <span className="text-[12px] font-semibold tracking-[0.03em] text-primary">Projects</span>
       <div className={`flex items-center ${compact ? "gap-0.5" : "gap-1"}`}>
         <button
           onClick={onToggleCollapse}

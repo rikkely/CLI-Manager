@@ -29,6 +29,7 @@ export const TERMINAL_THEME_GROUPS: TerminalThemeGroup[] = [
 export type LightTerminalPalette =
   | "warm-paper"
   | "cream-green"
+  | "emerald-mist"
   | "ink-red"
   | "saas-analytics-dashboard"
   | "apple-pure"
@@ -1371,6 +1372,7 @@ const themeMap = new Map(TERMINAL_THEME_PRESETS.map((p) => [p.id, p.theme]));
 
 function resolveAutoLightThemeId(lightPalette: LightTerminalPalette = "warm-paper"): string {
   if (lightPalette === "cream-green") return "creamGreenLight";
+  if (lightPalette === "emerald-mist") return "creamGreenLight";
   if (lightPalette === "ink-red") return "inkRedLight";
   if (lightPalette === "saas-analytics-dashboard") return "saasAnalyticsDashboardLight";
   if (lightPalette === "apple-pure") return "githubLight";

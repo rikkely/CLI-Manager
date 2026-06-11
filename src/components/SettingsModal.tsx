@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
+import "@mantine/core/styles.css";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { AppMantineThemeProvider } from "./ui/MantineThemeProvider";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { GeneralSettingsPage } from "./settings/pages/GeneralSettingsPage";
 import { ThemeSettingsPage } from "./settings/pages/ThemeSettingsPage";
@@ -116,37 +118,39 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
   })();
 
   return (
-    <div
-      className={`fixed inset-x-0 bottom-0 top-9 z-50 ${
-        closing ? "animate-fade-out" : "animate-fade-in"
-      }`}
-      style={{ fontFamily: uiFontFamily }}
-      onClick={onClose}
-    >
+    <AppMantineThemeProvider>
       <div
-        ref={dialogRef}
-        className={`ui-surface-base flex h-full w-full overflow-hidden${
-          closing ? "" : " animate-slide-down"
+        className={`fixed inset-x-0 bottom-0 top-9 z-50 ${
+          closing ? "animate-fade-out" : "animate-fade-in"
         }`}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="设置窗口"
+        style={{ fontFamily: uiFontFamily }}
+        onClick={onClose}
       >
-        <SettingsLayout
-          tabs={tabs}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          title={activeConfig.title}
-          description={activeConfig.description}
-          searchValue={searchValue}
-          searchPlaceholder={activeConfig.searchPlaceholder}
-          onSearchChange={setSearchValue}
-          onClose={onClose}
+        <div
+          ref={dialogRef}
+          className={`ui-surface-base flex h-full w-full overflow-hidden${
+            closing ? "" : " animate-slide-down"
+          }`}
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-label="设置窗口"
         >
-          {activeContent}
-        </SettingsLayout>
+          <SettingsLayout
+            tabs={tabs}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            title={activeConfig.title}
+            description={activeConfig.description}
+            searchValue={searchValue}
+            searchPlaceholder={activeConfig.searchPlaceholder}
+            onSearchChange={setSearchValue}
+            onClose={onClose}
+          >
+            {activeContent}
+          </SettingsLayout>
+        </div>
       </div>
-    </div>
+    </AppMantineThemeProvider>
   );
 }

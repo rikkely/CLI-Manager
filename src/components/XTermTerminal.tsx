@@ -582,6 +582,12 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     let compositionAnchorRafId: number | null = null;
     let compositionAnchorTimeoutId: number | null = null;
     let compositionScrollLock: { element: HTMLElement; scrollTop: number; scrollLeft: number }[] = [];
+    // Frozen at compositionstart: the cell where the user actually began typing.
+    // During composition the pinyin is NOT forwarded to the PTY, so the TUI does
+    // not redraw and the real input position cannot move — even while a compact
+    // progress bar thrashes the hardware cursor. We anchor once and reuse it,
+    // instead of re-deriving the position from the (drifting) buffer cursor.
+    let compositionAnchorCell: { x: number; y: number } | null = null;
 
     const captureCompositionScroll = () => {
       compositionScrollLock = [terminalContainer, viewport]
@@ -639,54 +645,19 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
     const resolveCompositionAnchorCell = () => {
       const buffer = terminal.buffer.active;
-      const promptPattern = /^(?:[>$#]|PS(?:\s|>))/;
       const clampX = (x: number) => Math.min(Math.max(0, x), Math.max(0, terminal.cols - 1));
       const clampY = (y: number) => Math.min(Math.max(0, y), Math.max(0, terminal.rows - 1));
-      const cursor = {
+      return {
         x: clampX(buffer.cursorX),
         y: clampY(buffer.cursorY),
       };
-
-      const getPromptAnchorCell = (row: number) => {
-        const line = buffer.getLine(buffer.viewportY + row);
-        if (!line) return null;
-        const text = line.translateToString(true);
-        const trimmed = text.trimStart();
-        if (!trimmed || !promptPattern.test(trimmed)) return null;
-
-        for (let x = Math.min(terminal.cols, line.length) - 1; x >= 0; x -= 1) {
-          const cell = line.getCell(x);
-          if (!cell || !cell.getChars().trim()) continue;
-          return { x: clampX(x + Math.max(1, cell.getWidth())), y: row };
-        }
-
-        return { x: clampX(text.length + 1), y: row };
-      };
-
-      if (getPromptAnchorCell(cursor.y)) return cursor;
-
-      for (let offset = 1; offset < terminal.rows; offset += 1) {
-        const upperRow = cursor.y - offset;
-        if (upperRow >= 0) {
-          const anchor = getPromptAnchorCell(upperRow);
-          if (anchor) return anchor;
-        }
-
-        const lowerRow = cursor.y + offset;
-        if (lowerRow < terminal.rows) {
-          const anchor = getPromptAnchorCell(lowerRow);
-          if (anchor) return anchor;
-        }
-      }
-
-      return cursor;
     };
 
     const applyCompositionAnchorFix = () => {
       if (!isComposingRef.current) return;
       const compositionView = terminalContainer.querySelector(".composition-view") as HTMLElement | null;
       if (!textarea && !compositionView) return;
-      const anchor = resolveCompositionAnchorCell();
+      const anchor = compositionAnchorCell ?? resolveCompositionAnchorCell();
       const cell = estimateCellSize();
       const left = `${Math.max(0, anchor.x * cell.width)}px`;
       const top = `${Math.max(0, anchor.y * cell.height)}px`;
@@ -777,6 +748,11 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
     const onCompositionStart = () => {
       isComposingRef.current = true;
+      // Freeze the anchor at the cell where typing began. The buffer cursor is
+      // trustworthy at this instant (the user just placed the caret here), and
+      // it must not be re-read afterwards — a compact progress bar can move the
+      // hardware cursor mid-composition without the input position changing.
+      compositionAnchorCell = resolveCompositionAnchorCell();
       releaseHelperTextareaAnchorPin();
       captureCompositionScroll();
       scheduleCompositionScrollRestore();
@@ -788,6 +764,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     };
     const onCompositionEnd = () => {
       isComposingRef.current = false;
+      compositionAnchorCell = null;
       scheduleCompositionScrollRestore();
       scheduleHelperTextareaAnchorPin();
       scheduleFit(true);

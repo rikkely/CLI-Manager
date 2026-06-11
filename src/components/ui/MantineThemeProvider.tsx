@@ -10,6 +10,7 @@ const LIGHT_PRIMARY_COLORS: Record<LightThemePalette, string> = {
   "warm-paper": "#c46a2d",
   "cream-green": "#3f7a4f",
   "ink-red": "#c43d2f",
+  "emerald-mist": "#039d74",
   "saas-analytics-dashboard": "#3b82f6",
   "apple-pure": "#007aff",
   "apple-mist": "#0a84ff",

@@ -65,6 +65,12 @@ const LIGHT_PALETTE_OPTIONS: {
     swatches: ["#f7f7f5", "#1f1f1c", "#c43d2f"],
   },
   {
+    value: "emerald-mist",
+    label: "翡翠雾",
+    description: "微冷雾白，翡翠绿强调",
+    swatches: ["#fbfdfc", "#18211d", "#039d74"],
+  },
+  {
     value: "saas-analytics-dashboard",
     label: "SaaS Dashboard",
     description: "冷静浅色，适合数据驾驶舱与 Bento 卡片层级",
@@ -178,17 +184,18 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; label: string }
 
 type TerminalToolbarOptionKey = Exclude<keyof TerminalToolbarVisibilitySettings, "showText">;
 
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
 function clampUiFontSize(value: number) {
   if (!Number.isFinite(value)) return UI_FONT_SIZE_MIN;
   return Math.min(UI_FONT_SIZE_MAX, Math.max(UI_FONT_SIZE_MIN, value));
 }
 
-const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
-
 const LIGHT_TEXT_COLORS: Record<LightThemePalette, string> = {
   "warm-paper": "#2e3336",
   "cream-green": "#25302a",
   "ink-red": "#1f1f1c",
+  "emerald-mist": "#18211d",
   "saas-analytics-dashboard": "#1e293b",
   "apple-pure": "#1d1d1f",
   "apple-mist": "#1c1f23",
@@ -223,6 +230,7 @@ const LIGHT_BG_COLORS: Record<LightThemePalette, string> = {
   "warm-paper": "#f9f9fb",
   "cream-green": "#f7faf7",
   "ink-red": "#f7f6f4",
+  "emerald-mist": "#fbfdfc",
   "saas-analytics-dashboard": "#f8fafc",
   "apple-pure": "#ffffff",
   "apple-mist": "#fcfcfd",
@@ -399,9 +407,9 @@ export function GeneralSettingsPage() {
   const theme = useSettingsStore((s) => s.theme);
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
-  const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
+  const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
   const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
   const viewMode = useSettingsStore((s) => s.viewMode);
@@ -410,14 +418,14 @@ export function GeneralSettingsPage() {
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
   const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
   const showProjectTreeBadges = useSettingsStore((s) => s.showProjectTreeBadges);
-  const [uiFontSizeDraft, setUiFontSizeDraft] = useState(uiFontSize);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
+  const [uiFontSizeDraft, setUiFontSizeDraft] = useState(uiFontSize);
+  const [uiTextColorDraft, setUiTextColorDraft] = useState(uiTextColor);
+
   useEffect(() => {
     setUiFontSizeDraft(uiFontSize);
   }, [uiFontSize]);
-
-  const [uiTextColorDraft, setUiTextColorDraft] = useState(uiTextColor);
 
   useEffect(() => {
     setUiTextColorDraft(uiTextColor);
@@ -432,13 +440,13 @@ export function GeneralSettingsPage() {
     if (next !== "" && !HEX_COLOR_PATTERN.test(next)) return;
     if (next !== uiTextColor) {
       void update("uiTextColor", next);
+    }
+  };
   const commitUiFontSize = (value = uiFontSizeDraft) => {
     const next = clampUiFontSize(value);
     setUiFontSizeDraft(next);
     if (next !== uiFontSize) {
       void update("uiFontSize", next);
-    }
-  };
     }
   };
   const isCustomUiFontFamily = useMemo(
@@ -542,6 +550,8 @@ export function GeneralSettingsPage() {
               size="xs"
               aria-label="应用字体"
               description="影响除终端外的应用整体界面字体；终端字体在「终端设置」中单独配置。"
+            />
+
             <Stack gap={6}>
               <Group justify="space-between" align="center">
                 <Text size="xs" c="var(--on-surface-variant)">
@@ -575,8 +585,6 @@ export function GeneralSettingsPage() {
                 影响除内置终端外的应用界面；终端字号仍在「终端设置」中单独配置。
               </Text>
             </Stack>
-
-            />
 
             <Stack gap={6}>
               <Text size="xs" c="var(--on-surface-variant)">

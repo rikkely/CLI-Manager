@@ -335,16 +335,26 @@ export function SyncSettingsPage() {
               <UnstyledButton
                 key={opt.value}
                 onClick={() => void setSyncMode(opt.value)}
-                className="ui-interactive ui-focus-ring ui-selection-card rounded-xl border p-3 text-left"
+                className="ui-interactive ui-focus-ring ui-selection-card rounded-xl border text-left"
                 data-selected={active ? "true" : "false"}
                 aria-pressed={active}
+                w="100%"
+                style={{
+                  display: "block",
+                  minHeight: 76,
+                  minWidth: 0,
+                  padding: "14px 16px",
+                  whiteSpace: "normal",
+                }}
               >
-                <Text size="sm" fw={600} c="var(--on-surface)">
-                  {opt.label}
-                </Text>
-                <Text mt={4} size="xs" lh={1.45} c="var(--on-surface-variant)">
-                  {opt.description}
-                </Text>
+                <Stack gap={4} style={{ minWidth: 0 }}>
+                  <Text size="sm" fw={600} c="var(--on-surface)" style={{ lineHeight: 1.25 }}>
+                    {opt.label}
+                  </Text>
+                  <Text size="xs" lh={1.45} c="var(--on-surface-variant)" style={{ overflowWrap: "anywhere" }}>
+                    {opt.description}
+                  </Text>
+                </Stack>
               </UnstyledButton>
             );
           })}
