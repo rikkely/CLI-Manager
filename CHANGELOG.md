@@ -1,5 +1,23 @@
 # Changelog
 
+## [V1.0.4] - 2026-06-12
+
+### 终端回滚行数配置
+
+- 设置页新增「终端回滚行数」配置项：支持 1000-50000 行范围调整（默认 5000），提供数值输入框与滑块双重控制。
+- 配置项附带说明 Tooltip：明确内存占用与多终端影响，以及 Codex TUI 限制下的实际效果。
+- 终端组件支持热更新回滚行数：修改设置后无需重启应用或重建终端，立即生效于所有终端会话。
+
+### IME 输入锚点冻结增强
+
+- 修复 IME 输入时光标锚点跟随 TUI 重绘（非输入光标）漂移的问题：扩展提示符识别规则支持 Codex `›` 提示符，增强锚点回退逻辑。
+- 新增 xterm `render` 事件监听：TUI 重绘后重新应用冻结的 composition 锚点位置，防止 xterm 自身 `CompositionHelper` 按实时光标重写 `.composition-view` 与 `.xterm-helper-textarea` 位置。
+- 更新前端组件规范文档：放宽 TUI 重绘场景描述，明确不局限于 Claude Code `/compact`，并补充提示符识别与 render 事件处理要求。
+
+### 终端超链接体验
+
+- 终端 OSC 8 超链接改为系统默认浏览器打开：接管 xterm 默认 `window.open` 行为（Tauri webview 会拦截为"是否导航"确认框），仅放行 `http/https` 协议，避免恶意 scheme。
+
 ## [V1.0.3] - 2026-06-12
 
 ### cc-switch 供应商集成
