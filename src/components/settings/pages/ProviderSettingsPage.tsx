@@ -216,8 +216,11 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
           "ccswitch_list_config_snippets",
           { dbPath: ccSwitchDbPath ?? undefined }
         );
+        console.log("🔍 [配置片段调试] 加载到的片段数量:", response.snippets.length);
+        console.log("🔍 [配置片段调试] 片段详情:", response.snippets);
         setSnippets(response.snippets);
-      } catch {
+      } catch (err) {
+        console.error("🔍 [配置片段调试] 加载失败:", err);
         setSnippets([]);
       } finally {
         setSnippetsLoaded(true);
@@ -230,15 +233,20 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
   const { providerConfig, referencedSnippets } = useMemo(() => {
     try {
       const config = JSON.parse(provider.rawSettingsConfig);
+      console.log("🔍 [供应商配置调试] 供应商:", provider.name, "appType:", provider.appType);
+      console.log("🔍 [供应商配置调试] rawSettingsConfig 完整内容:", config);
+      console.log("🔍 [供应商配置调试] 顶层字段:", Object.keys(config));
+      console.log("🔍 [供应商配置调试] config_snippet_refs:", config.config_snippet_refs);
       const refs = config.config_snippet_refs || [];
       const referenced = refs
         .map((refId: string) => snippets.find((s) => s.id === refId))
         .filter(Boolean);
       return { providerConfig: config, referencedSnippets: referenced };
-    } catch {
+    } catch (err) {
+      console.error("🔍 [供应商配置调试] 解析失败:", err, "原始内容:", provider.rawSettingsConfig);
       return { providerConfig: null, referencedSnippets: [] };
     }
-  }, [provider.rawSettingsConfig, snippets]);
+  }, [provider.rawSettingsConfig, provider.name, provider.appType, snippets]);
 
   // 合并配置：片段 → 供应商配置（供应商优先）
   const mergedConfig = useMemo(() => {
