@@ -495,9 +495,17 @@ pub async fn history_list_sessions(
         }
 
         if query_lower.is_none() {
+            // 先按 project_path 过滤再算 fingerprint：避免对全部历史文件 fs::metadata。
+            // claude 仅看 project_key（零 IO），codex 走 project_cache 缓存；命中面板轮询热路径。
             let mut files: Vec<(SessionFileRef, SessionFileFingerprint)> =
                 collect_session_files(source_filter.as_deref(), &roots)
                     .into_iter()
+                    .filter(|file_ref| {
+                        target_project_path
+                            .as_ref()
+                            .map(|project_path| session_matches_project_path(file_ref, project_path))
+                            .unwrap_or(true)
+                    })
                     .map(|file_ref| {
                         let fingerprint = session_file_fingerprint(&file_ref.path);
                         (file_ref, fingerprint)
@@ -511,11 +519,6 @@ pub async fn history_list_sessions(
 
             let mut matched = 0usize;
             for (file_ref, _) in files {
-                if let Some(project_path) = &target_project_path {
-                    if !session_matches_project_path(&file_ref, project_path) {
-                        continue;
-                    }
-                }
                 if matched < start_offset {
                     matched += 1;
                     continue;
@@ -1813,6 +1816,29 @@ fn scan_session_computation(
     updated_at: i64,
 ) -> CachedSessionComputation {
     let (summary_scan, stats) = scan_session_combined(path);
+    build_session_computation(path, created_at, updated_at, summary_scan, stats)
+}
+
+/// 单遍同时取得 computation 与完整消息列表，供 detail 复用同一次读取与解析。
+fn scan_session_computation_with_messages(
+    path: &Path,
+    created_at: i64,
+    updated_at: i64,
+) -> (CachedSessionComputation, Vec<HistoryMessage>) {
+    let (summary_scan, stats, messages) = scan_session_detail(path);
+    (
+        build_session_computation(path, created_at, updated_at, summary_scan, stats),
+        messages,
+    )
+}
+
+fn build_session_computation(
+    path: &Path,
+    created_at: i64,
+    updated_at: i64,
+    summary_scan: SessionSummaryScan,
+    stats: SessionStatsScan,
+) -> CachedSessionComputation {
     let session_id = path
         .file_stem()
         .map(|v| v.to_string_lossy().to_string())
@@ -1872,8 +1898,23 @@ fn get_or_scan_session_computation(file_ref: &SessionFileRef) -> CachedSessionCo
 }
 
 fn build_session_detail(file_ref: &SessionFileRef) -> Result<HistorySessionDetail, String> {
-    let computed = get_or_scan_session_computation(file_ref);
-    let messages = read_session_messages(&file_ref.path)?;
+    // detail 必然要读完整消息，单遍同时算出 stats，避免对同一文件二次读取/解析；
+    // 顺带回写 stats 缓存，让后续 list / stats 聚合命中。
+    let fingerprint = session_file_fingerprint(&file_ref.path);
+    let (computed, messages) = scan_session_computation_with_messages(
+        &file_ref.path,
+        fingerprint.created_at,
+        fingerprint.updated_at,
+    );
+    if let Ok(mut cache) = get_stats_cache().lock() {
+        cache.entries.insert(
+            path_to_key(&file_ref.path),
+            CachedSessionCacheEntry {
+                fingerprint,
+                computed: computed.clone(),
+            },
+        );
+    }
     let usage = HistorySessionUsage {
         input_tokens: computed.stats.input_tokens,
         output_tokens: computed.stats.output_tokens,
@@ -2226,8 +2267,13 @@ fn extract_cwd(value: &Value) -> Option<String> {
     None
 }
 
-/// Single-pass scan that yields both summary and stats from one read.
-fn scan_session_combined(path: &Path) -> (SessionSummaryScan, SessionStatsScan) {
+/// 单遍扫描会话文件，产出 summary 与 stats；`collect_messages` 为 true 时同时收集完整消息列表
+/// （供 detail 复用同一次 IO/解析，避免二次读取）。消息的 model 回填与重复 usage 行清空语义
+/// 与 `iter_session_messages` 保持一致。
+fn scan_session_inner(
+    path: &Path,
+    collect_messages: bool,
+) -> (SessionSummaryScan, SessionStatsScan, Vec<HistoryMessage>) {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(_) => {
@@ -2239,6 +2285,7 @@ fn scan_session_combined(path: &Path) -> (SessionSummaryScan, SessionStatsScan) 
                     branch: None,
                 },
                 SessionStatsScan::default(),
+                Vec::new(),
             );
         }
     };
@@ -2270,6 +2317,10 @@ fn scan_session_combined(path: &Path) -> (SessionSummaryScan, SessionStatsScan) 
     let mut skill_calls: HashMap<String, u64> = HashMap::new();
     // tool_use 块按块 id 去重：流式重复行携带相同块，避免重复计数。
     let mut seen_tool_call_ids: HashSet<String> = HashSet::new();
+    // collect_messages 时收集的消息列表；其去重用独立的 msg_seen_usage_keys，
+    // 与 stats 的 seen_usage_keys 分开，避免消息侧先插入 key 污染 stats 的去重判断。
+    let mut messages: Vec<HistoryMessage> = Vec::new();
+    let mut msg_seen_usage_keys: HashSet<String> = HashSet::new();
 
     for line in BufReader::with_capacity(READ_BUF_CAPACITY, file).lines().map_while(Result::ok) {
         let trimmed = line.trim();
@@ -2283,20 +2334,37 @@ fn scan_session_combined(path: &Path) -> (SessionSummaryScan, SessionStatsScan) 
         if branch.is_none() {
             branch = extract_branch(&value);
         }
-        if let Some(msg) = parse_message(&value) {
+
+        // model 先于消息解析更新：既供 stats 归因，也供消息 model 回填（assistant 行常不带 model）。
+        let line_model = extract_model(&value).filter(|model| !is_synthetic_model(model));
+        if let Some(model) = &line_model {
+            *model_hits.entry(model.clone()).or_insert(0) += 1;
+            current_model = Some(model.clone());
+        }
+
+        if let Some(mut msg) = parse_message(&value) {
             message_count += 1;
             if first_message.is_none() {
                 first_message = Some(msg.content.clone());
             }
             if first_user_message.is_none() && msg.role == "user" {
-                first_user_message = Some(msg.content);
+                first_user_message = Some(msg.content.clone());
             }
-        }
-
-        let line_model = extract_model(&value).filter(|model| !is_synthetic_model(model));
-        if let Some(model) = &line_model {
-            *model_hits.entry(model.clone()).or_insert(0) += 1;
-            current_model = Some(model.clone());
+            if collect_messages {
+                if msg.model.is_none() && msg.role == "assistant" {
+                    msg.model = current_model.clone();
+                }
+                // 重复 usage 行（同 message.id|requestId）保留消息但清空 token，避免前端逐消息求和虚高。
+                if let Some(key) = extract_usage_dedup_key(&value) {
+                    if !msg_seen_usage_keys.insert(key) {
+                        msg.input_tokens = None;
+                        msg.output_tokens = None;
+                        msg.cache_creation_tokens = None;
+                        msg.cache_read_tokens = None;
+                    }
+                }
+                messages.push(msg);
+            }
         }
 
         collect_tool_calls(
@@ -2403,7 +2471,19 @@ fn scan_session_combined(path: &Path) -> (SessionSummaryScan, SessionStatsScan) 
             mcp_calls,
             skill_calls,
         },
+        messages,
     )
+}
+
+/// 仅需 summary + stats 的调用方（list / stats 聚合）使用，不收集消息体。
+fn scan_session_combined(path: &Path) -> (SessionSummaryScan, SessionStatsScan) {
+    let (summary, stats, _) = scan_session_inner(path, false);
+    (summary, stats)
+}
+
+/// detail 路径使用：单遍同时取得 summary、stats 与完整消息列表，避免二次读取与解析。
+fn scan_session_detail(path: &Path) -> (SessionSummaryScan, SessionStatsScan, Vec<HistoryMessage>) {
+    scan_session_inner(path, true)
 }
 
 /// Stream parsed messages from a session file. Callback returns `false` to break early.
@@ -2505,15 +2585,6 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle_lowercase: &[u8]) -> 
     haystack
         .windows(needle_lowercase.len())
         .any(|window| window.eq_ignore_ascii_case(needle_lowercase))
-}
-
-fn read_session_messages(path: &Path) -> Result<Vec<HistoryMessage>, String> {
-    let mut messages = Vec::new();
-    iter_session_messages(path, |_, msg| {
-        messages.push(msg);
-        true
-    })?;
-    Ok(messages)
 }
 
 fn extract_usage_tokens(value: &Value) -> UsageTokenScan {
@@ -2745,6 +2816,10 @@ fn codex_usage_delta(
     }
 }
 
+/// C2: 提取 usage 去重键（message.id | requestId）
+///
+/// 边界情况：无 message.id 的带 usage 行不去重。
+/// Claude Code / Codex 正常都有 message.id，属边界情况，保持现状。
 fn extract_usage_dedup_key(value: &Value) -> Option<String> {
     let message_id = value
         .get("message")
@@ -4070,5 +4145,45 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].model.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(messages[1].model.as_deref(), Some("gpt-5-codex"));
+    }
+
+    #[test]
+    fn scan_session_detail_collects_messages_and_stats_in_one_pass() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("session.jsonl");
+        let line = r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":100,"output_tokens":50}}}"#;
+        // 同一条流式消息重复两次：messages 都保留但重复行 token 清空；stats 只计一次。
+        write_text(&file, &format!("{line}\n{line}\n"));
+
+        let (summary, stats, messages) = scan_session_detail(&file);
+
+        // 消息侧：两条都在，重复行 token 被清空（与 iter_session_messages 口径一致）
+        assert_eq!(messages.len(), 2);
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(messages[0].input_tokens, Some(100));
+        assert_eq!(messages[0].output_tokens, Some(50));
+        assert_eq!(messages[0].model.as_deref(), Some("claude-sonnet-4-5"));
+        assert_eq!(messages[1].input_tokens, None);
+        assert_eq!(messages[1].output_tokens, None);
+
+        // stats 侧：去重后只计一次，不随重复行虚高（与 scan_session_combined 同一口径）
+        assert_eq!(stats.input_tokens, 100);
+        assert_eq!(stats.output_tokens, 50);
+        assert_eq!(stats.token_trend.len(), 1);
+    }
+
+    #[test]
+    fn scan_session_detail_backfills_assistant_model_from_turn_context() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-session.jsonl");
+        let turn_context = r#"{"type":"turn_context","payload":{"model":"gpt-5-codex"}}"#;
+        let message = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#;
+        write_text(&file, &format!("{turn_context}\n{message}\n"));
+
+        let (_, _, messages) = scan_session_detail(&file);
+
+        // 消息行不带 model，回填最近 turn_context 的模型（detail 单遍路径与 iter_session_messages 一致）
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].model.as_deref(), Some("gpt-5-codex"));
     }
 }

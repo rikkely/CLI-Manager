@@ -1,41 +1,54 @@
-use std::path::Path;
-use std::process::Command;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// 查询指定路径的当前 git 分支
 ///
-/// # Arguments
-/// * `path` - 项目路径
+/// 通过读取 `.git/HEAD` 解析分支名，避免 spawn `git` 子进程（Windows 上进程创建较慢，
+/// 且本命令被实时统计面板按秒级轮询调用）。整段同步 IO 包在 `spawn_blocking` 内，
+/// 不阻塞 tokio runtime 工作线程。
 ///
 /// # Returns
-/// * `Ok(Some(branch))` - 成功获取分支名
-/// * `Ok(None)` - 不是 git 仓库或获取失败
+/// * `Ok(Some(branch))` - 普通分支（HEAD 为 `ref: refs/heads/<branch>`）
+/// * `Ok(None)` - 非 git 仓库、detached HEAD，或读取失败
 #[tauri::command]
 pub async fn get_current_git_branch(path: String) -> Result<Option<String>, String> {
-    let project_path = Path::new(&path);
+    tokio::task::spawn_blocking(move || resolve_current_branch(Path::new(&path)))
+        .await
+        .map_err(|e| format!("git 分支查询任务失败: {e}"))
+}
 
-    // 检查是否是 git 仓库
-    if !project_path.join(".git").exists() {
-        return Ok(None);
+/// 读取 `.git/HEAD` 解析当前分支名。
+/// detached HEAD（HEAD 直接为 commit hash）返回 `None`，与 `git branch --show-current` 语义一致。
+fn resolve_current_branch(project_path: &Path) -> Option<String> {
+    let git_dir = resolve_git_dir(&project_path.join(".git"))?;
+    let head = fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    // 普通分支：`ref: refs/heads/<branch>`；分支名可能含 "/"（如 feature/foo），保留剩余全部。
+    let reference = head.trim().strip_prefix("ref:")?.trim();
+    let branch = reference.strip_prefix("refs/heads/")?.trim();
+    (!branch.is_empty()).then(|| branch.to_string())
+}
+
+/// 解析真实 git 目录：
+/// - `.git` 为目录（普通仓库）：直接使用
+/// - `.git` 为文件（worktree / submodule）：内容形如 `gitdir: <path>`，指向真实 git 目录
+fn resolve_git_dir(git_path: &Path) -> Option<PathBuf> {
+    let metadata = fs::metadata(git_path).ok()?;
+    if metadata.is_dir() {
+        return Some(git_path.to_path_buf());
     }
 
-    // 执行 git branch --show-current
-    let output = Command::new("git")
-        .args(["-c", "i18n.logOutputEncoding=UTF-8", "branch", "--show-current"])
-        .current_dir(project_path)
-        .output()
-        .map_err(|e| format!("执行 git 命令失败: {}", e))?;
-
-    if !output.status.success() {
-        return Ok(None);
+    let content = fs::read_to_string(git_path).ok()?;
+    let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
+    if gitdir.is_empty() {
+        return None;
     }
 
-    let branch = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_string();
-
-    if branch.is_empty() {
-        Ok(None)
+    let gitdir_path = Path::new(gitdir);
+    let resolved = if gitdir_path.is_absolute() {
+        gitdir_path.to_path_buf()
     } else {
-        Ok(Some(branch))
-    }
+        // 相对路径相对于 `.git` 文件所在目录
+        git_path.parent()?.join(gitdir_path)
+    };
+    Some(resolved)
 }

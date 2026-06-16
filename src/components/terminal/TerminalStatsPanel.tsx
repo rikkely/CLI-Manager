@@ -32,6 +32,7 @@ interface TerminalStatsPanelProps {
 }
 
 const POLL_INTERVAL_MS = 10_000;
+const TICK_INTERVAL_MS = 30_000;
 
 // 按作用域（含 tabId）缓存已解析的会话详情：切回已看过的 Tab 先显缓存再后台刷新，
 // 避免重复解析 jsonl 时的「加载中」闪烁。终端数量有限，不做淘汰。
@@ -56,15 +57,29 @@ function inferHistorySource(haystack: string): HistorySource | null {
 }
 
 /**
- * 实时查询项目当前 git 分支
+ * A6+A7: 统一定时器调度 - 实时查询项目当前 git 分支
+ * 初始值为会话静态分支，避免首屏闪烁；轮询由外部统一调度
  */
-function useCurrentGitBranch(projectPath: string | null, enabled: boolean): string | null {
-  const [branch, setBranch] = useState<string | null>(null);
+function useCurrentGitBranch(
+  projectPath: string | null,
+  enabled: boolean,
+  initialBranch: string | null,
+  pollTrigger: number
+): string | null {
+  const [branch, setBranch] = useState<string | null>(initialBranch);
+  const lastPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!enabled || !projectPath) {
-      setBranch(null);
+      setBranch(initialBranch);
+      lastPathRef.current = null;
       return;
+    }
+
+    // 路径变化时立即重置为初始分支，避免显示上一个项目的分支
+    if (lastPathRef.current !== projectPath) {
+      lastPathRef.current = projectPath;
+      setBranch(initialBranch);
     }
 
     let cancelled = false;
@@ -77,21 +92,17 @@ function useCurrentGitBranch(projectPath: string | null, enabled: boolean): stri
         }
       } catch (error) {
         if (!cancelled) {
-          setBranch(null);
+          setBranch(initialBranch);
         }
       }
     };
 
     void fetchBranch();
-    const timer = window.setInterval(() => {
-      void fetchBranch();
-    }, POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
-  }, [projectPath, enabled]);
+  }, [projectPath, enabled, initialBranch, pollTrigger]);
 
   return branch;
 }
@@ -198,6 +209,7 @@ export function TerminalStatsPanel({ activeSessionId, open }: TerminalStatsPanel
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [, setNowTick] = useState(0);
   const [refreshSeq, setRefreshSeq] = useState(0);
+  const [pollTrigger, setPollTrigger] = useState(0); // A6: 统一轮询触发器
   const latestRef = useRef<HistorySessionDetail | null>(null);
   const lastPathRef = useRef<string | null>(null);
 
@@ -229,7 +241,16 @@ export function TerminalStatsPanel({ activeSessionId, open }: TerminalStatsPanel
     Boolean(terminalSession?.cliSessionId) &&
     latestSession?.session_id === terminalSession?.cliSessionId;
 
-  // 轮询该项目最近一次 CLI 会话：updated_at 未变化时跳过 jsonl 重解析
+  // A6: 统一定时器调度 - 10s 主节拍同时触发会话数据轮询和 git 分支查询
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setInterval(() => {
+      setPollTrigger((prev) => prev + 1);
+    }, POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [open]);
+
+  // 会话数据轮询：updated_at 未变化时跳过 jsonl 重解析
   // 多窗口隔离：scopeKey 含 activeSessionId(tabId)，不同终端窗口的数据各自独立缓存与查询
   useEffect(() => {
     if (!open || !projectPath) {
@@ -250,7 +271,7 @@ export function TerminalStatsPanel({ activeSessionId, open }: TerminalStatsPanel
     }
     let cancelled = false;
 
-    const load = async (initial: boolean) => {
+    const loadSession = async (initial: boolean) => {
       if (initial && !latestRef.current) setLoadingSession(true);
       const current = latestRef.current;
       const prev = current
@@ -275,17 +296,14 @@ export function TerminalStatsPanel({ activeSessionId, open }: TerminalStatsPanel
       }
     };
 
-    void load(true);
-    const timer = window.setInterval(() => {
-      void load(false);
-    }, POLL_INTERVAL_MS);
+    void loadSession(true);
+
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
     // activeSessionId 入依赖：切换 Tab 时立即重新核对最近会话（unchanged 时开销仅一次列表查询）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, projectPath, sourceFilter, terminalSession?.cliSessionId, refreshSeq, activeSessionId]);
+  }, [open, projectPath, sourceFilter, terminalSession?.cliSessionId, refreshSeq, activeSessionId, pollTrigger]);
 
   // 今日项目用量：会话数据变化时同步刷新（与终端 CLI 来源保持一致）
   useEffect(() => {
@@ -310,7 +328,7 @@ export function TerminalStatsPanel({ activeSessionId, open }: TerminalStatsPanel
     if (!open || updatedAt === null) return;
     const timer = window.setInterval(() => {
       setNowTick((prev) => prev + 1);
-    }, 30_000);
+    }, TICK_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [open, updatedAt]);
 
@@ -321,8 +339,14 @@ export function TerminalStatsPanel({ activeSessionId, open }: TerminalStatsPanel
     setRefreshSeq((prev) => prev + 1);
   }, []);
 
-  // 实时查询当前项目的 git 分支
-  const currentBranch = useCurrentGitBranch(projectPath, open);
+  // A7: 实时查询当前项目的 git 分支，初始值为会话静态分支，避免首屏闪烁
+  // A6: 通过 pollTrigger 与会话数据轮询共用 10s 节拍
+  const currentBranch = useCurrentGitBranch(
+    projectPath,
+    open,
+    latestSession?.branch ?? null,
+    pollTrigger
+  );
 
   if (!open) return null;
 
