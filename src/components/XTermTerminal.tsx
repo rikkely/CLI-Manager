@@ -872,8 +872,19 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
           }
         }
 
-        // No app-drawn caret (plain shell, or a mid-frame redraw dropped it):
-        // fall back to purely structural anchoring.
+        // No inverse caret found. A borderless prompt — a plain shell, or a TUI
+        // like Codex that draws no ─ rule — keeps the REAL terminal cursor on the
+        // caret (verified via dump: no inverse cell, hardware cursor tracks the
+        // caret on prompt / continuation / mid rows alike). Trust it directly.
+        // (Claude Code flings its cursor away but always draws the rule + inverse,
+        // handled above; only its rare dropped frame — rule present but inverse
+        // momentarily gone — falls through to the structural anchor below.)
+        if (ruleRow >= terminal.rows && cursor.y >= row) {
+          return cursor;
+        }
+
+        // Bordered TUI whose inverse caret dropped this frame: fall back to
+        // purely structural anchoring.
         // Last non-blank row inside the box.
         let lastContentRow = row;
         for (let r = row + 1; r <= boxBottom; r += 1) {
