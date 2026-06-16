@@ -300,6 +300,7 @@ pub fn run() {
             commands::sync::sync_local_export,
             commands::sync::sync_local_import,
             commands::version::get_app_version,
+            commands::version::get_os_platform,
             commands::background::save_background_image,
             commands::background::cleanup_unused_backgrounds,
             commands::background::background_image_exists,
@@ -317,6 +318,7 @@ pub fn run() {
             commands::ccswitch::ccswitch_apply_provider,
             commands::ccswitch::ccswitch_reset_project_provider,
             commands::ccswitch::ccswitch_probe_projects,
+            commands::ccswitch::ccswitch_list_config_snippets,
             commands::git::get_current_git_branch,
         ])
         .run(tauri::generate_context!())

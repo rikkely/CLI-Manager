@@ -27,6 +27,8 @@ pub struct CcSwitchProvider {
     api_format: Option<String>,
     masked_env: BTreeMap<String, String>,
     config_parse_error: bool,
+    /// Raw settings_config JSON text (for display only, not for actual application)
+    raw_settings_config: String,
 }
 
 #[derive(Serialize)]
@@ -75,11 +77,16 @@ fn parse_settings_config(raw: &str) -> Option<ParsedConfig> {
     if let Some(env) = value.get("env").and_then(Value::as_object) {
         for (key, raw_value) in env {
             let text = env_value_text(raw_value);
-            if key == "ANTHROPIC_BASE_URL" {
+
+            // Generic pattern matching: *_BASE_URL / *_API_BASE / *_ENDPOINT
+            if key.ends_with("_BASE_URL") || key.ends_with("_API_BASE") || key.ends_with("_ENDPOINT") {
                 parsed.base_url = Some(text.clone());
-            } else if key == "ANTHROPIC_MODEL" {
+            }
+            // Generic pattern matching: *_MODEL
+            else if key.ends_with("_MODEL") {
                 parsed.model = Some(text.clone());
             }
+
             let display = if is_secret_env_key(key) {
                 mask_secret(&text)
             } else {
@@ -158,6 +165,7 @@ fn provider_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<CcSwitchProvider, 
         api_format: parse_api_format(&meta),
         masked_env: parsed.masked_env,
         config_parse_error,
+        raw_settings_config: settings_config,
     })
 }
 
@@ -542,6 +550,81 @@ pub async fn ccswitch_probe_projects(
         .collect();
 
     Ok(badges)
+}
+
+// ---------- Phase 4: Config Snippets ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcSwitchConfigSnippet {
+    id: String,
+    name: String,
+    description: Option<String>,
+    config_json: String,
+    created_at: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcSwitchConfigSnippetsResponse {
+    db_path: String,
+    snippets: Vec<CcSwitchConfigSnippet>,
+}
+
+#[tauri::command]
+pub async fn ccswitch_list_config_snippets(
+    app: tauri::AppHandle,
+    db_path: Option<String>,
+) -> Result<CcSwitchConfigSnippetsResponse, String> {
+    let path = resolve_db_path(&app, db_path)?;
+    let mut conn = open_db_readonly(&path).await?;
+
+    // Error tolerance: check if table exists first
+    let table_exists = sqlx::query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='config_snippets'"
+    )
+    .fetch_optional(&mut conn)
+    .await
+    .map_err(|err| format!("db_query_failed: {err}"))?
+    .is_some();
+
+    if !table_exists {
+        // Table doesn't exist, return empty list
+        let _ = conn.close().await;
+        return Ok(CcSwitchConfigSnippetsResponse {
+            db_path: path.to_string_lossy().into_owned(),
+            snippets: Vec::new(),
+        });
+    }
+
+    let rows = sqlx::query(
+        "SELECT id, name, description, config_json, created_at \
+         FROM config_snippets ORDER BY name",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .map_err(|err| format!("db_query_failed: {err}"))?;
+
+    let snippets = rows
+        .iter()
+        .map(|row| -> Result<CcSwitchConfigSnippet, String> {
+            let map_err = |err: sqlx::Error| format!("db_query_failed: {err}");
+            Ok(CcSwitchConfigSnippet {
+                id: row.try_get("id").map_err(map_err)?,
+                name: row.try_get("name").map_err(map_err)?,
+                description: row.try_get("description").map_err(map_err)?,
+                config_json: row.try_get("config_json").map_err(map_err)?,
+                created_at: row.try_get("created_at").map_err(map_err)?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let _ = conn.close().await;
+
+    Ok(CcSwitchConfigSnippetsResponse {
+        db_path: path.to_string_lossy().into_owned(),
+        snippets,
+    })
 }
 
 #[cfg(test)]

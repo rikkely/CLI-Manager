@@ -14,6 +14,7 @@ import {
   Loader,
   SegmentedControl,
   Stack,
+  Tabs,
   Text,
 } from "@mantine/core";
 import { AlertTriangle, Copy } from "@/components/icons";
@@ -34,12 +35,51 @@ interface CcSwitchProvider {
   apiFormat: string | null;
   maskedEnv: Record<string, string>;
   configParseError: boolean;
+  rawSettingsConfig: string;
 }
 
 interface CcSwitchProvidersResponse {
   dbPath: string;
   providers: CcSwitchProvider[];
 }
+
+interface CcSwitchConfigSnippet {
+  id: string;
+  name: string;
+  description: string | null;
+  configJson: string;
+  createdAt: number | null;
+}
+
+interface CcSwitchConfigSnippetsResponse {
+  dbPath: string;
+  snippets: CcSwitchConfigSnippet[];
+}
+
+const jsonCodeBlockStyles = `
+.json-code-block {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  font-family: var(--font-ui-mono);
+}
+
+.json-code-block pre {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.json-key { color: #9cdcfe; }
+.json-string { color: #ce9178; }
+.json-number { color: #b5cea8; }
+.json-boolean { color: #569cd6; }
+`;
 
 const ERROR_HINTS: Record<string, string> = {
   db_not_found: "未找到 cc-switch 数据库文件，请确认已安装 cc-switch，或手动选择 cc-switch.db。",
@@ -67,6 +107,31 @@ function CopyButton({ value, label = "已复制" }: { value: string; label?: str
     >
       <Copy size={12} />
     </ActionIcon>
+  );
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function JsonCodeBlock({ json, maxHeight = "400px" }: { json: string; maxHeight?: string }) {
+  // 简单的 JSON 语法高亮（纯 CSS）；先转义 HTML 再注入 span，避免 XSS
+  const highlightedJson = useMemo(() => {
+    // escapeHtml 仅转义 & < >，引号保留，正则可直接匹配
+    return escapeHtml(json)
+      .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:') // 键名
+      .replace(/: "([^"]*)"/g, ': <span class="json-string">"$1"</span>') // 字符串值
+      .replace(/: (-?\d+(?:\.\d+)?)/g, ': <span class="json-number">$1</span>') // 数字
+      .replace(/: (true|false|null)/g, ': <span class="json-boolean">$1</span>'); // 布尔/null
+  }, [json]);
+
+  return (
+    <Box className="json-code-block ui-thin-scroll" style={{ maxHeight }}>
+      <pre dangerouslySetInnerHTML={{ __html: highlightedJson }} />
+    </Box>
   );
 }
 
@@ -131,12 +196,67 @@ function ProviderListItem({
 }
 
 function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
+  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const envEntries = Object.entries(provider.maskedEnv);
   const websiteUrl = provider.websiteUrl;
   // 优化 9: 环境变量折叠状态
   const [envExpanded, setEnvExpanded] = useState(false);
   const displayedEnv = envExpanded ? envEntries : envEntries.slice(0, 5);
   const hasMoreEnv = envEntries.length > 5;
+
+  // 配置片段加载
+  const [snippets, setSnippets] = useState<CcSwitchConfigSnippet[]>([]);
+  const [snippetsLoaded, setSnippetsLoaded] = useState(false);
+
+  // 加载配置片段
+  useEffect(() => {
+    const loadSnippets = async () => {
+      try {
+        const response = await invoke<CcSwitchConfigSnippetsResponse>(
+          "ccswitch_list_config_snippets",
+          { dbPath: ccSwitchDbPath ?? undefined }
+        );
+        setSnippets(response.snippets);
+      } catch {
+        setSnippets([]);
+      } finally {
+        setSnippetsLoaded(true);
+      }
+    };
+    void loadSnippets();
+  }, [ccSwitchDbPath]);
+
+  // 解析供应商配置中的片段引用
+  const { providerConfig, referencedSnippets } = useMemo(() => {
+    try {
+      const config = JSON.parse(provider.rawSettingsConfig);
+      const refs = config.config_snippet_refs || [];
+      const referenced = refs
+        .map((refId: string) => snippets.find((s) => s.id === refId))
+        .filter(Boolean);
+      return { providerConfig: config, referencedSnippets: referenced };
+    } catch {
+      return { providerConfig: null, referencedSnippets: [] };
+    }
+  }, [provider.rawSettingsConfig, snippets]);
+
+  // 合并配置：片段 → 供应商配置（供应商优先）
+  const mergedConfig = useMemo(() => {
+    if (!snippetsLoaded || !providerConfig) return null;
+    if (referencedSnippets.length === 0) return providerConfig;
+
+    let merged = {};
+    for (const snippet of referencedSnippets) {
+      try {
+        const snippetConfig = JSON.parse(snippet.configJson);
+        merged = { ...merged, ...snippetConfig };
+      } catch {
+        // 片段解析失败，跳过
+      }
+    }
+    merged = { ...merged, ...providerConfig };
+    return merged;
+  }, [providerConfig, referencedSnippets, snippetsLoaded]);
 
   // 切换供应商时重置折叠状态
   useEffect(() => {
@@ -266,6 +386,97 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
             </Box>
           </>
         )}
+
+        <Divider />
+
+        {/* 配置 Tabs */}
+        <Tabs defaultValue="provider" variant="outline">
+          <Tabs.List>
+            <Tabs.Tab value="provider">供应商配置</Tabs.Tab>
+            {snippetsLoaded && referencedSnippets.length > 0 && (
+              <Tabs.Tab value="snippets">通用片段 ({referencedSnippets.length})</Tabs.Tab>
+            )}
+            <Tabs.Tab value="merged">完整配置</Tabs.Tab>
+          </Tabs.List>
+
+          {/* Tab 1: 供应商配置 */}
+          <Tabs.Panel value="provider" pt="xs">
+            <Group justify="space-between" mb="xs">
+              <Text size="xs" c="var(--text-muted)">
+                供应商原始配置
+              </Text>
+              <CopyButton value={provider.rawSettingsConfig} label="已复制" />
+            </Group>
+            {providerConfig ? (
+              <JsonCodeBlock json={JSON.stringify(providerConfig, null, 2)} />
+            ) : (
+              <Box className="rounded-md bg-surface-container-lowest/70 px-3 py-2">
+                <Text size="xs" c="var(--text-muted)">
+                  配置解析失败
+                </Text>
+              </Box>
+            )}
+          </Tabs.Panel>
+
+          {/* Tab 2: 通用片段 */}
+          {snippetsLoaded && referencedSnippets.length > 0 && (
+            <Tabs.Panel value="snippets" pt="xs">
+              <Stack gap="sm">
+                {referencedSnippets.map((snippet: CcSwitchConfigSnippet) => (
+                  <Box key={snippet.id}>
+                    <Group justify="space-between" mb="xs">
+                      <Box>
+                        <Text size="xs" fw={500} c="var(--on-surface)">
+                          {snippet.name}
+                        </Text>
+                        {snippet.description && (
+                          <Text size="xs" c="var(--text-muted)">
+                            {snippet.description}
+                          </Text>
+                        )}
+                      </Box>
+                      <CopyButton value={snippet.configJson} label="已复制片段" />
+                    </Group>
+                    <JsonCodeBlock
+                      json={(() => {
+                        try {
+                          return JSON.stringify(JSON.parse(snippet.configJson), null, 2);
+                        } catch {
+                          return snippet.configJson;
+                        }
+                      })()}
+                      maxHeight="200px"
+                    />
+                  </Box>
+                ))}
+              </Stack>
+            </Tabs.Panel>
+          )}
+
+          {/* Tab 3: 完整配置 */}
+          <Tabs.Panel value="merged" pt="xs">
+            <Group justify="space-between" mb="xs">
+              <Text size="xs" c="var(--text-muted)">
+                {snippetsLoaded && referencedSnippets.length > 0
+                  ? "供应商配置 + 通用片段合并结果"
+                  : "供应商配置（无片段引用）"}
+              </Text>
+              <CopyButton
+                value={mergedConfig ? JSON.stringify(mergedConfig, null, 2) : provider.rawSettingsConfig}
+                label="已复制完整配置"
+              />
+            </Group>
+            {mergedConfig ? (
+              <JsonCodeBlock json={JSON.stringify(mergedConfig, null, 2)} />
+            ) : (
+              <Box className="rounded-md bg-surface-container-lowest/70 px-3 py-2">
+                <Text size="xs" c="var(--text-muted)">
+                  加载中...
+                </Text>
+              </Box>
+            )}
+          </Tabs.Panel>
+        </Tabs>
       </Stack>
     </Card>
   );
@@ -446,6 +657,7 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
 
   return (
     <Stack gap="md" className="flex-1">
+      <style>{jsonCodeBlockStyles}</style>
       <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
         <Stack gap="xs">
           <Group justify="space-between" align="center" gap="md" wrap="nowrap">
