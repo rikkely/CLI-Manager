@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
+﻿import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { useProjectStore } from "../../stores/projectStore";
@@ -181,6 +181,8 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   >(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const contextMenuOpenedAtRef = useRef(0);
+  // 菜单真实位置：渲染后按实测尺寸做翻转/钳制，避免写死高度导致溢出遮挡。
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [newGroupParentId, setNewGroupParentId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -435,6 +437,36 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
       window.removeEventListener("resize", handler);
       window.removeEventListener("keydown", keyHandler);
     };
+  }, [contextMenu]);
+
+  // 智能菜单定位：测量真实尺寸后翻转/钳制，不依赖魔法数字，避免底部溢出被遮挡。
+  useLayoutEffect(() => {
+    if (!contextMenu || !contextMenuRef.current) {
+      setMenuPos(null);
+      return;
+    }
+    const menu = contextMenuRef.current;
+    const rect = menu.getBoundingClientRect();
+    const { x: clickX, y: clickY } = contextMenu;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const margin = 8; // 视口边距
+
+    // 水平：右侧空间不足则翻到左侧
+    let left = clickX;
+    if (clickX + rect.width + margin > vw) {
+      left = Math.max(margin, clickX - rect.width);
+    }
+    left = Math.max(margin, Math.min(left, vw - rect.width - margin));
+
+    // 垂直：下方空间不足则翻到上方
+    let top = clickY;
+    if (clickY + rect.height + margin > vh) {
+      top = Math.max(margin, clickY - rect.height);
+    }
+    top = Math.max(margin, Math.min(top, vh - rect.height - margin));
+
+    setMenuPos({ left, top });
   }, [contextMenu]);
 
   // 把 sessions × statuses 预聚合成 Map<projectId, status>，从每节点 O(N) filter
@@ -765,9 +797,6 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     };
   })();
 
-  const menuX = contextMenu ? Math.min(contextMenu.x, window.innerWidth - 200) : 0;
-  const menuY = contextMenu ? Math.min(contextMenu.y, window.innerHeight - 220) : 0;
-
   return (
     <aside
       className={`ui-sidebar-shell relative flex select-none flex-col overflow-hidden ${
@@ -848,7 +877,11 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
         <Portal>
           <div
             className="context-menu"
-            style={{ left: menuX, top: menuY }}
+            style={{
+              left: menuPos?.left ?? 0,
+              top: menuPos?.top ?? 0,
+              visibility: menuPos ? "visible" : "hidden",
+            }}
             ref={contextMenuRef}
             role="menu"
             onMouseDown={(event) => {
