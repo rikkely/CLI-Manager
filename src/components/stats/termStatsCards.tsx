@@ -15,6 +15,7 @@ import {
   formatCost,
   useCountUp,
   type TokenStats,
+  type SparkPoint,
 } from "./termStatsUi";
 
 export function TokenUsageCard({ stats }: { stats: TokenStats }) {
@@ -147,27 +148,38 @@ export function ModelContextCard({
 const TREND_POINT_LIMIT = 40;
 
 export function TrendCard({ session }: { session: HistorySessionDetail | null }) {
-  const points: number[] = [];
+  const trend: SparkPoint[] = [];
   const backendTrend = session?.usage?.token_trend ?? [];
   let sourceLabel = "每条消息 输入+输出";
   if (session) {
     if (backendTrend.length > 0) {
       sourceLabel = "每次请求 Token 增量";
       for (const point of backendTrend) {
-        const tokens =
+        const total =
           point.total_tokens
           || point.input_tokens + point.output_tokens + point.cache_read_tokens + point.cache_creation_tokens;
-        if (tokens > 0) points.push(tokens);
+        if (total > 0) {
+          trend.push({
+            total,
+            input: point.input_tokens,
+            output: point.output_tokens,
+            cacheRead: point.cache_read_tokens,
+            cacheCreation: point.cache_creation_tokens,
+          });
+        }
       }
     } else {
       for (const msg of session.messages) {
-        const tokens = (msg.input_tokens ?? 0) + (msg.output_tokens ?? 0);
-        if (tokens > 0) points.push(tokens);
+        const input = msg.input_tokens ?? 0;
+        const output = msg.output_tokens ?? 0;
+        const total = input + output;
+        if (total > 0) trend.push({ total, input, output });
       }
     }
   }
-  const recent = points.slice(-TREND_POINT_LIMIT);
-  const peakTokens = recent.length > 0 ? Math.max(...recent) : 0;
+  const recent = trend.slice(-TREND_POINT_LIMIT);
+  const values = recent.map((p) => p.total);
+  const peakTokens = values.length > 0 ? Math.max(...values) : 0;
   const hasTrend = recent.length >= 2;
   // 未绑定空态（session 为 null）补骨架占位，使高度与有数据时一致；
   // 非空会话维持原生行为，历史会话面板不受影响
@@ -186,7 +198,7 @@ export function TrendCard({ session }: { session: HistorySessionDetail | null })
       }
     >
       {hasTrend ? (
-        <Sparkline points={recent} color={TERM.cyan} height={40} />
+        <Sparkline points={values} details={recent} color={TERM.cyan} height={40} />
       ) : (
         <div
           className="flex items-center justify-center rounded-md text-[10px]"

@@ -97,6 +97,7 @@ interface TerminalSession {
 - Unknown or unsupported models must not fake a price. They contribute to `unpriced_tokens` and `total_cost_usd` remains unaffected unless an explicit cost exists in the source payload.
 - Explicit cost fields from the source payload take priority over local model-price estimation. Explicit cost and token counts may live on different JSON levels (e.g. top-level `costUSD` + `message.usage`); extraction must merge them instead of returning the first matching candidate.
 - Codex session project keys should prefer session metadata `cwd`; path-derived keys are only a fallback.
+- Codex session identity should prefer `session_meta.payload.id` for rollout JSONL files (`rollout-*.jsonl`) so `HistorySessionSummary.session_id` / `HistorySessionDetail.session_id` match the hook-reported `TerminalSession.cliSessionId`. If the metadata id is missing, fall back to the file stem. This Codex-only normalization must not change Claude Code session identity, which continues to use the existing file-stem id.
 - Terminal realtime stats bind strictly to the current terminal's `TerminalSession.cliSessionId` (from CLI hook payload). When a session id is present, look up **only** that session; if it is not yet found in history (e.g. JSONL not flushed), keep that terminal's own empty/loading state and **never** fall back to a different session. Project-level "latest session" lookup is used only when the terminal has no session id at all.
 - When the CLI hook chain is known to be active (any terminal has bound a `cliSessionId` this run) but the current CLI terminal has not yet received its own id, the realtime panel shows an explicit "awaiting session identification" empty state instead of borrowing the project's latest session — so newly opened sessions never display a neighbor window's data. Only a true no-hook environment (no terminal ever bound an id) keeps the project latest-session fallback.
 - Stats date ranges may cover up to 366 days and must reject larger ranges with `date_range_too_large`.
@@ -118,12 +119,15 @@ interface TerminalSession {
 | Explicit cost is present | Use explicit cost and do not add those tokens to `unpriced_tokens`. |
 | Date range exceeds 366 days | Return `date_range_too_large`. |
 | Codex session lacks metadata cwd | Fall back to the path-derived project key. |
+| Codex rollout session lacks `session_meta.payload.id` | Fall back to the file-stem `session_id`. |
+| Claude file contains a `session_meta.payload.id`-shaped field | Keep Claude's file-stem `session_id`; do not apply Codex identity normalization. |
 | History cache invalidation runs | Clear file, stats, project, and aggregate caches together. |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: a Claude session with input/output/cache usage and known model produces complete totals, cost, model distribution, daily trend, and per-session message token fields.
 - Good: a Codex session with multiple cumulative `token_count` events returns `token_trend` as adjacent deltas, and two Codex windows in the same project show different realtime session details after their hook `sessionId` values arrive.
+- Good: a Codex rollout file with `session_meta.payload.id` returns that UUID as `session_id`, allowing realtime stats strict binding to match the hook session id; a Claude file with a similar metadata id still keeps its original file-stem identity.
 - Base: a Codex session without model pricing still appears in stats with token totals and `unpriced_tokens`; a single-day stats view can map `hourly_activity` into 24 hourly trend and heatmap buckets.
 - Bad: frontend assumes a newly added numeric field is always present and renders `NaN` when older cached payloads omit it; realtime stats uses only project latest-session lookup and shows another window's current context.
 
@@ -133,6 +137,7 @@ interface TerminalSession {
   - Date bounds accept a full 366-day range and reject larger ranges.
   - Codex session collection uses metadata `cwd` as project key when present.
   - Session project cache reuses matching fingerprints.
+  - Codex rollout files expose `session_meta.payload.id` as `session_id`, fall back to file stem when absent, and Claude files keep file-stem identity.
   - Case-insensitive ASCII search avoids per-message lowercasing regressions.
   - Claude streamed duplicate usage lines produce one total and one matching `token_trend` point.
   - Codex cumulative `token_count` events produce delta totals and matching `token_trend` points.

@@ -33,6 +33,7 @@ export {
   Terminal,
   TerminalSquare,
   Trash2,
+  Undo2,
   Upload,
   X,
 } from "lucide-react";

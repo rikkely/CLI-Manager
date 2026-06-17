@@ -5,18 +5,18 @@ import { calculateCost, inferDominantModel } from "../../lib/modelPricing";
 // 终端监控面板配色（btop / 系统监控风格，深色卡片 + 绿色点缀）
 export const TERM = {
   bg: "#0A0A0A",
-  card: "#151515",
-  cardInner: "#1D1D1D",
-  border: "#262626",
-  fg: "#E2E2E2",
-  dim: "#8A8A8A",
+  card: "#121212",
+  cardInner: "#181818",
+  border: "#2E2E2E",
+  fg: "#ECECEC",
+  dim: "#9CA0A6",
   green: "#3DD68C",
   yellow: "#E5C453",
   red: "#F25E5E",
   magenta: "#C77DBB",
   cyan: "#5AC8E0",
   blue: "#5B8DEF",
-  track: "#2A2A2A",
+  track: "#222222",
 };
 
 // 来源徽章配色：claude 黄 / codex 青
@@ -250,7 +250,7 @@ export function StatChip({
   return (
     <div
       className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1.5"
-      style={{ backgroundColor: TERM.cardInner }}
+      style={{ backgroundColor: TERM.cardInner, border: `1px solid ${TERM.border}` }}
     >
       <span className="flex items-center gap-1.5 text-[10px]" style={{ color: TERM.dim }}>
         <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />
@@ -326,16 +326,80 @@ export function Donut({
   );
 }
 
+export interface SparkPoint {
+  total: number;
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheCreation?: number;
+}
+
+// 折线悬浮提示：展示该数据点的 token 明细与序号，配色对齐"Token 用量"卡片
+function SparkTooltip({
+  index,
+  count,
+  total,
+  detail,
+}: {
+  index: number;
+  count: number;
+  total: number;
+  detail?: SparkPoint;
+}) {
+  const rows = detail
+    ? [
+        { label: "输入", value: detail.input ?? 0, color: TERM.green },
+        { label: "输出", value: detail.output ?? 0, color: TERM.yellow },
+        { label: "缓存读", value: detail.cacheRead ?? 0, color: TERM.blue },
+        { label: "缓存写", value: detail.cacheCreation ?? 0, color: TERM.magenta },
+      ]
+    : [];
+
+  return (
+    <div
+      className="rounded-lg border px-2.5 py-1.5 text-[10px] tabular-nums shadow-lg"
+      style={{ backgroundColor: TERM.cardInner, borderColor: TERM.border, minWidth: 124 }}
+    >
+      <div className="mb-1 font-semibold" style={{ color: TERM.cyan }}>
+        第 {index + 1} / {count} 条
+      </div>
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-center justify-between gap-3 leading-4">
+          <span className="flex items-center gap-1.5" style={{ color: TERM.dim }}>
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: r.color }} />
+            {r.label}
+          </span>
+          <span style={{ color: TERM.fg }}>{formatCount(r.value)}</span>
+        </div>
+      ))}
+      <div
+        className="mt-1 flex items-center justify-between gap-3 border-t pt-1 leading-4"
+        style={{ borderColor: TERM.border }}
+      >
+        <span style={{ color: TERM.dim }}>总计</span>
+        <span className="font-bold" style={{ color: TERM.fg }}>
+          {formatCount(total)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function Sparkline({
   points,
+  details,
   color = TERM.green,
   height = 36,
 }: {
   points: number[];
+  details?: SparkPoint[];
   color?: string;
   height?: number;
 }) {
   const gradientId = useId();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+
   if (points.length < 2) {
     return (
       <div
@@ -359,26 +423,94 @@ export function Sparkline({
   const areaPath = `${linePath} L100,100 L0,100 Z`;
   const [lastX, lastY] = coords[coords.length - 1];
 
+  // hover 命中：用容器像素宽换算最近点索引（点数 ≤ 40，离散定位即可）
+  const safeIndex =
+    hoverIndex !== null && hoverIndex >= 0 && hoverIndex < coords.length ? hoverIndex : -1;
+  const active = safeIndex >= 0;
+  const [hoverX, hoverY] = active ? coords[safeIndex] : [0, 0];
+  // tooltip 水平防溢出：左/中/右三段对齐
+  const align = hoverX < 33 ? "0" : hoverX > 67 ? "-100%" : "-50%";
+
+  const handleMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHoverIndex(Math.round(ratio * (points.length - 1)));
+  };
+
   return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full" style={{ height }}>
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity={0.35} />
-          <stop offset="100%" stopColor={color} stopOpacity={0} />
-        </linearGradient>
-      </defs>
-      <path d={areaPath} fill={`url(#${gradientId})`} />
-      <path
-        d={linePath}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.6}
-        vectorEffect="non-scaling-stroke"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      <circle cx={lastX} cy={lastY} r={2.4} fill={color} className="animate-pulse" />
-    </svg>
+    <div
+      ref={containerRef}
+      className="relative"
+      style={{ height }}
+      onMouseMove={handleMove}
+      onMouseLeave={() => setHoverIndex(null)}
+    >
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full" style={{ height }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill={`url(#${gradientId})`} />
+        <path
+          d={linePath}
+          fill="none"
+          stroke={color}
+          strokeWidth={1.6}
+          vectorEffect="non-scaling-stroke"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {active ? (
+          <line
+            x1={hoverX}
+            y1={0}
+            x2={hoverX}
+            y2={100}
+            stroke={color}
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            vectorEffect="non-scaling-stroke"
+            opacity={0.45}
+          />
+        ) : (
+          <circle cx={lastX} cy={lastY} r={2.4} fill={color} className="animate-pulse" />
+        )}
+      </svg>
+
+      {active && (
+        <span
+          className="pointer-events-none absolute block rounded-full"
+          style={{
+            left: `${hoverX}%`,
+            top: `${(hoverY / 100) * height}px`,
+            width: 7,
+            height: 7,
+            transform: "translate(-50%, -50%)",
+            backgroundColor: color,
+            boxShadow: `0 0 0 2px ${TERM.card}`,
+          }}
+        />
+      )}
+
+      {active && (
+        <div
+          className="pointer-events-none absolute z-20"
+          style={{ left: `${hoverX}%`, bottom: "calc(100% + 6px)", transform: `translateX(${align})` }}
+        >
+          <SparkTooltip
+            index={safeIndex}
+            count={points.length}
+            total={points[safeIndex]}
+            detail={details?.[safeIndex]}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 

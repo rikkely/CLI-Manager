@@ -48,6 +48,7 @@ struct SessionFileRef {
 
 #[derive(Clone)]
 struct SessionSummaryScan {
+    session_id: Option<String>,
     message_count: usize,
     first_user_message: Option<String>,
     first_message: Option<String>,
@@ -1843,10 +1844,18 @@ fn build_session_computation(
     summary_scan: SessionSummaryScan,
     stats: SessionStatsScan,
 ) -> CachedSessionComputation {
-    let session_id = path
+    let fallback_session_id = path
         .file_stem()
         .map(|v| v.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown-session".to_string());
+    let session_id = if is_codex_rollout_session_path(path) {
+        summary_scan
+            .session_id
+            .clone()
+            .unwrap_or_else(|| fallback_session_id.clone())
+    } else {
+        fallback_session_id
+    };
     let title = summary_scan
         .first_user_message
         .or(summary_scan.first_message)
@@ -2272,6 +2281,26 @@ fn extract_cwd(value: &Value) -> Option<String> {
     None
 }
 
+fn is_codex_rollout_session_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+        .unwrap_or(false)
+}
+
+fn extract_session_meta_id(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    value
+        .get("payload")
+        .and_then(|payload| payload.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 /// 单遍扫描会话文件，产出 summary 与 stats；`collect_messages` 为 true 时同时收集完整消息列表
 /// （供 detail 复用同一次 IO/解析，避免二次读取）。消息的 model 回填与重复 usage 行清空语义
 /// 与 `iter_session_messages` 保持一致。
@@ -2284,6 +2313,7 @@ fn scan_session_inner(
         Err(_) => {
             return (
                 SessionSummaryScan {
+                    session_id: None,
                     message_count: 0,
                     first_user_message: None,
                     first_message: None,
@@ -2295,6 +2325,7 @@ fn scan_session_inner(
         }
     };
 
+    let mut session_id: Option<String> = None;
     let mut message_count = 0usize;
     let mut first_user_message: Option<String> = None;
     let mut first_message: Option<String> = None;
@@ -2339,6 +2370,9 @@ fn scan_session_inner(
 
         if branch.is_none() {
             branch = extract_branch(&value);
+        }
+        if session_id.is_none() {
+            session_id = extract_session_meta_id(&value);
         }
 
         // model 先于消息解析更新：既供 stats 归因，也供消息 model 回填（assistant 行常不带 model）。
@@ -2457,6 +2491,7 @@ fn scan_session_inner(
 
     (
         SessionSummaryScan {
+            session_id,
             message_count,
             first_user_message,
             first_message,
@@ -3732,6 +3767,50 @@ mod tests {
         assert_eq!(files[0].source, "codex");
         assert_eq!(files[0].project_key, "CLI-Manager");
         assert_eq!(files[0].path, file);
+    }
+
+    #[test]
+    fn build_session_computation_uses_codex_session_meta_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir
+            .path()
+            .join("rollout-2026-06-17T16-10-35-019ed4a1-d197-75d0-950c-28cb3bbed404.jsonl");
+        write_text(
+            &file,
+            r#"{"type":"session_meta","payload":{"id":"019ed4a1-d197-75d0-950c-28cb3bbed404","cwd":"D:\\work\\pythonProject\\CLI-Manager"}}"#,
+        );
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.session_id, "019ed4a1-d197-75d0-950c-28cb3bbed404");
+    }
+
+    #[test]
+    fn build_session_computation_falls_back_for_codex_without_session_meta_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-session.jsonl");
+        write_text(
+            &file,
+            r#"{"type":"session_meta","payload":{"cwd":"D:\\work\\pythonProject\\CLI-Manager"}}"#,
+        );
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.session_id, "rollout-session");
+    }
+
+    #[test]
+    fn build_session_computation_keeps_claude_file_stem_session_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("claude-session.jsonl");
+        write_text(
+            &file,
+            r#"{"type":"session_meta","payload":{"id":"019ed4a1-d197-75d0-950c-28cb3bbed404"}}"#,
+        );
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.session_id, "claude-session");
     }
 
     #[test]

@@ -1,103 +1,65 @@
-/* Git Diff Viewer 自定义样式 */
+/* Git Diff Viewer 自定义样式 —— 统一终端深色风格（对齐 GitChangesPanel 的 TERM 配色） */
 
 .diff-viewer-container {
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.5;
+  color: #E2E2E2;
 }
 
-/* 覆盖 react-diff-view 默认样式 */
+/* 覆盖 react-diff-view 默认样式：整体深色 */
 .diff-viewer-container .diff {
   border: none;
+  background-color: #0A0A0A;
 }
 
+/* 行号区 */
 .diff-viewer-container .diff-gutter {
-  background-color: #f5f5f5;
-  color: #999;
+  background-color: #151515;
+  color: #8A8A8A;
   min-width: 50px;
   user-select: none;
 }
 
-.dark .diff-viewer-container .diff-gutter {
-  background-color: #1e1e1e;
-  color: #6e7681;
-}
-
 .diff-viewer-container .diff-gutter-insert {
-  background-color: #e6ffec;
-}
-
-.dark .diff-viewer-container .diff-gutter-insert {
-  background-color: #0d4d29;
+  background-color: rgba(61, 214, 140, 0.18);
 }
 
 .diff-viewer-container .diff-gutter-delete {
-  background-color: #ffebe9;
+  background-color: rgba(242, 94, 94, 0.18);
 }
 
-.dark .diff-viewer-container .diff-gutter-delete {
-  background-color: #5a1f1f;
-}
-
+/* 代码区 */
 .diff-viewer-container .diff-code {
-  background-color: #ffffff;
-}
-
-.dark .diff-viewer-container .diff-code {
-  background-color: #0d1117;
+  background-color: #0A0A0A;
 }
 
 .diff-viewer-container .diff-code-insert {
-  background-color: #e6ffec;
-}
-
-.dark .diff-viewer-container .diff-code-insert {
-  background-color: #0d4d29;
+  background-color: rgba(61, 214, 140, 0.12);
 }
 
 .diff-viewer-container .diff-code-delete {
-  background-color: #ffebe9;
-}
-
-.dark .diff-viewer-container .diff-code-delete {
-  background-color: #5a1f1f;
+  background-color: rgba(242, 94, 94, 0.12);
 }
 
 /* Hunk header */
 .diff-viewer-container .diff-hunk-header {
-  background-color: #f0f5fa;
-  color: #57606a;
+  background-color: #1D1D1D;
+  color: #5AC8E0;
   font-weight: 600;
   padding: 4px 8px;
 }
 
-.dark .diff-viewer-container .diff-hunk-header {
-  background-color: #1c2128;
-  color: #8b949e;
-}
-
-/* Code 装饰（高亮变更） */
+/* 行内变更高亮 */
 .diff-viewer-container .diff-code-insert .diff-code-decoration {
-  background-color: #acf2bd;
-}
-
-.dark .diff-viewer-container .diff-code-insert .diff-code-decoration {
-  background-color: #155d2a;
+  background-color: rgba(61, 214, 140, 0.30);
 }
 
 .diff-viewer-container .diff-code-delete .diff-code-decoration {
-  background-color: #ffcecb;
-}
-
-.dark .diff-viewer-container .diff-code-delete .diff-code-decoration {
-  background-color: #a13834;
+  background-color: rgba(242, 94, 94, 0.30);
 }
 
 /* Split view 分隔线 */
 .diff-viewer-container .diff-split {
-  border-left: 1px solid #d0d7de;
-}
-
-.dark .diff-viewer-container .diff-split {
-  border-left: 1px solid #30363d;
+  border-left: 1px solid #262626;
 }

@@ -361,7 +361,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
 
   const containerClassName = embedded
     ? "flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-2 font-mono ui-thin-scroll"
-    : "flex w-[290px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border p-2 font-mono ui-thin-scroll";
+    : "relative z-[1] flex w-[290px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border p-2 font-mono ui-thin-scroll";
   const Container = embedded ? "div" : "aside";
 
   return (
