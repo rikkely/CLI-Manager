@@ -1185,18 +1185,37 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       } catch (err) {
         logError("Failed to check hook status before opening terminal stats panel", err);
       }
+      // 响应式约束：窗口宽度 < 1100px 时，打开实时统计会自动关闭 Git 变更面板
+      if (window.innerWidth < 1100 && gitChangesPanelOpen) {
+        setGitChangesPanelOpen(false);
+      }
     }
     setStatsPanelOpen((prev) => !prev);
-  }, [statsPanelOpen]);
+  }, [statsPanelOpen, gitChangesPanelOpen]);
 
   const handleToggleGitChangesPanel = useCallback(() => {
-    console.log("[GitChanges] 点击 Git 变更按钮");
     setGitChangesPanelOpen((prev) => {
       const next = !prev;
-      console.log(`[GitChanges] 面板状态切换: ${prev} -> ${next}`);
+      // 响应式约束：窗口宽度 < 1100px 时，打开 Git 面板会自动关闭实时统计面板
+      if (next && window.innerWidth < 1100 && statsPanelOpen) {
+        setStatsPanelOpen(false);
+      }
       return next;
     });
-  }, []);
+  }, [statsPanelOpen]);
+
+  // 响应式约束：窗口缩小到 < 1100px 且两个侧栏同时打开时，自动收起 Git 变更面板（保留实时统计）
+  useEffect(() => {
+    if (!statsPanelOpen || !gitChangesPanelOpen) return;
+    const handleResize = () => {
+      if (window.innerWidth < 1100) {
+        setGitChangesPanelOpen(false);
+      }
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [statsPanelOpen, gitChangesPanelOpen]);
 
   const handleOpenHistoryTab = useCallback(() => {
     if (historyOpen) {

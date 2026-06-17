@@ -121,7 +121,7 @@ export function GitChangesPanel({ open, projectPath }: GitChangesPanelProps) {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto ui-thin-scroll p-2">
         {!projectPath ? (
           <EmptyHint text="当前终端未关联项目" />
         ) : loading && changes.length === 0 ? (

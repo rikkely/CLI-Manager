@@ -358,7 +358,7 @@ export function TerminalStatsPanel({ activeSessionId, open }: TerminalStatsPanel
 
   return (
     <aside
-      className="flex w-[290px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border p-2 font-mono"
+      className="flex w-[290px] shrink-0 flex-col gap-2 overflow-y-auto ui-thin-scroll border-l border-border p-2 font-mono"
       style={{ backgroundColor: TERM.bg }}
     >
       <div className="flex items-center justify-between px-1 py-0.5">
