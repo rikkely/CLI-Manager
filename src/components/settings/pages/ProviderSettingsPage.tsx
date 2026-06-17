@@ -1,23 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import {
   ActionIcon,
-  Badge,
   Box,
   Button,
   Card,
   Divider,
   Group,
   Loader,
-  SegmentedControl,
+  SimpleGrid,
   Stack,
-  Tabs,
   Text,
 } from "@mantine/core";
-import { AlertTriangle, Copy } from "@/components/icons";
+import { AlertTriangle, Copy, ChevronDown } from "@/components/icons";
+import { ProviderBadge, ProviderRow } from "@/components/provider/ProviderRow";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 // 深度合并对象（target 覆盖 source）
@@ -69,29 +68,101 @@ interface CcSwitchCommonConfigResponse {
   commonConfigs: CcSwitchCommonConfig[];
 }
 
-const jsonCodeBlockStyles = `
-.json-code-block {
-  background: #1e1e1e;
-  border-radius: 8px;
-  padding: 16px;
+// 供应商页样式：参考 docs/UI「Editorial Analyst」设计，但全部映射到主题 token，
+// 以便在 App 的 18 套主题（9 亮 + 9 暗）与暗色模式下一致工作。
+const providerPageStyles = `
+.prov-code-block {
+  background: var(--surface-container-highest);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: 16px;
+  padding: 18px;
   overflow-y: auto;
   font-family: var(--font-ui-mono);
 }
 
-.json-code-block pre {
+.prov-code-block pre {
   margin: 0;
   padding: 0;
   font-size: 12px;
-  line-height: 1.6;
-  color: #d4d4d4;
+  line-height: 1.65;
+  color: var(--on-surface);
   white-space: pre-wrap;
   word-break: break-all;
 }
 
-.json-key { color: #9cdcfe; }
-.json-string { color: #ce9178; }
-.json-number { color: #b5cea8; }
-.json-boolean { color: #569cd6; }
+/* 暗色主题：贴近 VSCode 经典高亮 */
+[data-theme="dark"] .prov-code-block .json-key { color: #9cdcfe; }
+[data-theme="dark"] .prov-code-block .json-string { color: #ce9178; }
+[data-theme="dark"] .prov-code-block .json-number { color: #b5cea8; }
+[data-theme="dark"] .prov-code-block .json-boolean { color: #569cd6; }
+
+/* 浅色主题：浅底 + 深色高亮，避免深底突兀 */
+[data-theme="light"] .prov-code-block .json-key { color: #0451a5; }
+[data-theme="light"] .prov-code-block .json-string { color: #a31515; }
+[data-theme="light"] .prov-code-block .json-number { color: #098658; }
+[data-theme="light"] .prov-code-block .json-boolean { color: #0000ff; }
+
+/* 详情头部：右上角柔光（参考稿的 primary blur 光晕），用 primary token */
+.prov-detail-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 24px;
+  background: var(--surface-container-lowest);
+  outline: 1px solid color-mix(in srgb, var(--border) 14%, transparent);
+}
+.prov-detail-hero::before {
+  content: "";
+  position: absolute;
+  top: -120px;
+  right: -120px;
+  width: 360px;
+  height: 360px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: -1;
+  background: radial-gradient(circle, color-mix(in srgb, var(--primary) 12%, transparent), transparent 70%);
+  filter: blur(40px);
+}
+
+/* 环境变量卡：tonal layering，无硬边框 */
+.prov-env-card {
+  background: var(--surface-container-lowest);
+  border-radius: 16px;
+  padding: 14px 16px;
+  outline: 1px solid color-mix(in srgb, var(--border) 12%, transparent);
+  transition: outline-color var(--animate-duration-fast), background-color var(--animate-duration-fast);
+}
+.prov-env-card:hover {
+  outline-color: color-mix(in srgb, var(--primary) 28%, transparent);
+}
+.prov-env-key {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* 配置 Tab：底部下划线高亮（editorial），取代 Mantine outline 边框 */
+.prov-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 4px;
+  margin-right: 20px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  transition: color var(--animate-duration-fast), border-color var(--animate-duration-fast);
+}
+.prov-tab:hover { color: var(--on-surface); }
+.prov-tab[data-active="true"] {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
 `;
 
 const ERROR_HINTS: Record<string, string> = {
@@ -142,29 +213,9 @@ function JsonCodeBlock({ json, maxHeight = "400px" }: { json: string; maxHeight?
   }, [json]);
 
   return (
-    <Box className="json-code-block ui-thin-scroll" style={{ maxHeight }}>
+    <Box className="prov-code-block ui-thin-scroll" style={{ maxHeight }}>
       <pre dangerouslySetInnerHTML={{ __html: highlightedJson }} />
     </Box>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <Group gap="md" wrap="nowrap" className="min-w-0">
-      <Text size="xs" c="var(--text-muted)" w={88} className="shrink-0">
-        {label}
-      </Text>
-      <Text
-        component="code"
-        size="xs"
-        ff="var(--font-ui-mono)"
-        c="var(--on-surface)"
-        className="min-w-0 flex-1 break-all leading-5"
-        title={value}
-      >
-        {value}
-      </Text>
-    </Group>
   );
 }
 
@@ -177,34 +228,24 @@ function ProviderListItem({
   isSelected: boolean;
   onClick: () => void;
 }) {
+  // 右侧徽章：优先显示 isCurrent，否则显示 category（若有）
+  let badge: { label: string; variant: "active" | "current" | "neutral" } | undefined;
+  if (isSelected && provider.isCurrent) {
+    badge = { label: "ACTIVE", variant: "active" };
+  } else if (provider.isCurrent) {
+    badge = { label: "当前", variant: "current" };
+  } else if (provider.category) {
+    badge = { label: provider.category, variant: "neutral" };
+  }
+
   return (
-    <button
-      type="button"
+    <ProviderRow
+      selected={isSelected}
       onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
-        isSelected
-          ? "border-accent/40 bg-accent/10"
-          : "border-border bg-bg-tertiary hover:opacity-80"
-      }`}
-    >
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium text-text-primary" title={provider.name}>
-            {provider.name}
-          </span>
-          {provider.isCurrent && (
-            <Badge variant="light" color="green" radius="xl" size="xs" className="shrink-0">
-              当前
-            </Badge>
-          )}
-          {provider.category && (
-            <Badge variant="light" color="gray" radius="xl" size="xs" className="shrink-0">
-              {provider.category}
-            </Badge>
-          )}
-        </span>
-      </span>
-    </button>
+      name={provider.name}
+      subtitle={provider.category ?? undefined}
+      badge={badge}
+    />
   );
 }
 
@@ -216,6 +257,8 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
   const [envExpanded, setEnvExpanded] = useState(false);
   const displayedEnv = envExpanded ? envEntries : envEntries.slice(0, 5);
   const hasMoreEnv = envEntries.length > 5;
+  // 配置 Tab 当前选中项（自管理，取代 Mantine Tabs）
+  const [activeConfigTab, setActiveConfigTab] = useState("merged");
 
   // 通用配置加载
   const [commonConfigs, setCommonConfigs] = useState<CcSwitchCommonConfig[]>([]);
@@ -268,216 +311,266 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
     return deepMerge(commonConfig, providerConfig);
   }, [providerConfig, commonConfig, commonConfigsLoaded]);
 
-  // 切换供应商时重置折叠状态
+  // 切换供应商时重置折叠状态与配置 Tab
   useEffect(() => {
     setEnvExpanded(false);
+    setActiveConfigTab("merged");
   }, [provider.id]);
 
+  const configTabs: { value: string; label: string; hint: string; json: string | null; copyLabel: string }[] = [
+    {
+      value: "merged",
+      label: "完整配置",
+      hint:
+        commonConfigsLoaded && commonConfig
+          ? "通用配置 + 供应商配置合并结果（供应商优先）"
+          : "供应商配置（无通用配置）",
+      json: mergedConfig ? JSON.stringify(mergedConfig, null, 2) : null,
+      copyLabel: "已复制完整配置",
+    },
+    {
+      value: "provider",
+      label: "供应商配置",
+      hint: "供应商原始配置",
+      json: providerConfig ? JSON.stringify(providerConfig, null, 2) : null,
+      copyLabel: "已复制",
+    },
+    ...(commonConfigsLoaded && commonConfig
+      ? [
+          {
+            value: "common",
+            label: `通用配置 (${provider.appType})`,
+            hint: `common_config_${provider.appType}（来自 settings 表）`,
+            json: typeof commonConfig === "string" ? commonConfig : JSON.stringify(commonConfig, null, 2),
+            copyLabel: "已复制通用配置",
+          },
+        ]
+      : []),
+  ];
+  const activeTab = configTabs.find((t) => t.value === activeConfigTab) ?? configTabs[0];
+
   return (
-    <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-      <Stack gap="md">
-        <Box>
-          <Group gap="xs" wrap="wrap">
-            <Text size="lg" fw={600} c="var(--on-surface)">
-              {provider.name}
-            </Text>
-            {provider.isCurrent && (
-              <Badge variant="light" color="green" radius="xl">
-                全局当前
-              </Badge>
-            )}
-            {provider.category && (
-              <Badge variant="light" color="gray" radius="xl">
-                {provider.category}
-              </Badge>
-            )}
-            {provider.apiFormat && (
-              <Badge variant="light" color="blue" radius="xl">
-                {provider.apiFormat}
-              </Badge>
-            )}
-            {provider.configParseError && (
-              <Badge variant="light" color="red" radius="xl">
-                配置解析失败
-              </Badge>
+    <Stack gap="lg">
+      {/* 详情头部 Hero（editorial：大标题左对齐 + 关键元数据 flush-right 网格） */}
+      <Box className="prov-detail-hero" p="xl">
+        <Stack gap="lg">
+          <Group justify="space-between" align="flex-start" wrap="nowrap" gap="md">
+            <Box className="min-w-0">
+              <Group gap="sm" align="center" wrap="wrap">
+                <Text
+                  className="font-headline tracking-tight"
+                  fz={32}
+                  fw={800}
+                  c="var(--on-surface)"
+                  lh={1.1}
+                  style={{ wordBreak: "break-word" }}
+                >
+                  {provider.name}
+                </Text>
+                {provider.isCurrent && <ProviderBadge tone="primary">全局当前</ProviderBadge>}
+                {provider.configParseError && <ProviderBadge tone="danger">配置解析失败</ProviderBadge>}
+              </Group>
+              <Group gap="xs" mt={8}>
+                {provider.category && <ProviderBadge tone="neutral">{provider.category}</ProviderBadge>}
+                {provider.apiFormat && <ProviderBadge tone="primary">{provider.apiFormat}</ProviderBadge>}
+              </Group>
+            </Box>
+            {websiteUrl && (
+              <Button
+                size="compact-sm"
+                variant="subtle"
+                className="shrink-0"
+                onClick={() => {
+                  void openUrl(websiteUrl).catch((err) => {
+                    toast.error("无法打开链接", { description: String(err) });
+                  });
+                }}
+              >
+                官网
+              </Button>
             )}
           </Group>
-          {websiteUrl && (
-            <Button
-              size="compact-sm"
-              variant="subtle"
-              mt="xs"
-              onClick={() => {
-                void openUrl(websiteUrl).catch((err) => {
-                  toast.error("无法打开链接", { description: String(err) });
-                });
+
+          {provider.configParseError && (
+            <Box
+              className="rounded-xl px-3 py-2"
+              style={{
+                backgroundColor: "color-mix(in srgb, var(--danger) 10%, transparent)",
+                outline: "1px solid color-mix(in srgb, var(--danger) 26%, transparent)",
               }}
             >
-              官网
+              <Text size="xs" c="var(--danger)">
+                该供应商配置解析失败，env 数据可能不完整，无法应用到项目。
+              </Text>
+            </Box>
+          )}
+
+          {/* 关键元数据网格（无分隔线，靠间距与 label 弱化分区） */}
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl" verticalSpacing="md">
+            {provider.baseUrl && (
+              <MetaField label="BASE API ENDPOINT">
+                <Group gap={6} wrap="nowrap" className="min-w-0">
+                  <Text
+                    component="code"
+                    ff="var(--font-ui-mono)"
+                    fz={13}
+                    c="var(--on-surface)"
+                    className="min-w-0 flex-1 break-all leading-5"
+                    title={provider.baseUrl}
+                  >
+                    {provider.baseUrl}
+                  </Text>
+                  <CopyButton value={provider.baseUrl} />
+                </Group>
+              </MetaField>
+            )}
+            {provider.model && (
+              <MetaField label="DEFAULT MODEL">
+                <Text fz={15} fw={700} c="var(--on-surface)" className="break-all leading-5">
+                  {provider.model}
+                </Text>
+              </MetaField>
+            )}
+            {provider.notes && (
+              <MetaField label="备注">
+                <Text fz={13} c="var(--on-surface)" className="break-all leading-5">
+                  {provider.notes}
+                </Text>
+              </MetaField>
+            )}
+          </SimpleGrid>
+        </Stack>
+      </Box>
+
+      {/* 环境变量区（tonal layering 卡片网格） */}
+      {envEntries.length > 0 && (
+        <Box>
+          <Group gap="sm" mb="md" align="center">
+            <Text className="font-headline tracking-tight" fz={20} fw={800} c="var(--on-surface)">
+              环境变量
+            </Text>
+            <span
+              className="inline-flex items-center rounded-lg px-2.5 py-0.5 text-sm font-bold"
+              style={{
+                backgroundColor: "color-mix(in srgb, var(--primary) 12%, transparent)",
+                color: "var(--primary)",
+              }}
+            >
+              {envEntries.length}
+            </span>
+          </Group>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            {displayedEnv.map(([key, value]) => (
+              <Box key={key} className="prov-env-card">
+                <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
+                  <Box className="min-w-0 flex-1">
+                    <Text className="prov-env-key" component="div">
+                      {key}
+                    </Text>
+                    <Text
+                      component="code"
+                      ff="var(--font-ui-mono)"
+                      fz={13}
+                      fw={600}
+                      c="var(--on-surface)"
+                      className="break-all leading-5"
+                      mt={4}
+                    >
+                      {value}
+                    </Text>
+                  </Box>
+                  <CopyButton value={`${key}=${value}`} />
+                </Group>
+              </Box>
+            ))}
+          </SimpleGrid>
+          {hasMoreEnv && (
+            <Button
+              variant="subtle"
+              fullWidth
+              mt="sm"
+              rightSection={<ChevronDown size={16} />}
+              onClick={() => setEnvExpanded(!envExpanded)}
+            >
+              {envExpanded ? "收起" : `展开全部（还有 ${envEntries.length - 5} 个）`}
             </Button>
           )}
         </Box>
+      )}
 
-        {provider.configParseError && (
-          <Box className="rounded border border-danger/40 bg-danger/10 px-2 py-1.5">
-            <Text size="xs" c="var(--danger)">
-              该供应商配置解析失败，env 数据可能不完整，无法应用到项目。
+      {/* 配置区（editorial 下划线 Tab + 大圆角代码块） */}
+      <Box className="prov-detail-hero" p="lg">
+        <Group gap={0} mb="md" wrap="wrap">
+          {configTabs.map((tab) => (
+            <button
+              key={tab.value}
+              type="button"
+              className="prov-tab font-headline"
+              data-active={tab.value === activeTab.value ? "true" : "false"}
+              onClick={() => setActiveConfigTab(tab.value)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </Group>
+        <Group justify="space-between" mb="sm" align="center">
+          <Text size="xs" c="var(--text-muted)" fs="italic">
+            {activeTab.hint}
+          </Text>
+          <CopyButton value={activeTab.json ?? provider.rawSettingsConfig} label={activeTab.copyLabel} />
+        </Group>
+        {activeTab.json ? (
+          <JsonCodeBlock json={activeTab.json} />
+        ) : (
+          <Box
+            className="rounded-2xl px-4 py-3"
+            style={{ backgroundColor: "var(--surface-container-highest)" }}
+          >
+            <Text size="xs" c="var(--text-muted)">
+              {activeTab.value === "merged" ? "加载中..." : "配置解析失败"}
             </Text>
           </Box>
         )}
+      </Box>
+    </Stack>
+  );
+}
 
-        <Divider />
+function MetaField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Stack gap={6} className="min-w-0">
+      <Text
+        component="div"
+        fz={11}
+        fw={700}
+        c="var(--text-muted)"
+        style={{ letterSpacing: "0.18em", textTransform: "uppercase" }}
+      >
+        {label}
+      </Text>
+      {children}
+    </Stack>
+  );
+}
 
-        <Stack gap="xs">
-          {provider.baseUrl && (
-            <Group gap="md" wrap="nowrap" className="min-w-0">
-              <Text size="xs" c="var(--text-muted)" w={88} className="shrink-0">
-                BASE_URL
-              </Text>
-              <Text
-                component="code"
-                size="xs"
-                ff="var(--font-ui-mono)"
-                c="var(--on-surface)"
-                className="min-w-0 flex-1 break-all leading-5"
-                title={provider.baseUrl}
-              >
-                {provider.baseUrl}
-              </Text>
-              <CopyButton value={provider.baseUrl} />
-            </Group>
-          )}
-          {provider.model && <InfoRow label="模型" value={provider.model} />}
-          {provider.notes && (
-            <Box>
-              <Text size="xs" c="var(--text-muted)" mb={4}>
-                备注
-              </Text>
-              <Text size="xs" c="var(--on-surface)" className="break-all">
-                {provider.notes}
-              </Text>
-            </Box>
-          )}
-        </Stack>
-
-        {envEntries.length > 0 && (
-          <>
-            <Divider />
-            <Box>
-              <Text size="xs" c="var(--text-muted)" mb="xs">
-                环境变量 ({envEntries.length})
-              </Text>
-              <Stack gap={4} className="rounded-md bg-surface-container-lowest/70 px-3 py-2">
-                {displayedEnv.map(([key, value]) => (
-                  <Group key={key} gap="xs" wrap="nowrap" justify="space-between">
-                    <Text
-                      component="code"
-                      size="xs"
-                      ff="var(--font-ui-mono)"
-                      c="var(--on-surface)"
-                      className="min-w-0 flex-1 break-all leading-5"
-                    >
-                      {key}={value}
-                    </Text>
-                    <CopyButton value={`${key}=${value}`} />
-                  </Group>
-                ))}
-              </Stack>
-              {hasMoreEnv && (
-                <Button
-                  size="compact-xs"
-                  variant="subtle"
-                  mt="xs"
-                  onClick={() => setEnvExpanded(!envExpanded)}
-                >
-                  {envExpanded ? "收起" : `展开全部（还有 ${envEntries.length - 5} 个）`}
-                </Button>
-              )}
-            </Box>
-          </>
-        )}
-
-        <Divider />
-
-        {/* 配置 Tabs */}
-        <Tabs defaultValue="merged" variant="outline">
-          <Tabs.List>
-            <Tabs.Tab value="merged">完整配置</Tabs.Tab>
-            <Tabs.Tab value="provider">供应商配置</Tabs.Tab>
-            {commonConfigsLoaded && commonConfig && (
-              <Tabs.Tab value="common">通用配置 ({provider.appType})</Tabs.Tab>
-            )}
-          </Tabs.List>
-
-          {/* Tab 1: 完整配置 */}
-          <Tabs.Panel value="merged" pt="xs">
-            <Group justify="space-between" mb="xs">
-              <Text size="xs" c="var(--text-muted)">
-                {commonConfigsLoaded && commonConfig
-                  ? "通用配置 + 供应商配置合并结果（供应商优先）"
-                  : "供应商配置（无通用配置）"}
-              </Text>
-              <CopyButton
-                value={mergedConfig ? JSON.stringify(mergedConfig, null, 2) : provider.rawSettingsConfig}
-                label="已复制完整配置"
-              />
-            </Group>
-            {mergedConfig ? (
-              <JsonCodeBlock json={JSON.stringify(mergedConfig, null, 2)} />
-            ) : (
-              <Box className="rounded-md bg-surface-container-lowest/70 px-3 py-2">
-                <Text size="xs" c="var(--text-muted)">
-                  加载中...
-                </Text>
-              </Box>
-            )}
-          </Tabs.Panel>
-
-          {/* Tab 2: 供应商配置 */}
-          <Tabs.Panel value="provider" pt="xs">
-            <Group justify="space-between" mb="xs">
-              <Text size="xs" c="var(--text-muted)">
-                供应商原始配置
-              </Text>
-              <CopyButton value={provider.rawSettingsConfig} label="已复制" />
-            </Group>
-            {providerConfig ? (
-              <JsonCodeBlock json={JSON.stringify(providerConfig, null, 2)} />
-            ) : (
-              <Box className="rounded-md bg-surface-container-lowest/70 px-3 py-2">
-                <Text size="xs" c="var(--text-muted)">
-                  配置解析失败
-                </Text>
-              </Box>
-            )}
-          </Tabs.Panel>
-
-          {/* Tab 3: 通用配置 */}
-          {commonConfigsLoaded && commonConfig && (
-            <Tabs.Panel value="common" pt="xs">
-              <Group justify="space-between" mb="xs">
-                <Text size="xs" c="var(--text-muted)">
-                  common_config_{provider.appType}（来自 settings 表）
-                </Text>
-                <CopyButton
-                  value={typeof commonConfig === "string" ? commonConfig : JSON.stringify(commonConfig, null, 2)}
-                  label="已复制通用配置"
-                />
-              </Group>
-              <JsonCodeBlock
-                json={typeof commonConfig === "string" ? commonConfig : JSON.stringify(commonConfig, null, 2)}
-              />
-            </Tabs.Panel>
-          )}
-        </Tabs>
-      </Stack>
-    </Card>
+function StepCircle({ n }: { n: number }) {
+  return (
+    <span
+      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold leading-none"
+      style={{
+        backgroundColor: "color-mix(in srgb, var(--primary) 12%, transparent)",
+        border: "1px solid color-mix(in srgb, var(--primary) 24%, transparent)",
+        color: "var(--primary)",
+      }}
+    >
+      {n}
+    </span>
   );
 }
 
 function EmptyStateGuideCard() {
   return (
-    <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
+    <Card className="ui-surface-card" p="md">
       <Stack gap="md">
         <Box>
           <Text size="lg" fw={600} c="var(--on-surface)" mb="xs">
@@ -496,25 +589,19 @@ function EmptyStateGuideCard() {
           </Text>
           <Stack gap="xs">
             <Group gap="xs">
-              <Badge variant="light" color="blue" radius="xl" size="sm">
-                1
-              </Badge>
+              <StepCircle n={1} />
               <Text size="sm" c="var(--on-surface)">
                 安装 cc-switch
               </Text>
             </Group>
             <Group gap="xs">
-              <Badge variant="light" color="blue" radius="xl" size="sm">
-                2
-              </Badge>
+              <StepCircle n={2} />
               <Text size="sm" c="var(--on-surface)">
                 配置你的供应商
               </Text>
             </Group>
             <Group gap="xs">
-              <Badge variant="light" color="blue" radius="xl" size="sm">
-                3
-              </Badge>
+              <StepCircle n={3} />
               <Text size="sm" c="var(--on-surface)">
                 回到此页点击刷新
               </Text>
@@ -650,8 +737,8 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
 
   return (
     <Stack gap="md" className="flex-1">
-      <style>{jsonCodeBlockStyles}</style>
-      <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
+      <style>{providerPageStyles}</style>
+      <Card className="ui-surface-card" p="sm">
         <Stack gap="xs">
           <Group justify="space-between" align="center" gap="md" wrap="nowrap">
             <Box className="min-w-0 flex-1">
@@ -659,9 +746,9 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
                 <Text size="sm" fw={500} c="var(--on-surface)">
                   cc-switch 数据库
                 </Text>
-                <Badge variant="light" color={data ? "green" : "gray"} radius="xl" size="sm">
+                <ProviderBadge tone={data ? "primary" : "neutral"}>
                   {data ? "已连接" : "未连接"}
-                </Badge>
+                </ProviderBadge>
               </Group>
               <Text size="xs" c="var(--text-muted)">
                 只读解析 cc-switch 的供应商配置；密钥已脱敏，留空使用默认路径
@@ -697,7 +784,11 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
       </Card>
 
       {error && (
-        <Card className="border border-danger/40 bg-surface-container-low" p="sm" radius="lg">
+        <Card
+          className="ui-surface-card"
+          p="sm"
+          style={{ outline: "1px solid color-mix(in srgb, var(--danger) 38%, transparent)" }}
+        >
           <Group gap="xs" align="start">
             <AlertTriangle size={16} className="shrink-0 text-danger" />
             <Text size="sm" c="var(--danger)" className="flex-1">
@@ -716,13 +807,52 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
       )}
 
       {data && appTypeOptions.length > 0 && (
-        <SegmentedControl
-          value={appTypeFilter}
-          onChange={setAppTypeFilter}
-          data={appTypeOptions}
-          size="xs"
-          className="self-start"
-        />
+        <Box
+          className="self-start overflow-x-auto"
+          style={{
+            backgroundColor: "var(--surface-container-low)",
+            padding: "6px",
+            borderRadius: "16px",
+          }}
+        >
+          <Group gap={4} wrap="nowrap">
+            {appTypeOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setAppTypeFilter(option.value)}
+                className="shrink-0 px-4 py-2 font-headline font-bold text-xs transition-all"
+                style={{
+                  borderRadius: "12px",
+                  backgroundColor:
+                    appTypeFilter === option.value
+                      ? "color-mix(in srgb, var(--primary) 18%, var(--surface-container-lowest))"
+                      : "transparent",
+                  color:
+                    appTypeFilter === option.value
+                      ? "var(--primary)"
+                      : "var(--on-surface-variant)",
+                  boxShadow:
+                    appTypeFilter === option.value
+                      ? "0 1px 3px color-mix(in srgb, var(--primary) 12%, transparent)"
+                      : "none",
+                }}
+                onMouseEnter={(e) => {
+                  if (appTypeFilter !== option.value) {
+                    e.currentTarget.style.backgroundColor = "color-mix(in srgb, var(--surface) 50%, transparent)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (appTypeFilter !== option.value) {
+                    e.currentTarget.style.backgroundColor = "transparent";
+                  }
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </Group>
+        </Box>
       )}
 
       {/* 优化 8: 供应商数量提示 */}
@@ -742,7 +872,7 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
 
       {data && visibleProviders.length > 0 && (
         <Box className="flex min-h-0 flex-1 gap-4">
-          <Box className="min-w-[280px] max-w-[400px] w-[30%] shrink-0 space-y-1 overflow-y-auto">
+          <Box className="min-w-[280px] max-w-[400px] w-[30%] shrink-0 space-y-2.5 overflow-y-auto">
             {visibleProviders.map((provider) => (
               <ProviderListItem
                 key={`${provider.appType}-${provider.id}`}

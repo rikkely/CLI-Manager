@@ -2,6 +2,16 @@
 
 ## [V1.1.1] - 2026-06-17
 
+### 供应商模块 UI 重构（Editorial 风格）
+
+- **统一 Editorial Analyst 设计语言**：供应商设置页与切换弹窗全面重构，对齐 `docs/UI/` 参考设计的编辑式风格（大标题、色调分层、左强调条选中态、柔粉高亮），同时所有颜色映射到系统主题 token（`var(--primary)` / `var(--surface-*)`），确保 18 套主题（9 亮 + 9 暗）与暗色模式下可用。
+- **新增 `ProviderRow` 共享组件**（`src/components/provider/ProviderRow.tsx`）：抽取供应商列表行组件，供设置页列表与切换弹窗复用；选中态采用 6px 左侧 primary 强调条 + 柔粉底（`primary 10%` mix）+ 24px 大圆角 + 柔光 shadow；双行布局（18px 大名称 + 10px 大写副标）；支持 `customSubtitle` / `customTrailing` 扩展槽位；右侧徽章/图标与名称之间保持 16px 间距。
+- **Pill-Tab 筛选栏**：顶部 appType 筛选从 Mantine `SegmentedControl` 改为自实现 pill-tab 容器（`surface-container-low` 底 + `rounded-2xl`），选中项柔粉底（`primary 18%` mix）+ 柔光 shadow，未选中 hover 半透明底。
+- **列表间距优化**：列表行之间纵向间距从 4px 调整为 10px（`space-y-2.5`），避免贴太近；ProviderRow 内横向间距 16px（`gap-4`）。
+- **详情面板 Hero 头**：大标题（32px）+ 径向渐变柔光；环境变量卡片网格布局 + hover 效果；自定义 Tab 系统（`.prov-tab`）底部下划线高亮。
+- **徽章降饱和**：移除多彩药丸（green/blue/red），统一为单色 primary-mix 风格（"全局当前"/"ACTIVE" 用 primary 强调色），仅"配置解析失败"保留 danger 语义色。
+- **移除硬编码颜色**：清除残留的 `accent`/`#b5044d`/`#2a6676` 硬编码，全部改用 `color-mix(in srgb, var(--primary) X%, ...)`，保证主题切换可用。
+
 ### 侧边栏右键菜单智能定位
 
 - **修复窗口较小时右键菜单底部按钮被遮挡**：项目树右键菜单原先用写死的 `window.innerHeight - 220` 钳制位置，菜单条目较多（项目菜单约 10 项）时实际高度远超该值，底部按钮（如「修改」）仍会溢出视口被遮挡。

@@ -6,6 +6,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { Check, AlertTriangle } from "./icons";
+import { ProviderBadge, ProviderRow } from "./provider/ProviderRow";
 import { logError } from "../lib/logger";
 
 interface ClaudeProvider {
@@ -173,34 +174,30 @@ export function ProviderSwitchModal({ project, onClose }: Props) {
         )}
 
         {!loading && !error && (
-          <button
-            type="button"
-            disabled={applyingId !== null}
-            onClick={() => {
-              if (!followGlobal) void resetToGlobal();
-            }}
-            className={`mb-1 flex w-full items-center gap-2 rounded border px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-              followGlobal
-                ? "border-accent/40 bg-accent/10"
-                : "border-border bg-bg-tertiary hover:opacity-80"
-            }`}
-          >
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-sm font-medium text-text-primary">跟随全局供应商</span>
-              <span className="truncate text-xs text-text-muted">
-                {globalCurrentName
-                  ? `当前全局：${globalCurrentName}`
-                  : "cc-switch 未设置全局当前供应商"}
-              </span>
-            </span>
-            {applyingId === RESET_APPLYING_ID ? (
-              <span className="shrink-0 text-xs text-text-muted">恢复中…</span>
-            ) : (
-              followGlobal && (
-                <Check size={14} strokeWidth={2} className="shrink-0 text-accent" />
-              )
-            )}
-          </button>
+          <div className="mb-1">
+            <ProviderRow
+              selected={followGlobal}
+              disabled={applyingId !== null}
+              onClick={() => {
+                if (!followGlobal) void resetToGlobal();
+              }}
+              name="跟随全局供应商"
+              customSubtitle={
+                <span className="text-xs text-text-muted">
+                  {globalCurrentName
+                    ? `当前全局：${globalCurrentName}`
+                    : "cc-switch 未设置全局当前供应商"}
+                </span>
+              }
+              customTrailing={
+                applyingId === RESET_APPLYING_ID ? (
+                  <span className="text-xs text-text-muted">恢复中…</span>
+                ) : followGlobal ? (
+                  <Check size={14} strokeWidth={2} style={{ color: "var(--primary)" }} />
+                ) : null
+              }
+            />
+          </div>
         )}
 
         {!loading && !error && hasOverride && probe?.matchedProviderId == null && (
@@ -216,62 +213,43 @@ export function ProviderSwitchModal({ project, onClose }: Props) {
         )}
 
         {!loading && providers.length > 0 && (
-          <div className="ui-thin-scroll max-h-[50vh] space-y-1 overflow-y-auto pr-0">
+          <div className="ui-thin-scroll max-h-[50vh] space-y-2.5 overflow-y-auto pr-0">
             {providers.map((provider) => {
               const matched = probe?.matchedProviderId === provider.id;
+
+              // 组装副标题：baseUrl + 徽章（全局当前/category/解析失败）
+              const subtitleContent = (
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  {provider.baseUrl && (
+                    <span className="truncate text-xs text-text-muted" title={provider.baseUrl}>
+                      {provider.baseUrl}
+                    </span>
+                  )}
+                  <div className="flex flex-wrap gap-1">
+                    {provider.isCurrent && <ProviderBadge tone="primary">全局当前</ProviderBadge>}
+                    {provider.category && <ProviderBadge tone="neutral">{provider.category}</ProviderBadge>}
+                    {provider.configParseError && <ProviderBadge tone="danger">配置解析失败</ProviderBadge>}
+                  </div>
+                </div>
+              );
+
+              // 组装右侧内容：切换中… / Check 图标
+              const trailingContent = applyingId === provider.id ? (
+                <span className="text-xs text-text-muted">切换中…</span>
+              ) : matched ? (
+                <Check size={14} strokeWidth={2} style={{ color: "var(--primary)" }} />
+              ) : null;
+
               return (
-                <button
+                <ProviderRow
                   key={provider.id}
-                  type="button"
+                  selected={matched}
                   disabled={applyingId !== null || provider.configParseError}
                   onClick={() => void applyProvider(provider)}
-                  className={`flex w-full items-center gap-2 rounded border px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                    matched
-                      ? "border-accent/40 bg-accent/10"
-                      : "border-border bg-bg-tertiary hover:opacity-80"
-                  }`}
-                >
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="flex items-center gap-1.5">
-                      <span
-                        className="truncate text-sm font-medium text-text-primary"
-                        title={provider.name}
-                      >
-                        {provider.name}
-                      </span>
-                      {provider.isCurrent && (
-                        <span className="shrink-0 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
-                          全局当前
-                        </span>
-                      )}
-                      {provider.category && (
-                        <span className="shrink-0 rounded-full bg-bg-secondary px-1.5 py-0.5 text-[10px] text-text-secondary">
-                          {provider.category}
-                        </span>
-                      )}
-                      {provider.configParseError && (
-                        <span className="shrink-0 rounded-full bg-danger/15 px-1.5 py-0.5 text-[10px] text-danger">
-                          配置解析失败
-                        </span>
-                      )}
-                    </span>
-                    {provider.baseUrl && (
-                      <span
-                        className="truncate text-xs text-text-muted"
-                        title={provider.baseUrl}
-                      >
-                        {provider.baseUrl}
-                      </span>
-                    )}
-                  </span>
-                  {applyingId === provider.id ? (
-                    <span className="shrink-0 text-xs text-text-muted">切换中…</span>
-                  ) : (
-                    matched && (
-                      <Check size={14} strokeWidth={2} className="shrink-0 text-accent" />
-                    )
-                  )}
-                </button>
+                  name={provider.name}
+                  customSubtitle={subtitleContent}
+                  customTrailing={trailingContent}
+                />
               );
             })}
           </div>
