@@ -15,7 +15,6 @@ import { Portal } from "../ui/Portal";
 import { toast } from "sonner";
 import { logError } from "../../lib/logger";
 import { SidebarHeader } from "./SidebarHeader";
-import { SidebarSearch } from "./SidebarSearch";
 import { ProjectTree } from "./ProjectTree";
 import { SidebarFooter } from "./SidebarFooter";
 import {
@@ -83,18 +82,15 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     tree,
     projects,
     groups,
-    searchQuery,
     projectHealth,
   } = useProjectStore(
     useShallow((s) => ({
       tree: s.tree,
       projects: s.projects,
       groups: s.groups,
-      searchQuery: s.searchQuery,
       projectHealth: s.projectHealth,
     }))
   );
-  const setSearchQuery = useProjectStore((s) => s.setSearchQuery);
   const fetchAll = useProjectStore((s) => s.fetchAll);
   const deleteProject = useProjectStore((s) => s.deleteProject);
   const createGroup = useProjectStore((s) => s.createGroup);
@@ -142,6 +138,8 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
+  // Shift 连续多选的锚点（最近一次非 Shift 的选中项），用于按可见顺序取区间
+  const selectionAnchorRef = useRef<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<
     | null
     | { kind: "delete-project"; project: Project }
@@ -161,6 +159,22 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
       return new Set([activeSessionProjectId]);
     });
   }, [activeSessionProjectId]);
+
+  // 可见项目的扁平顺序（跳过已折叠分组的子项），供 Shift 范围多选取区间
+  const visibleProjectIds = useMemo(() => {
+    const ids: string[] = [];
+    const walk = (nodes: TNode[]) => {
+      for (const node of nodes) {
+        if (node.type === "group") {
+          if (!collapsedIds.has(node.group.id)) walk(node.children);
+        } else {
+          ids.push(node.project.id);
+        }
+      }
+    };
+    walk(tree);
+    return ids;
+  }, [tree, collapsedIds]);
 
   const activateFirstProjectSession = useCallback(
     (projectId: string): boolean => {
@@ -602,22 +616,49 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
 
   const handleSelectProject = useCallback((e: ReactMouseEvent, project: Project) => {
     setSelectedId(project.id);
-    if (e.ctrlKey || e.metaKey) {
+
+    const additive = e.ctrlKey || e.metaKey; // Ctrl(Win/Linux) / Cmd(Mac) 切换单项
+    const rangeSelect = e.shiftKey;          // Shift 连续范围选择（Windows 风格）
+    const anchorId = selectionAnchorRef.current;
+
+    // Shift 范围选择：从锚点到当前项，按可见顺序取区间
+    if (rangeSelect && anchorId && anchorId !== project.id) {
+      const order = visibleProjectIds;
+      const from = order.indexOf(anchorId);
+      const to = order.indexOf(project.id);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from <= to ? [from, to] : [to, from];
+        const range = order.slice(lo, hi + 1);
+        setSelectedProjectIds((prev) => {
+          // Ctrl/Cmd+Shift 在已有选择上叠加区间；纯 Shift 替换为区间
+          const next = additive ? new Set(prev) : new Set<string>();
+          range.forEach((id) => next.add(id));
+          return next;
+        });
+        return; // 锚点保持不变，便于以同一锚点继续扩展区间
+      }
+    }
+
+    if (additive) {
       setSelectedProjectIds((prev) => {
         const next = new Set(prev);
         if (next.has(project.id)) next.delete(project.id);
         else next.add(project.id);
         return next;
       });
+      selectionAnchorRef.current = project.id;
       return;
     }
+
     setSelectedProjectIds(new Set([project.id]));
+    selectionAnchorRef.current = project.id;
     activateFirstProjectSession(project.id);
-  }, [activateFirstProjectSession]);
+  }, [activateFirstProjectSession, visibleProjectIds]);
 
   const handleSelectProjectByKeyboard = useCallback((project: Project) => {
     setSelectedId(project.id);
     setSelectedProjectIds(new Set([project.id]));
+    selectionAnchorRef.current = project.id;
     activateFirstProjectSession(project.id);
   }, [activateFirstProjectSession]);
 
@@ -694,16 +735,6 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     // 依赖只列函数体真正读取的值，避免无关 selector 变化引起整树重建。
     [groups, projects]  // eslint-disable-line react-hooks/exhaustive-deps
   );
-
-  const filteredProjects = useMemo(() => {
-    if (!searchQuery) return [];
-    const lower = searchQuery.toLowerCase();
-    return projects.filter(
-      (project) =>
-        project.name.toLowerCase().includes(lower) ||
-        project.cli_tool.toLowerCase().includes(lower)
-    );
-  }, [projects, searchQuery]);
 
   const selectedProjects = useMemo(
     () => projects.filter((p) => selectedProjectIds.has(p.id)),
@@ -819,23 +850,6 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
             setAddToGroupId(null);
             setShowAdd(true);
           }}
-        />
-
-        <SidebarSearch
-          collapsed={compactMode ? false : sidebarCollapsed}
-          density={sidebarDensity}
-          searchQuery={searchQuery}
-          selectedCount={selectedProjects.length}
-          filteredCount={filteredProjects.length}
-          onSearchChange={setSearchQuery}
-          onStartFiltered={() => {
-            void openProjects(filteredProjects);
-          }}
-          onStartSelected={() => {
-            void openProjects(selectedProjects);
-          }}
-          onClearSelected={() => setSelectedProjectIds(new Set())}
-          onExpandSidebar={expandSidebar}
         />
       </div>
 

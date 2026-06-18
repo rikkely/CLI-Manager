@@ -125,6 +125,7 @@ interface TerminalContextMenuActions {
 interface Props extends TerminalContextMenuActions {
   sessionId: string;
   isActive?: boolean;
+  isVisible?: boolean;
   fontSize?: number;
   fontFamily?: string;
   resolvedTheme?: "dark" | "light";
@@ -133,7 +134,7 @@ interface Props extends TerminalContextMenuActions {
   darkThemePalette?: DarkThemePalette;
 }
 
-export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontFamily = "Cascadia Code, Consolas, monospace", resolvedTheme = "dark", terminalThemeName = "auto", lightThemePalette = "warm-paper", darkThemePalette = "night-indigo", onNewTab, onCloseSession, onCloseOthers, onCloseToLeft, onCloseToRight, onSplitRight, onSplitDown }: Props) {
+export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fontSize = 14, fontFamily = "Cascadia Code, Consolas, monospace", resolvedTheme = "dark", terminalThemeName = "auto", lightThemePalette = "warm-paper", darkThemePalette = "night-indigo", onNewTab, onCloseSession, onCloseOthers, onCloseToLeft, onCloseToRight, onSplitRight, onSplitDown }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -143,6 +144,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   const fitRafRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
   const isActiveRef = useRef(isActive);
+  const isVisibleRef = useRef(isVisible);
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const inactiveBufferRef = useRef<string[]>([]);
   const inactiveBufferSizeRef = useRef(0);
@@ -205,7 +207,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     const container = containerRef.current;
     const fitAddon = fitAddonRef.current;
     if (!container || !fitAddon) return;
-    if (!force && (!isActiveRef.current || isComposingRef.current)) return;
+    if (!force && (!isVisibleRef.current || isComposingRef.current)) return;
     if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
 
     const dims = fitAddon.proposeDimensions();
@@ -364,7 +366,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
 
   const flushActiveWriteQueue = () => {
     activeWriteRafRef.current = null;
-    if (!isActiveRef.current || activeWriteQueueRef.current.length === 0) return;
+    if (!isVisibleRef.current || activeWriteQueueRef.current.length === 0) return;
     const terminal = terminalRef.current;
     if (!terminal) return;
 
@@ -422,26 +424,37 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     }
   }, [fontSize, fontFamily, terminalScrollbackRows, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken]);
 
-  // Refit terminal when tab becomes active
+  // Visibility drives live rendering. A pane tab is "visible" when it is the
+  // shown tab in its own pane — which, in a split, includes panes that are not
+  // the globally focused one. When a tab becomes visible, flush any output
+  // stashed while it was hidden and refit to its current size. This keeps a
+  // split's unfocused half rendering live instead of freezing until clicked.
   useEffect(() => {
-    const wasActive = isActiveRef.current;
-    isActiveRef.current = isActive;
-    if (terminalRef.current) {
-      if (!isActive) {
-        terminalRef.current.blur();
-      }
+    const wasVisible = isVisibleRef.current;
+    isVisibleRef.current = isVisible;
+    if (!isVisible || !fitAddonRef.current || !containerRef.current) return;
+    // Flush data stashed while this tab was hidden
+    if (!wasVisible && inactiveBufferRef.current.length > 0 && terminalRef.current) {
+      const combined = inactiveBufferRef.current.join("");
+      inactiveBufferRef.current = [];
+      inactiveBufferSizeRef.current = 0;
+      enqueueActiveWrite(combined);
     }
-    if (isActive && fitAddonRef.current && containerRef.current) {
-      // Flush data stashed while this tab was hidden
-      if (!wasActive && inactiveBufferRef.current.length > 0 && terminalRef.current) {
-        const combined = inactiveBufferRef.current.join("");
-        inactiveBufferRef.current = [];
-        inactiveBufferSizeRef.current = 0;
-        enqueueActiveWrite(combined);
-      }
-      // Wait one frame to ensure display:block has taken effect and layout is stable.
-      scheduleFit(true);
-      terminalRef.current?.focus();
+    // Wait one frame to ensure display:block has taken effect and layout is stable.
+    scheduleFit(true);
+  }, [isVisible]);
+
+  // Focus follows the single globally active tab. Keyboard, cursor and IME stay
+  // bound to this; a visible-but-unfocused split pane renders but never steals
+  // focus.
+  useEffect(() => {
+    isActiveRef.current = isActive;
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    if (isActive) {
+      terminal.focus();
+    } else {
+      terminal.blur();
     }
   }, [isActive]);
 
@@ -683,7 +696,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
       if (cancelled || pendingChunks.length === 0) return;
       const combined = pendingChunks.length === 1 ? pendingChunks[0] : pendingChunks.join("");
       pendingChunks = [];
-      if (isActiveRef.current) {
+      if (isVisibleRef.current) {
         enqueueActiveWrite(combined);
       } else {
         stashInactiveText(combined);
@@ -698,7 +711,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
       }
       const text = processShellIntegrationOsc(textDecoder.decode(bytes, { stream: true }));
       if (!text) return;
-      if (isActiveRef.current) {
+      if (isVisibleRef.current) {
         pendingChunks.push(text);
         if (writeRafId === null) {
           writeRafId = requestAnimationFrame(flushPendingWrites);

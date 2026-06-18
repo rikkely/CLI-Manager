@@ -73,6 +73,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # 提高前端构建（tsc && vite build）的 Node 堆上限，避免 macOS runner 上 OOM（退出码 134/SIGABRT）
+          NODE_OPTIONS: "--max-old-space-size=4096"
         with:
           tagName: "V__VERSION__"
           releaseName: "CLI-Manager V__VERSION__"

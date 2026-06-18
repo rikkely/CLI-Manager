@@ -176,6 +176,8 @@ const providerPageStyles = `
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* 配置 Tab：底部下划线高亮（editorial），取代 Mantine outline 边框 */
@@ -274,6 +276,7 @@ function CopyButton({ value, label = "已复制" }: { value: string; label?: str
     <ActionIcon
       size="xs"
       variant="subtle"
+      className="shrink-0"
       onClick={() => {
         navigator.clipboard.writeText(value);
         toast.success(label);

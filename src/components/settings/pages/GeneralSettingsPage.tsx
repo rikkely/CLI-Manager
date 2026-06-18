@@ -758,7 +758,7 @@ export function GeneralSettingsPage() {
                     项目树徽章
                   </Text>
                   <Text mt={4} size="xs" c="var(--text-muted)">
-                    显示项目工具、路径异常和分组数量标记。
+                    显示供应商徽标、路径异常和分组数量标记。
                   </Text>
                 </Box>
                 <Switch
