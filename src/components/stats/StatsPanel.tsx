@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { EChartsOption } from "echarts";
-import { BarChart3, Database, RefreshCw, X } from "lucide-react";
+import { Activity, BarChart3, Coins, Database, Folder, Layers, LineChart, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -20,6 +20,7 @@ import { TimelineHeatmap } from "./TimelineHeatmap";
 import { StatsHourlyActivityChart } from "./StatsHourlyActivityChart";
 import { Skeleton } from "../ui/Skeleton";
 import { Portal } from "../ui/Portal";
+import { ACCENT, CHART_TOOLTIP, COST_FILL, PEAK, SERIES_COLORS } from "./statsPalette";
 
 interface StatsPanelProps {
   open: boolean;
@@ -332,6 +333,29 @@ function StatsSkeleton() {
   );
 }
 
+function SectionHeading({
+  icon: Icon,
+  title,
+  hint,
+  right,
+}: {
+  icon: typeof BarChart3;
+  title: string;
+  hint?: string;
+  right?: ReactNode;
+}) {
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-bg-tertiary text-accent">
+        <Icon size={14} />
+      </span>
+      <div className="text-[13px] font-semibold tracking-tight text-text-primary">{title}</div>
+      {hint && <div className="ml-auto text-[11px] text-text-muted">{hint}</div>}
+      {right}
+    </div>
+  );
+}
+
 function KpiStrip({ stats }: { stats: HistoryStatsPayload }) {
   const totalTokens = totalTokensOf({
     input_tokens: stats.total_input_tokens,
@@ -345,61 +369,87 @@ function KpiStrip({ stats }: { stats: HistoryStatsPayload }) {
   }, null);
   const peakTokens = peak ? totalTokensOf(peak) : 0;
   const pricedTokens = Math.max(0, totalTokens - stats.total_unpriced_tokens);
+  const coverage = totalTokens > 0 ? (pricedTokens / totalTokens) * 100 : 0;
 
   const items = [
     {
       label: "总 Token",
       value: formatCompactCount(totalTokens),
-      hint: `完整值 ${formatCount(totalTokens)} · 输入/输出/缓存命中/写入合计`,
+      hint: `完整值 ${formatCount(totalTokens)}`,
+      icon: Layers,
+      accent: "var(--accent)",
     },
     {
       label: "估算费用",
       value: formatCost(stats.total_cost_usd),
       hint: stats.total_unpriced_tokens > 0 ? `未定价 ${formatCompactCount(stats.total_unpriced_tokens)} Token` : "本地估算",
+      icon: Coins,
+      accent: "var(--warning)",
     },
     {
       label: "最高使用日",
       value: peak && peakTokens > 0 ? formatDay(peak.day_start_utc) : "-",
       hint: peak && peakTokens > 0 ? `${formatCompactCount(peakTokens)} Token` : "暂无逐日 Token",
+      icon: LineChart,
+      accent: "var(--accent)",
     },
     {
       label: "计价覆盖",
-      value: totalTokens > 0 ? formatPercent((pricedTokens / totalTokens) * 100) : "0%",
-      hint: "能匹配定价或日志自带 cost 的 Token 占比",
+      value: totalTokens > 0 ? formatPercent(coverage) : "0%",
+      hint: "可匹配定价的 Token 占比",
+      icon: Activity,
+      accent: coverage >= 60 ? "var(--success)" : "var(--warning)",
     },
   ];
 
   return (
-    <section className="rounded-2xl bg-bg-secondary px-4 py-3">
-      <div className="grid grid-cols-2 gap-y-3 lg:grid-cols-4">
-        {items.map((item, index) => (
-          <div key={item.label} className={`min-w-0 ${index > 0 ? "lg:border-l lg:border-border lg:pl-4" : ""}`}>
-            <div className="text-[11px] font-medium text-text-muted">{item.label}</div>
-            <div className="mt-1 truncate text-[22px] font-semibold tracking-tight text-text-primary">{item.value}</div>
-            <div className="mt-1 truncate text-[11px] text-text-secondary" title={item.hint}>
+    <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <div
+            key={item.label}
+            className="relative min-w-0 overflow-hidden rounded-2xl border border-border/60 bg-bg-secondary px-4 py-3.5"
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-flex h-6 w-6 items-center justify-center rounded-lg"
+                style={{ backgroundColor: `color-mix(in srgb, ${item.accent} 16%, transparent)`, color: item.accent }}
+              >
+                <Icon size={13} />
+              </span>
+              <div className="text-[11px] font-medium text-text-muted">{item.label}</div>
+            </div>
+            <div className="mt-2 truncate text-[24px] font-semibold leading-none tracking-tight text-text-primary">
+              {item.value}
+            </div>
+            <div className="mt-1.5 truncate text-[11px] text-text-secondary" title={item.hint}>
               {item.hint}
             </div>
           </div>
-        ))}
-      </div>
-    </section>
+        );
+      })}
+    </div>
   );
 }
 
 function TokenCompositionStrip({ stats }: { stats: HistoryStatsPayload }) {
   const parts = [
-    { key: "input", label: "输入", value: stats.total_input_tokens, color: "#2F8F62" },
-    { key: "output", label: "输出", value: stats.total_output_tokens, color: "#C46A2D" },
-    { key: "cacheCreation", label: "缓存写入", value: stats.total_cache_creation_tokens, color: "#6B5DD3" },
-    { key: "cacheRead", label: "缓存命中", value: stats.total_cache_read_tokens, color: "#2878B5" },
+    { key: "input", label: "输入", value: stats.total_input_tokens, color: SERIES_COLORS.input },
+    { key: "output", label: "输出", value: stats.total_output_tokens, color: SERIES_COLORS.output },
+    { key: "cacheCreation", label: "缓存写入", value: stats.total_cache_creation_tokens, color: SERIES_COLORS.cacheCreation },
+    { key: "cacheRead", label: "缓存命中", value: stats.total_cache_read_tokens, color: SERIES_COLORS.cacheRead },
   ];
   const total = Math.max(1, parts.reduce((sum, item) => sum + item.value, 0));
 
   return (
-    <section className="rounded-xl bg-bg-secondary px-4 py-3">
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="min-w-[126px]">
-          <div className="text-[12px] font-semibold text-text-primary">Token 构成</div>
+          <div className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-text-primary">
+            <Layers size={13} className="text-accent" />
+            Token 构成
+          </div>
           <div className="mt-0.5 text-[11px] text-text-muted">输入 / 输出 / 缓存</div>
         </div>
         <div className="min-w-[220px] flex-1">
@@ -478,14 +528,11 @@ function DailyUsageTrendChart({
     return {
       backgroundColor: "transparent",
       animationDuration: 650,
-      color: ["#8B5CF6", "#22C55E", "#F97316", "#F59E0B"],
+      color: [ACCENT, SERIES_COLORS.input, SERIES_COLORS.output, SERIES_COLORS.cacheCreation],
       tooltip: {
         trigger: "axis",
         confine: true,
-        backgroundColor: "rgba(15, 23, 42, 0.94)",
-        borderColor: "rgba(148, 163, 184, 0.28)",
-        borderWidth: 1,
-        textStyle: { color: "#F8FAFC", fontSize: 12 },
+        ...CHART_TOOLTIP,
         formatter: (params: unknown) => {
           const rows = tooltipRows(params);
           const day = items[tooltipIndex(rows[0])];
@@ -500,7 +547,7 @@ function DailyUsageTrendChart({
               return `<div style="display:flex;align-items:center;justify-content:space-between;gap:18px;line-height:22px;"><span>${marker}${name}</span><strong>${display}</strong></div>`;
             })
             .join("");
-          return `<div style="min-width:210px;"><strong>${bucketLabel}</strong>${lineRows}<div style="margin-top:6px;color:#CBD5E1;">缓存命中/写入：${formatCount(day.cache_creation_tokens + day.cache_read_tokens)} · 未定价：${formatCount(day.unpriced_tokens)}</div></div>`;
+          return `<div style="min-width:210px;"><strong>${bucketLabel}</strong>${lineRows}<div style="margin-top:6px;color:var(--text-muted);">缓存命中/写入：${formatCount(day.cache_creation_tokens + day.cache_read_tokens)} · 未定价：${formatCount(day.unpriced_tokens)}</div></div>`;
         },
       },
       legend: {
@@ -550,10 +597,10 @@ function DailyUsageTrendChart({
           symbol: "circle",
           symbolSize: 5,
           lineStyle: { width: 3 },
-          areaStyle: { color: "rgba(139, 92, 246, 0.18)" },
+          areaStyle: { color: `color-mix(in srgb, ${ACCENT} 16%, transparent)` },
           data: items.map((item) =>
             peak?.day_start_utc === item.day_start_utc
-              ? { value: totalTokensOf(item), symbolSize: 12, itemStyle: { color: "#F97316", borderColor: "#FFFFFF", borderWidth: 2 } }
+              ? { value: totalTokensOf(item), symbolSize: 12, itemStyle: { color: PEAK, borderColor: "var(--bg-secondary)", borderWidth: 2 } }
               : totalTokensOf(item)
           ),
         },
@@ -564,7 +611,7 @@ function DailyUsageTrendChart({
           type: "bar",
           yAxisIndex: 1,
           barMaxWidth: 12,
-          itemStyle: { color: "rgba(245, 158, 11, 0.34)", borderRadius: [5, 5, 0, 0] },
+          itemStyle: { color: COST_FILL, borderRadius: [5, 5, 0, 0] },
           data: items.map((item) => Number(item.total_cost_usd.toFixed(4))),
         },
       ],
@@ -572,16 +619,19 @@ function DailyUsageTrendChart({
   }, [items, peak, granularity]);
 
   return (
-    <section className="rounded-2xl bg-bg-secondary p-4 lg:p-5">
-      <div className="mb-3 flex flex-wrap items-start gap-3">
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4 lg:p-5">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-bg-tertiary text-accent">
+          <LineChart size={14} />
+        </span>
         <div>
-          <div className="text-[15px] font-semibold text-text-primary">Token / 费用趋势</div>
-          <div className="mt-1 text-[11px] text-text-muted">
+          <div className="text-[14px] font-semibold tracking-tight text-text-primary">Token / 费用趋势</div>
+          <div className="mt-0.5 text-[11px] text-text-muted">
             {granularity === "hour" ? "按 24 小时展示 Token 主趋势，费用以弱柱状辅助对照。" : "折线展示 Token 主趋势，费用以弱柱状辅助对照。"}
           </div>
         </div>
-        <div className="ml-auto rounded-full bg-bg-primary px-3 py-1 text-[11px] font-medium text-text-secondary">
-          {peak ? `最高：${formatBucketLabel(peak.day_start_utc, granularity)} · ${formatCount(totalTokensOf(peak))} Token` : "暂无峰值"}
+        <div className="ml-auto rounded-full border border-border/60 bg-bg-primary px-3 py-1 text-[11px] font-medium text-text-secondary">
+          {peak ? `峰值 ${formatBucketLabel(peak.day_start_utc, granularity)} · ${formatCount(totalTokensOf(peak))} Token` : "暂无峰值"}
         </div>
       </div>
       {hasData ? <EChart option={option} className="h-[380px] w-full" /> : <EmptyBlock text="当前时间窗口没有可绘制的 Token / 费用数据。" />}
@@ -610,9 +660,7 @@ function ModelRankingChart({ items }: { items: HistoryStatsModelItem[] }) {
         trigger: "axis",
         axisPointer: { type: "shadow" },
         confine: true,
-        backgroundColor: "rgba(15, 23, 42, 0.94)",
-        borderColor: "rgba(148, 163, 184, 0.28)",
-        textStyle: { color: "#F8FAFC", fontSize: 12 },
+        ...CHART_TOOLTIP,
         formatter: (params: unknown) => {
           const row = tooltipRows(params)[0];
           const model = models[tooltipIndex(row)];
@@ -639,7 +687,7 @@ function ModelRankingChart({ items }: { items: HistoryStatsModelItem[] }) {
           name: "Token",
           type: "bar",
           barWidth: 14,
-          itemStyle: { color: "#8B5CF6", borderRadius: [0, 7, 7, 0] },
+          itemStyle: { color: ACCENT, borderRadius: [0, 7, 7, 0] },
           label: {
             show: true,
             position: "right",
@@ -649,7 +697,7 @@ function ModelRankingChart({ items }: { items: HistoryStatsModelItem[] }) {
           },
           data: models.map((item, index) => ({
             value: totalTokensOf(item),
-            itemStyle: { color: index === models.length - 1 ? "#F97316" : "#8B5CF6" },
+            itemStyle: { color: index === models.length - 1 ? PEAK : ACCENT },
           })),
         },
       ],
@@ -657,11 +705,8 @@ function ModelRankingChart({ items }: { items: HistoryStatsModelItem[] }) {
   }, [models]);
 
   return (
-    <section className="rounded-xl bg-bg-secondary p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="text-[13px] font-semibold text-text-primary">模型用量排行</div>
-        <div className="ml-auto text-[11px] text-text-secondary">Top models by Token</div>
-      </div>
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
+      <SectionHeading icon={BarChart3} title="模型用量排行" hint="Top models by Token" />
       {models.length === 0 ? <EmptyBlock text="当前过滤条件下没有模型 Token 数据。" /> : <EChart option={option} className="h-[300px] w-full" />}
     </section>
   );
@@ -676,15 +721,18 @@ function ProjectRanking({ items, selectedProjectKey, onSelectProject, onClearPro
   const topItems = items.slice(0, 8);
   const maxTokens = Math.max(1, ...topItems.map(totalTokensOf));
   return (
-    <section className="rounded-xl bg-bg-secondary p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="text-[13px] font-semibold text-text-primary">项目排行</div>
-        {selectedProjectKey && (
-          <Button className="ml-auto" onClick={onClearProject} size="sm" variant="ghost">
-            清除项目
-          </Button>
-        )}
-      </div>
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
+      <SectionHeading
+        icon={Folder}
+        title="项目排行"
+        right={
+          selectedProjectKey ? (
+            <Button className="ml-auto" onClick={onClearProject} size="sm" variant="ghost">
+              清除项目
+            </Button>
+          ) : undefined
+        }
+      />
       {topItems.length === 0 ? (
         <EmptyBlock text="当前过滤条件下没有项目数据。" />
       ) : (
@@ -710,7 +758,7 @@ function ProjectRanking({ items, selectedProjectKey, onSelectProject, onClearPro
                     className="h-full rounded-full"
                     style={{
                       width: `${Math.max(4, (totalTokens / maxTokens) * 100)}%`,
-                      backgroundColor: selected ? "#F97316" : "#8B5CF6",
+                      backgroundColor: selected ? PEAK : ACCENT,
                     }}
                   />
                 </div>
@@ -726,11 +774,8 @@ function ProjectRanking({ items, selectedProjectKey, onSelectProject, onClearPro
 function SourceBreakdown({ items }: { items: HistoryStatsSourceItem[] }) {
   const maxTokens = Math.max(1, ...items.map(totalTokensOf));
   return (
-    <section className="rounded-xl bg-bg-secondary p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="text-[13px] font-semibold text-text-primary">来源对比</div>
-        <div className="ml-auto text-[11px] text-text-secondary">Claude / Codex</div>
-      </div>
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
+      <SectionHeading icon={Database} title="来源对比" hint="Claude / Codex" />
       {items.length === 0 ? (
         <EmptyBlock text="当前过滤条件下没有来源分布数据。" />
       ) : (
@@ -744,7 +789,7 @@ function SourceBreakdown({ items }: { items: HistoryStatsSourceItem[] }) {
                   <span className="text-text-muted">{formatCompactCount(totalTokens)} Token · {formatCost(item.total_cost_usd)}</span>
                 </div>
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg-tertiary">
-                  <div className="h-full rounded-full bg-[#2878B5]" style={{ width: `${Math.max(4, (totalTokens / maxTokens) * 100)}%` }} />
+                  <div className="h-full rounded-full" style={{ width: `${Math.max(4, (totalTokens / maxTokens) * 100)}%`, backgroundColor: ACCENT }} />
                 </div>
                 <div className="mt-1 text-[10px] text-text-muted">
                   输入 {formatCompactCount(item.input_tokens)} · 输出 {formatCompactCount(item.output_tokens)} · 缓存命中/写入 {formatCompactCount(item.cache_creation_tokens + item.cache_read_tokens)}
@@ -1037,7 +1082,7 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
             {(waitingForStatsQuery || (loadingStats && !stats)) && <StatsSkeleton />}
 
             {!waitingForStatsQuery && !loadingStats && statsError && (
-              <section className="rounded-xl bg-bg-secondary p-4 text-[12px] text-danger space-y-2">
+              <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4 text-[12px] text-danger space-y-2">
                 <div>统计加载失败：{statsError}</div>
                 <Button onClick={refreshStats} disabled={dateBounds.error !== null} size="sm">
                   <RefreshCw size={12} />
@@ -1075,8 +1120,8 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
                   <StatsHourlyActivityChart items={stats.hourly_activity} />
                 </div>
 
-                <section className="rounded-xl bg-bg-secondary p-4">
-                  <div className="mb-3 text-[13px] font-semibold text-text-primary">{heatmapTitle}</div>
+                <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
+                  <SectionHeading icon={Activity} title={heatmapTitle} />
                   <TimelineHeatmap
                     days={heatmapItems}
                     selectedDayStart={selectedDayStart}
@@ -1085,10 +1130,8 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
                   />
                 </section>
 
-                <section className="rounded-xl bg-bg-secondary p-4">
-                  <div className="mb-2 text-[13px] font-semibold text-text-primary">
-                    {selectedBucketTitle}
-                  </div>
+                <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
+                  <SectionHeading icon={Layers} title={selectedBucketTitle} />
                   {!selectedBucket && <div className="text-[12px] font-medium text-text-muted">{selectHintText}</div>}
                   {selectedBucket && selectedBucket.session_refs.length === 0 && <div className="text-[12px] font-medium text-text-muted">{emptyBucketText}</div>}
                   {visibleBucketSessions.map((session) => (

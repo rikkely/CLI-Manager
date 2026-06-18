@@ -100,6 +100,26 @@ const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
 
 ## Styling Patterns
 
+### Convention: Stats charts use a shared semantic palette
+
+**What**: Stats and usage-analysis chart components should import semantic colors from `src/components/stats/statsPalette.ts` instead of hard-coding one-off hex/RGBA colors for token series, peak markers, cost fills, or chart tooltips.
+
+**Why**: The app supports multiple light/dark themes. Hard-coded high-saturation chart colors can clash with theme surfaces and make related charts disagree visually. A shared palette keeps History Stats and ccusage charts consistent while still deriving colors from theme tokens.
+
+**Example**:
+
+```tsx
+import { ACCENT, CHART_TOOLTIP, PEAK, SERIES_COLORS } from "./statsPalette";
+
+const option = {
+  color: [ACCENT, SERIES_COLORS.input, SERIES_COLORS.output],
+  tooltip: { trigger: "axis", confine: true, ...CHART_TOOLTIP },
+  series: [{ itemStyle: { color: PEAK } }],
+};
+```
+
+**Tests**: For stats chart styling changes, run `npx tsc --noEmit` and manually verify the charts in at least one light theme and one dark theme.
+
 ### Convention: Settings pages use Mantine controls for the new visual shell
 
 **What**: Inside the current settings shell, prefer Mantine `Card`, `Stack`, `Group`, `TextInput`, `Select`, `Switch`, `SegmentedControl`, `Button`, `Modal`, and `Badge` for standard settings controls. Keep custom Tailwind/CSS compositions only for specialized visual content such as terminal theme swatches, previews, path rows, and compact status summaries.

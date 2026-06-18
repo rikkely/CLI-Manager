@@ -95,9 +95,9 @@ function StatsHourlyActivityChartImpl({ items }: StatsHourlyActivityChartProps) 
   }, [activeHour, normalized]);
 
   return (
-    <div className="rounded-md border border-border bg-bg-secondary p-3">
+    <div className="rounded-xl border border-border/60 bg-bg-secondary p-3">
       <div className="mb-2 flex items-center gap-2">
-        <div className="text-xs font-semibold text-text-primary">活跃时段分布（C10）</div>
+        <div className="text-xs font-semibold text-text-primary">活跃时段分布</div>
         <div className="ml-auto text-[11px] text-text-secondary">
           {active
             ? `${formatHour(active.hour)} · ${formatCount(active.sessions)} 会话 · ${formatCount(active.messages)} 消息`
@@ -153,6 +153,7 @@ function StatsHourlyActivityChartImpl({ items }: StatsHourlyActivityChartProps) 
                     y={point.sessionsY}
                     width={chart.barWidth}
                     height={Math.max(1, point.sessionsHeight)}
+                    rx={2}
                     fill="var(--accent)"
                     fillOpacity={activeHour === point.item.hour ? 1 : 0.86}
                   />
@@ -161,7 +162,8 @@ function StatsHourlyActivityChartImpl({ items }: StatsHourlyActivityChartProps) 
                     y={point.messagesY}
                     width={chart.barWidth}
                     height={Math.max(1, point.messagesHeight)}
-                    fill="#4F8DFF"
+                    rx={2}
+                    fill="var(--success)"
                     fillOpacity={activeHour === point.item.hour ? 1 : 0.86}
                   />
                   {point.item.hour % 3 === 0 && (
@@ -212,7 +214,7 @@ function StatsHourlyActivityChartImpl({ items }: StatsHourlyActivityChartProps) 
               会话
             </span>
             <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#4F8DFF" }} />
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "var(--success)" }} />
               消息
             </span>
           </div>

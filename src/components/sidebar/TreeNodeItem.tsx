@@ -210,7 +210,7 @@ function TreeNodeItemImpl({ node, depth, density, focusedNodeKey, onFocusNode }:
           data-selected="false"
           data-open={isOpen ? "true" : "false"}
           data-drop-target={isOverInto ? "true" : "false"}
-          style={{ paddingLeft, paddingRight: compact ? 8 : 10, color: "var(--on-surface-variant)" }}
+          style={{ paddingLeft, paddingRight: compact ? 8 : 10, color: "var(--text-secondary)" }}
           onClick={() => actions.toggleCollapsed(g.id)}
           onContextMenu={(e) => actions.onContextMenuGroup(e, g.id, g.name)}
           {...listeners}

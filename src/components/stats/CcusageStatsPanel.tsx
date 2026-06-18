@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { EChartsOption } from "echarts";
-import { BarChart3, Database, PackageCheck, RefreshCw, X } from "lucide-react";
+import { BarChart3, CalendarClock, Coins, Database, Flame, Grid3x3, Layers, LineChart, PackageCheck, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -9,6 +9,30 @@ import { Portal } from "../ui/Portal";
 import type { CcusageSource } from "../../lib/types";
 import { useCcusageStore } from "../../stores/ccusageStore";
 import { EChart } from "./EChart";
+import { ACCENT, CHART_TOOLTIP, COST_FILL, PEAK, SERIES_COLORS } from "./statsPalette";
+
+function SectionHeading({
+  icon: Icon,
+  title,
+  hint,
+  right,
+}: {
+  icon: typeof BarChart3;
+  title: string;
+  hint?: string;
+  right?: ReactNode;
+}) {
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-bg-tertiary text-accent">
+        <Icon size={14} />
+      </span>
+      <div className="text-[13px] font-semibold tracking-tight text-text-primary">{title}</div>
+      {hint && <div className="ml-auto text-[11px] text-text-muted">{hint}</div>}
+      {right}
+    </div>
+  );
+}
 
 interface CcusageStatsPanelProps {
   open: boolean;
@@ -863,36 +887,57 @@ function tooltipNumber(value: Record<string, unknown>, key: string): number {
 function KpiStrip({ summary }: { summary: CcusageSummary }) {
   const peak = getPeakDay(summary.daily);
   const peakShare = peak && summary.totalTokens > 0 ? (peak.totalTokens / summary.totalTokens) * 100 : 0;
-  const items = [
+  const items: { label: string; value: string; hint: string; icon: typeof Coins; accent: string }[] = [
     {
       label: "总 Token",
       value: formatCompactCount(summary.totalTokens),
       hint: `完整值 ${formatCount(summary.totalTokens)} · 输入 / 输出 / 缓存合计`,
+      icon: Layers,
+      accent: "var(--accent)",
     },
-    { label: "估算费用", value: formatCost(summary.totalCost), hint: "ccusage 本地估算" },
+    {
+      label: "估算费用",
+      value: formatCost(summary.totalCost),
+      hint: "ccusage 本地估算",
+      icon: Coins,
+      accent: "var(--warning)",
+    },
     {
       label: "最高使用日",
       value: peak ? formatDayFromStart(peak.dayStart) : "-",
       hint: peak ? `${formatCompactCount(peak.totalTokens)} Token · ${formatPercent(peakShare)}` : "暂无逐日数据",
+      icon: Flame,
+      accent: peakShare >= 40 ? "var(--danger)" : "var(--accent)",
     },
     {
       label: "模型 / 天数",
       value: `${formatCount(summary.modelCount)} / ${formatCount(summary.daily.length)}`,
       hint: "识别模型数 / 日报天数",
+      icon: CalendarClock,
+      accent: "var(--success)",
     },
   ];
 
   return (
-    <section className="rounded-2xl bg-bg-secondary px-4 py-3">
-      <div className="grid grid-cols-2 gap-y-3 lg:grid-cols-4">
-        {items.map((item, index) => (
-          <div key={item.label} className={`min-w-0 ${index > 0 ? "lg:border-l lg:border-border lg:pl-4" : ""}`}>
-            <div className="text-[11px] font-medium text-text-muted">{item.label}</div>
-            <div className="mt-1 truncate text-[22px] font-semibold tracking-tight text-text-primary">{item.value}</div>
+    <section className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <div key={item.label} className="min-w-0 rounded-2xl border border-border/60 bg-bg-secondary px-4 py-3.5">
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-flex h-6 w-6 items-center justify-center rounded-lg"
+                style={{ backgroundColor: `color-mix(in srgb, ${item.accent} 16%, transparent)`, color: item.accent }}
+              >
+                <Icon size={14} />
+              </span>
+              <div className="text-[11px] font-medium text-text-muted">{item.label}</div>
+            </div>
+            <div className="mt-2 truncate text-[24px] font-semibold tracking-tight text-text-primary">{item.value}</div>
             <div className="mt-1 truncate text-[11px] text-text-secondary" title={item.hint}>{item.hint}</div>
           </div>
-        ))}
-      </div>
+        );
+      })}
     </section>
   );
 }
@@ -910,16 +955,21 @@ function PeakDaySummaryCard({ summary }: { summary: CcusageSummary }) {
     : [];
 
   return (
-    <section className="rounded-xl bg-bg-secondary px-4 py-3">
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[13px] font-semibold text-text-primary">峰值日摘要</div>
+          <div className="inline-flex items-center gap-2 text-[13px] font-semibold text-text-primary">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-bg-tertiary text-accent">
+              <Flame size={14} />
+            </span>
+            峰值日摘要
+          </div>
           <div className="mt-1 text-[12px] text-text-muted">
             {peak ? `${peak.date} · 占当前窗口 ${formatPercent(peakShare)}` : "当前时间窗口暂无峰值日数据。"}
           </div>
         </div>
         {peak && (
-          <div className="rounded-full bg-bg-primary px-3 py-1 text-[11px] font-medium text-text-secondary">
+          <div className="rounded-full bg-bg-tertiary px-3 py-1 text-[11px] font-medium text-text-secondary">
             {peak.models.length > 0 ? `模型 ${formatCount(peak.models.length)}` : "模型未拆分"}
           </div>
         )}
@@ -928,7 +978,7 @@ function PeakDaySummaryCard({ summary }: { summary: CcusageSummary }) {
       {peak && (
         <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
           {metrics.map((item) => (
-            <div key={item.label} className="rounded-lg bg-bg-primary px-3 py-2">
+            <div key={item.label} className="rounded-xl bg-bg-primary px-3 py-2">
               <div className="text-[11px] text-text-muted">{item.label}</div>
               <div className="mt-1 text-[15px] font-semibold text-text-primary">{item.value}</div>
               <div className="mt-0.5 text-[10px] text-text-muted">{item.detail}</div>
@@ -942,42 +992,35 @@ function PeakDaySummaryCard({ summary }: { summary: CcusageSummary }) {
 
 function TokenCompositionStrip({ summary }: { summary: CcusageSummary }) {
   const parts = [
-    { key: "input", label: "输入", value: summary.inputTokens, color: "#2F8F62" },
-    { key: "output", label: "输出", value: summary.outputTokens, color: "#C46A2D" },
-    { key: "cacheCreation", label: "缓存写入", value: summary.cacheCreationTokens, color: "#6B5DD3" },
-    { key: "cacheRead", label: "缓存命中", value: summary.cacheReadTokens, color: "#2878B5" },
+    { key: "input", label: "输入", value: summary.inputTokens, color: SERIES_COLORS.input },
+    { key: "output", label: "输出", value: summary.outputTokens, color: SERIES_COLORS.output },
+    { key: "cacheCreation", label: "缓存写入", value: summary.cacheCreationTokens, color: SERIES_COLORS.cacheCreation },
+    { key: "cacheRead", label: "缓存命中", value: summary.cacheReadTokens, color: SERIES_COLORS.cacheRead },
   ];
   const total = Math.max(1, parts.reduce((sum, item) => sum + item.value, 0));
 
   return (
-    <section className="rounded-xl bg-bg-secondary px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="min-w-[118px]">
-          <div className="text-[12px] font-semibold text-text-primary">Token 构成</div>
-          <div className="mt-0.5 text-[11px] text-text-muted">输入 / 输出 / 缓存</div>
-        </div>
-        <div className="min-w-[220px] flex-1">
-          <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-container-highest">
-            {parts.map((item) => (
-              <div
-                key={item.key}
-                className="h-full"
-                style={{ width: `${(item.value / total) * 100}%`, backgroundColor: item.color }}
-                title={`${item.label} ${formatCount(item.value)}`}
-              />
-            ))}
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary px-4 py-3.5">
+      <SectionHeading icon={Layers} title="Token 构成" hint="输入 / 输出 / 缓存" />
+      <div className="flex h-2.5 overflow-hidden rounded-full bg-bg-tertiary">
+        {parts.map((item) => (
+          <div
+            key={item.key}
+            className="h-full"
+            style={{ width: `${(item.value / total) * 100}%`, backgroundColor: item.color }}
+            title={`${item.label} ${formatCount(item.value)}`}
+          />
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-text-secondary">
+        {parts.map((item) => (
+          <div key={item.key} className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
+            <span>{item.label}</span>
+            <span className="font-semibold text-text-primary">{formatCompactCount(item.value)}</span>
+            <span className="text-text-muted">{formatPercent((item.value / total) * 100)}</span>
           </div>
-        </div>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-text-secondary">
-          {parts.map((item) => (
-            <div key={item.key} className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
-              <span>{item.label}</span>
-              <span className="font-semibold text-text-primary">{formatCompactCount(item.value)}</span>
-              <span className="text-text-muted">{formatPercent((item.value / total) * 100)}</span>
-            </div>
-          ))}
-        </div>
+        ))}
       </div>
     </section>
   );
@@ -985,7 +1028,7 @@ function TokenCompositionStrip({ summary }: { summary: CcusageSummary }) {
 
 function ReportContextNote({ reportKind, sourceLabel, schemaLabel }: { reportKind: string; sourceLabel: string; schemaLabel: string }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-bg-secondary px-3 py-2 text-[11px] text-text-secondary">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-border/60 bg-bg-secondary px-3 py-2 text-[11px] text-text-secondary">
       <span className="inline-flex items-center gap-1 font-semibold text-text-primary">
         <Database size={13} />
         统计口径
@@ -1124,14 +1167,11 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
     return {
       backgroundColor: "transparent",
       animationDuration: 700,
-      color: ["#8B5CF6", "#22C55E", "#F97316", "#F59E0B"],
+      color: [ACCENT, SERIES_COLORS.input, SERIES_COLORS.output, SERIES_COLORS.cacheCreation],
       tooltip: {
         trigger: "axis",
         confine: true,
-        backgroundColor: "rgba(15, 23, 42, 0.94)",
-        borderColor: "rgba(148, 163, 184, 0.28)",
-        borderWidth: 1,
-        textStyle: { color: "#F8FAFC", fontSize: 12 },
+        ...CHART_TOOLTIP,
         formatter: (params: unknown) => {
           const rows = tooltipParamRows(params);
           const day = items[tooltipDataIndex(rows[0])];
@@ -1145,7 +1185,7 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
               return `<div style="display:flex;align-items:center;justify-content:space-between;gap:18px;line-height:22px;"><span style="display:inline-flex;align-items:center;gap:6px;text-align:left;">${marker}<span>${name}</span></span><strong style="min-width:88px;text-align:right;">${display}</strong></div>`;
             })
             .join("");
-          return `<div style="min-width:190px;"><div style="font-weight:700;margin-bottom:6px;">${day.date}${peak?.date === day.date ? ` · ${peakLabel}` : ""}</div>${seriesRows}<div style="margin-top:6px;color:#CBD5E1;">模型：${day.models.length || "-"}</div></div>`;
+          return `<div style="min-width:190px;"><div style="font-weight:700;margin-bottom:6px;">${day.date}${peak?.date === day.date ? ` · ${peakLabel}` : ""}</div>${seriesRows}<div style="margin-top:6px;color:var(--text-muted);">模型：${day.models.length || "-"}</div></div>`;
         },
       },
       legend: {
@@ -1199,26 +1239,26 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           symbol: "circle",
           symbolSize: 5,
           lineStyle: { width: 3 },
-          areaStyle: { color: "rgba(139, 92, 246, 0.18)" },
+          areaStyle: { color: `color-mix(in srgb, ${ACCENT} 16%, transparent)` },
           data: items.map((item) =>
             peak?.date === item.date
-              ? { value: item.totalTokens, symbolSize: 12, itemStyle: { color: "#F97316", borderColor: "#FFFFFF", borderWidth: 2 } }
+              ? { value: item.totalTokens, symbolSize: 12, itemStyle: { color: PEAK, borderColor: "var(--bg-secondary)", borderWidth: 2 } }
               : item.totalTokens
           ),
           markPoint: peak
             ? {
                 symbol: "pin",
                 symbolSize: 56,
-                itemStyle: { color: "#F97316" },
-                label: { color: "#FFFFFF", fontSize: 10, lineHeight: 12, fontWeight: 700, formatter: "峰值\n{c}" },
+                itemStyle: { color: PEAK },
+                label: { color: "var(--bg-secondary)", fontSize: 10, lineHeight: 12, fontWeight: 700, formatter: "峰值\n{c}" },
                 data: [{ name: peakLabel, coord: [peak.date, peak.totalTokens], value: formatCompactCount(peak.totalTokens) }],
               }
             : undefined,
           markLine: peak
             ? {
                 symbol: "none",
-                lineStyle: { color: "#F97316", type: "dashed", width: 1.4 },
-                label: { color: "#F97316", formatter: peakLabel },
+                lineStyle: { color: PEAK, type: "dashed", width: 1.4 },
+                label: { color: PEAK, formatter: peakLabel },
                 data: [{ xAxis: peak.date }],
               }
             : undefined,
@@ -1244,7 +1284,7 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           type: "bar",
           yAxisIndex: 1,
           barMaxWidth: 12,
-          itemStyle: { color: "rgba(245, 158, 11, 0.34)", borderRadius: [5, 5, 0, 0] },
+          itemStyle: { color: COST_FILL, borderRadius: [5, 5, 0, 0] },
           data: items.map((item) => Number(item.totalCost.toFixed(2))),
         },
       ],
@@ -1252,19 +1292,19 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
   }, [items, peak, granularity, peakLabel]);
 
   return (
-    <section className="rounded-2xl bg-bg-secondary p-4 lg:p-5">
-      <div className="mb-3 flex flex-wrap items-start gap-3">
-        <div>
-          <div className="text-[15px] font-semibold text-text-primary">按{granularity} Token / 费用趋势</div>
-          <div className="mt-1 text-[11px] text-text-muted">折线展示 Token 主趋势，费用以弱柱状辅助对照。</div>
-        </div>
-        <div className="ml-auto rounded-full bg-bg-primary px-3 py-1 text-[11px] font-medium text-text-secondary">
-          {peak ? `${peakLabel}：${peak.date} · ${formatCount(peak.totalTokens)} Token` : "暂无逐日数据"}
-        </div>
-      </div>
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4 lg:p-5">
+      <SectionHeading
+        icon={LineChart}
+        title={`按${granularity} Token / 费用趋势`}
+        right={
+          <div className="ml-auto rounded-full bg-bg-tertiary px-3 py-1 text-[11px] font-medium text-text-secondary">
+            {peak ? `${peakLabel}：${peak.date} · ${formatCount(peak.totalTokens)} Token` : "暂无逐日数据"}
+          </div>
+        }
+      />
 
       {!hasItems ? (
-        <div className="rounded-lg bg-bg-primary py-8 text-center text-[12px] text-text-muted">
+        <div className="rounded-xl bg-bg-primary py-8 text-center text-[12px] text-text-muted">
           当前时间窗口没有可绘制的 Token / 费用数据。
         </div>
       ) : (
@@ -1275,13 +1315,13 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
 }
 
 function heatmapCellColor(value: number, maxValue: number): string {
-  if (value <= 0 || maxValue <= 0) return "rgba(148, 163, 184, 0.18)";
+  if (value <= 0 || maxValue <= 0) return "color-mix(in srgb, var(--text-muted) 12%, transparent)";
   const ratio = value / maxValue;
-  if (ratio < 0.05) return "#14532D";
-  if (ratio < 0.25) return "#166534";
-  if (ratio < 0.5) return "#15803D";
-  if (ratio < 0.75) return "#22C55E";
-  return "#4ADE80";
+  if (ratio < 0.05) return "color-mix(in srgb, var(--accent) 18%, transparent)";
+  if (ratio < 0.25) return "color-mix(in srgb, var(--accent) 36%, transparent)";
+  if (ratio < 0.5) return "color-mix(in srgb, var(--accent) 56%, transparent)";
+  if (ratio < 0.75) return "color-mix(in srgb, var(--accent) 78%, transparent)";
+  return "var(--accent)";
 }
 
 function DailyUsageHeatmap({ items, granularity }: { items: CcusageDailyItem[]; granularity: string }) {
@@ -1291,32 +1331,30 @@ function DailyUsageHeatmap({ items, granularity }: { items: CcusageDailyItem[]; 
   const columns = Math.max(1, Math.min(items.length, granularity === "月" ? 12 : 24));
 
   return (
-    <section className="rounded-xl bg-bg-secondary p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="text-[13px] font-semibold text-text-primary">按{granularity} Token 热点图</div>
-        <div className="ml-auto text-[11px] text-text-secondary">
-          {peak ? `最高：${peak.date} · ${formatCount(peak.totalTokens)} Token` : "暂无数据"}
-        </div>
-      </div>
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
+      <SectionHeading
+        icon={Grid3x3}
+        title={`按${granularity} Token 热点图`}
+        hint={peak ? `最高：${peak.date} · ${formatCount(peak.totalTokens)} Token` : "暂无数据"}
+      />
 
       {!hasItems ? (
-        <div className="rounded-lg bg-bg-primary py-8 text-center text-[12px] text-text-muted">
+        <div className="rounded-xl bg-bg-primary py-8 text-center text-[12px] text-text-muted">
           当前时间窗口没有可绘制的热点数据。
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg bg-bg-primary p-3">
+          <div className="overflow-x-auto rounded-xl bg-bg-primary p-3">
             <div className="grid w-max gap-1" style={{ gridTemplateColumns: `repeat(${columns}, 14px)` }}>
               {items.map((item) => {
                 const isPeak = peak?.date === item.date;
                 return (
                   <div
                     key={item.date}
-                    className="h-[14px] w-[14px] rounded-[3px] border"
+                    className="h-[14px] w-[14px] rounded-[3px]"
                     style={{
                       backgroundColor: heatmapCellColor(item.totalTokens, maxTokens),
-                      borderColor: isPeak ? "#F97316" : "rgba(0, 0, 0, 0.10)",
-                      boxShadow: isPeak ? "0 0 0 2px rgba(249, 115, 22, 0.32)" : "none",
+                      boxShadow: isPeak ? `0 0 0 2px color-mix(in srgb, ${PEAK} 55%, transparent)` : "none",
                     }}
                     title={`${item.date} · ${formatCount(item.totalTokens)} Token · ${formatCost(item.totalCost)}${isPeak ? " · 峰值" : ""}`}
                   />
@@ -1326,7 +1364,7 @@ function DailyUsageHeatmap({ items, granularity }: { items: CcusageDailyItem[]; 
           </div>
           <div className="mt-2 flex items-center justify-between text-[10px] text-text-muted">
             <span>低使用</span>
-            <span>参考 GitHub contribution graph：绿色越亮代表 Token 越高</span>
+            <span>颜色越深代表 Token 越高</span>
             <span>高使用</span>
           </div>
         </>
@@ -1348,9 +1386,7 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
         trigger: "axis",
         axisPointer: { type: "shadow" },
         confine: true,
-        backgroundColor: "rgba(15, 23, 42, 0.94)",
-        borderColor: "rgba(148, 163, 184, 0.28)",
-        textStyle: { color: "#F8FAFC", fontSize: 12 },
+        ...CHART_TOOLTIP,
         formatter: (params: unknown) => {
           const row = tooltipParamRows(params)[0];
           const model = models[tooltipDataIndex(row)];
@@ -1382,7 +1418,7 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
           name: "Token",
           type: "bar",
           barWidth: 14,
-          itemStyle: { color: "#8B5CF6", borderRadius: [0, 7, 7, 0] },
+          itemStyle: { color: ACCENT, borderRadius: [0, 7, 7, 0] },
           label: {
             show: true,
             position: "right",
@@ -1392,7 +1428,7 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
           },
           data: models.map((item, index) => ({
             value: item.totalTokens,
-            itemStyle: { color: index === models.length - 1 ? "#F97316" : "#8B5CF6" },
+            itemStyle: { color: index === models.length - 1 ? PEAK : ACCENT },
           })),
         },
       ],
@@ -1400,16 +1436,15 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
   }, [models]);
 
   return (
-    <section className="rounded-xl bg-bg-secondary p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="text-[13px] font-semibold text-text-primary">模型用量排行</div>
-        <div className="ml-auto text-[11px] text-text-secondary">
-          {summary.hasModelBreakdown ? "Top models by Token" : summary.modelNames.length > 0 ? "仅识别到模型名" : "暂无模型数据"}
-        </div>
-      </div>
+    <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
+      <SectionHeading
+        icon={BarChart3}
+        title="模型用量排行"
+        hint={summary.hasModelBreakdown ? "Top models by Token" : summary.modelNames.length > 0 ? "仅识别到模型名" : "暂无模型数据"}
+      />
 
       {models.length === 0 ? (
-        <div className="rounded-lg bg-bg-primary py-8 text-center text-[12px] text-text-muted">
+        <div className="rounded-xl bg-bg-primary py-8 text-center text-[12px] text-text-muted">
           ccusage 输出中没有可用于排行的模型 Token 数据。
         </div>
       ) : (
@@ -1421,7 +1456,7 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
 
 function PayloadOverviewFooter({ summary }: { summary: CcusageSummary }) {
   return (
-    <section className="rounded-lg bg-bg-secondary px-3 py-2 text-[11px] text-text-muted">
+    <section className="rounded-xl border border-border/60 bg-bg-secondary px-3 py-2 text-[11px] text-text-muted">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span className="font-semibold text-text-secondary">数据结构摘要</span>
         <span>结构：{summary.schemaLabel}</span>
@@ -1432,7 +1467,7 @@ function PayloadOverviewFooter({ summary }: { summary: CcusageSummary }) {
       {summary.payloadFields.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {summary.payloadFields.map((field) => (
-            <span key={field.key} className="max-w-[220px] truncate rounded bg-bg-primary px-2 py-1" title={`${field.key}: ${field.description}`}>
+            <span key={field.key} className="max-w-[220px] truncate rounded-md bg-bg-primary px-2 py-1" title={`${field.key}: ${field.description}`}>
               <span className="font-medium text-text-secondary">{field.key}</span> · {field.description}
             </span>
           ))}

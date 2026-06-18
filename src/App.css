@@ -626,6 +626,16 @@ samp,
   border-radius: 12px;
 }
 
+/* Mantine Card 默认背景（--mantine-color-body）在深色下偏灰，与主题 token 割裂。
+   显式标注 token 背景类的 Card 强制跟随主题表面色：双类选择器特异性高于
+   Mantine 根样式，且不在 @layer 内，可稳定覆盖。 */
+.mantine-Card-root.bg-surface-container-lowest {
+  background-color: var(--surface-container-lowest);
+}
+.mantine-Card-root.bg-surface-container-low {
+  background-color: var(--surface-container-low);
+}
+
 .ui-glass {
   background-color: color-mix(in srgb, var(--surface) 80%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 24%, transparent);
@@ -722,12 +732,9 @@ samp,
   content: "";
   position: absolute;
   inset: 0 0 auto;
-  height: 110px;
+  height: 72px;
   pointer-events: none;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--primary) 10%, transparent), transparent 78%),
-    radial-gradient(60% 120% at 0% 0%, color-mix(in srgb, var(--primary) 12%, transparent), transparent 72%),
-    radial-gradient(48% 96% at 100% 0%, color-mix(in srgb, var(--warning) 12%, transparent), transparent 74%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 5%, transparent), transparent 88%);
   z-index: -1;
 }
 
@@ -741,10 +748,9 @@ samp,
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 999px;
-  background-image: linear-gradient(135deg, var(--primary-gradient-start), var(--primary-gradient-end));
-  color: var(--on-primary);
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--primary) 20%, transparent);
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
 }
 
 .ui-stats-metric-card {
@@ -990,7 +996,7 @@ samp,
 }
 
 .ui-tree-node {
-  color: var(--on-surface-variant);
+  color: var(--text-secondary);
   transition:
     background-color var(--animate-duration-fast),
     color var(--animate-duration-fast),

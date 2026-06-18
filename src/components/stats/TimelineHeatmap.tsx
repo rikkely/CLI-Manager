@@ -47,7 +47,6 @@ function TimelineHeatmapImpl({
   granularity = "day",
 }: TimelineHeatmapProps) {
   const [hoverDayStart, setHoverDayStart] = useState<number | null>(null);
-  const title = granularity === "hour" ? "时段热力图" : "日活热力图（C6）";
   const gridClass =
     granularity === "hour"
       ? "grid grid-cols-12 gap-1 min-w-[214px]"
@@ -82,20 +81,16 @@ function TimelineHeatmapImpl({
 
   if (days.length === 0) {
     return (
-      <div className="rounded-md border border-border bg-bg-secondary p-3">
-        <div className="mb-2 text-xs font-semibold text-text-primary">{title}</div>
-        <div className="py-8 text-center text-[11px] text-text-muted">
-          当前过滤条件下暂无热力图数据
-        </div>
+      <div className="py-8 text-center text-[11px] text-text-muted">
+        当前过滤条件下暂无热力图数据
       </div>
     );
   }
 
   return (
-    <div className="rounded-md border border-border bg-bg-secondary p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <div className="text-xs font-semibold text-text-primary">{title}</div>
-        <div className="ml-auto text-[11px] text-text-secondary">
+    <div>
+      <div className="mb-2 flex flex-wrap items-center justify-end gap-2">
+        <div className="text-[11px] text-text-secondary">
           {activeDay
             ? `${formatBucket(activeDay.day_start_utc, granularity)} · ${activeDay.sessions} 会话 · ${activeDay.messages} 消息`
             : "-"}
