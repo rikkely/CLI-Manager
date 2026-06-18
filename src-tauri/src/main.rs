@@ -2,5 +2,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // hook 子命令：在初始化 Tauri runtime 之前拦截并退出，避免每次 hook 触发都冷启动 WebView。
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("__hook") {
+        let source = arg_value(&args, "--source").unwrap_or_else(|| "claude".to_string());
+        let event = arg_value(&args, "--event").unwrap_or_else(|| "Notification".to_string());
+        cli_manager_lib::hook_client::run_and_exit(&source, &event);
+    }
+
     cli_manager_lib::run()
+}
+
+fn arg_value(args: &[String], key: &str) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == key)
+        .and_then(|index| args.get(index + 1))
+        .cloned()
 }

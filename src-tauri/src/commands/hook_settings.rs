@@ -15,300 +15,9 @@ const CLAUDE_SETTINGS_FILE_NAME: &str = "settings.json";
 const CODEX_HOOKS_FILE_NAME: &str = "hooks.json";
 const CODEX_CONFIG_FILE_NAME: &str = "config.toml";
 
-const CLAUDE_APPROVAL_SCRIPT: &str = r#"param(
-    [ValidateSet("SessionStart", "UserPromptSubmit", "Notification")]
-    [string]$Event = "Notification"
-)
-
-$ErrorActionPreference = "Stop"
-
-try {
-    $tabId = $env:CLI_MANAGER_TAB_ID
-    $port = $env:CLI_MANAGER_NOTIFY_PORT
-    $token = $env:CLI_MANAGER_NOTIFY_TOKEN
-
-    if ([string]::IsNullOrWhiteSpace($tabId) -or [string]::IsNullOrWhiteSpace($port) -or [string]::IsNullOrWhiteSpace($token)) {
-        exit 0
-    }
-
-    $stdin = [Console]::In.ReadToEnd()
-    $hookInput = $null
-    if (-not [string]::IsNullOrWhiteSpace($stdin)) {
-        try {
-            $hookInput = $stdin | ConvertFrom-Json
-        } catch {
-            $hookInput = $null
-        }
-    }
-
-    $message = $null
-    if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "message") {
-        $message = [string]$hookInput.message
-    } elseif ($hookInput -and $hookInput.PSObject.Properties.Name -contains "prompt") {
-        $message = [string]$hookInput.prompt
-    } elseif ($hookInput -and $hookInput.PSObject.Properties.Name -contains "notification") {
-        $message = [string]$hookInput.notification
-    }
-
-    $title = switch ($Event) {
-        "SessionStart" { "Claude Code session started" }
-        "UserPromptSubmit" { "Claude Code running" }
-        default { "Claude Code needs attention" }
-    }
-
-    $payload = @{
-        tabId = $tabId
-        source = "claude"
-        event = $Event
-        title = $title
-        message = $message
-        sessionId = if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "session_id") { [string]$hookInput.session_id } else { $null }
-        cwd = (Get-Location).Path
-        timestamp = (Get-Date).ToUniversalTime().ToString("o")
-    }
-
-    $body = $payload | ConvertTo-Json -Depth 5 -Compress
-    $uri = "http://127.0.0.1:$port/api/claude-hook"
-    $sent = $false
-    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-    if ($curl) {
-        $body | & $curl.Source -sf -m 2 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data-binary "@-" $uri | Out-Null
-        if ($LASTEXITCODE -eq 0) { $sent = $true }
-    }
-    if (-not $sent) {
-        Invoke-RestMethod `
-            -Method Post `
-            -Uri $uri `
-            -Headers @{ Authorization = "Bearer $token" } `
-            -ContentType "application/json" `
-            -Body $body `
-            -TimeoutSec 2 `
-            | Out-Null
-    }
-} catch {
-    exit 0
-}
-
-exit 0
-"#;
-
-const CLAUDE_FINISHED_SCRIPT: &str = r#"param(
-    [ValidateSet("Stop", "StopFailure")]
-    [string]$Event = "Stop"
-)
-
-$ErrorActionPreference = "Stop"
-
-try {
-    $tabId = $env:CLI_MANAGER_TAB_ID
-    $port = $env:CLI_MANAGER_NOTIFY_PORT
-    $token = $env:CLI_MANAGER_NOTIFY_TOKEN
-
-    if ([string]::IsNullOrWhiteSpace($tabId) -or [string]::IsNullOrWhiteSpace($port) -or [string]::IsNullOrWhiteSpace($token)) {
-        exit 0
-    }
-
-    $stdin = [Console]::In.ReadToEnd()
-    $hookInput = $null
-    if (-not [string]::IsNullOrWhiteSpace($stdin)) {
-        try {
-            $hookInput = $stdin | ConvertFrom-Json
-        } catch {
-            $hookInput = $null
-        }
-    }
-
-    $message = $null
-    if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "message") {
-        $message = [string]$hookInput.message
-    } elseif ($hookInput -and $hookInput.PSObject.Properties.Name -contains "notification") {
-        $message = [string]$hookInput.notification
-    }
-
-    $title = switch ($Event) {
-        "StopFailure" { "Claude Code failed" }
-        default { "Claude Code done" }
-    }
-
-    $payload = @{
-        tabId = $tabId
-        source = "claude"
-        event = $Event
-        title = $title
-        message = $message
-        sessionId = if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "session_id") { [string]$hookInput.session_id } else { $null }
-        cwd = (Get-Location).Path
-        timestamp = (Get-Date).ToUniversalTime().ToString("o")
-    }
-
-    $body = $payload | ConvertTo-Json -Depth 5 -Compress
-    $uri = "http://127.0.0.1:$port/api/claude-hook"
-    $sent = $false
-    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-    if ($curl) {
-        $body | & $curl.Source -sf -m 2 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data-binary "@-" $uri | Out-Null
-        if ($LASTEXITCODE -eq 0) { $sent = $true }
-    }
-    if (-not $sent) {
-        Invoke-RestMethod `
-            -Method Post `
-            -Uri $uri `
-            -Headers @{ Authorization = "Bearer $token" } `
-            -ContentType "application/json" `
-            -Body $body `
-            -TimeoutSec 2 `
-            | Out-Null
-    }
-} catch {
-    exit 0
-}
-
-exit 0
-"#;
-
-const CODEX_ATTENTION_SCRIPT: &str = r#"param(
-    [ValidateSet("SessionStart", "UserPromptSubmit", "PermissionRequest")]
-    [string]$Event = "PermissionRequest"
-)
-
-$ErrorActionPreference = "Stop"
-
-try {
-    $tabId = $env:CLI_MANAGER_TAB_ID
-    $port = $env:CLI_MANAGER_NOTIFY_PORT
-    $token = $env:CLI_MANAGER_NOTIFY_TOKEN
-
-    if ([string]::IsNullOrWhiteSpace($tabId) -or [string]::IsNullOrWhiteSpace($port) -or [string]::IsNullOrWhiteSpace($token)) {
-        exit 0
-    }
-
-    $stdin = [Console]::In.ReadToEnd()
-    $hookInput = $null
-    if (-not [string]::IsNullOrWhiteSpace($stdin)) {
-        try {
-            $hookInput = $stdin | ConvertFrom-Json
-        } catch {
-            $hookInput = $null
-        }
-    }
-
-    $message = $null
-    if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "message") {
-        $message = [string]$hookInput.message
-    } elseif ($hookInput -and $hookInput.PSObject.Properties.Name -contains "prompt") {
-        $message = [string]$hookInput.prompt
-    } elseif ($hookInput -and $hookInput.PSObject.Properties.Name -contains "reason") {
-        $message = [string]$hookInput.reason
-    }
-
-    $title = switch ($Event) {
-        "SessionStart" { "Codex CLI session started" }
-        "UserPromptSubmit" { "Codex CLI running" }
-        default { "Codex CLI needs attention" }
-    }
-
-    $payload = @{
-        tabId = $tabId
-        source = "codex"
-        event = $Event
-        title = $title
-        message = $message
-        sessionId = if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "session_id") { [string]$hookInput.session_id } else { $null }
-        cwd = (Get-Location).Path
-        timestamp = (Get-Date).ToUniversalTime().ToString("o")
-    }
-
-    $body = $payload | ConvertTo-Json -Depth 5 -Compress
-    $uri = "http://127.0.0.1:$port/api/claude-hook"
-    $sent = $false
-    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-    if ($curl) {
-        $body | & $curl.Source -sf -m 2 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data-binary "@-" $uri | Out-Null
-        if ($LASTEXITCODE -eq 0) { $sent = $true }
-    }
-    if (-not $sent) {
-        Invoke-RestMethod `
-            -Method Post `
-            -Uri $uri `
-            -Headers @{ Authorization = "Bearer $token" } `
-            -ContentType "application/json" `
-            -Body $body `
-            -TimeoutSec 2 `
-            | Out-Null
-    }
-} catch {
-    exit 0
-}
-
-exit 0
-"#;
-
-const CODEX_FINISHED_SCRIPT: &str = r#"param(
-    [ValidateSet("Stop")]
-    [string]$Event = "Stop"
-)
-
-$ErrorActionPreference = "Stop"
-
-try {
-    $tabId = $env:CLI_MANAGER_TAB_ID
-    $port = $env:CLI_MANAGER_NOTIFY_PORT
-    $token = $env:CLI_MANAGER_NOTIFY_TOKEN
-
-    if ([string]::IsNullOrWhiteSpace($tabId) -or [string]::IsNullOrWhiteSpace($port) -or [string]::IsNullOrWhiteSpace($token)) {
-        exit 0
-    }
-
-    $stdin = [Console]::In.ReadToEnd()
-    $hookInput = $null
-    if (-not [string]::IsNullOrWhiteSpace($stdin)) {
-        try {
-            $hookInput = $stdin | ConvertFrom-Json
-        } catch {
-            $hookInput = $null
-        }
-    }
-
-    $message = $null
-    if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "message") {
-        $message = [string]$hookInput.message
-    }
-
-    $payload = @{
-        tabId = $tabId
-        source = "codex"
-        event = $Event
-        title = "Codex CLI done"
-        message = $message
-        sessionId = if ($hookInput -and $hookInput.PSObject.Properties.Name -contains "session_id") { [string]$hookInput.session_id } else { $null }
-        cwd = (Get-Location).Path
-        timestamp = (Get-Date).ToUniversalTime().ToString("o")
-    }
-
-    $body = $payload | ConvertTo-Json -Depth 5 -Compress
-    $uri = "http://127.0.0.1:$port/api/claude-hook"
-    $sent = $false
-    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-    if ($curl) {
-        $body | & $curl.Source -sf -m 2 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data-binary "@-" $uri | Out-Null
-        if ($LASTEXITCODE -eq 0) { $sent = $true }
-    }
-    if (-not $sent) {
-        Invoke-RestMethod `
-            -Method Post `
-            -Uri $uri `
-            -Headers @{ Authorization = "Bearer $token" } `
-            -ContentType "application/json" `
-            -Body $body `
-            -TimeoutSec 2 `
-            | Out-Null
-    }
-} catch {
-    exit 0
-}
-
-exit 0
-"#;
+const HOOK_COMMAND_MARKER: &str = "__hook";
+const CLAUDE_LEGACY_SCRIPTS: [&str; 2] = [CLAUDE_APPROVAL_SCRIPT_NAME, CLAUDE_FINISHED_SCRIPT_NAME];
+const CODEX_LEGACY_SCRIPTS: [&str; 2] = [CODEX_ATTENTION_SCRIPT_NAME, CODEX_FINISHED_SCRIPT_NAME];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -433,42 +142,27 @@ pub async fn hook_settings_select_dir(
 }
 
 fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
-    let hooks_dir = claude_dir.join("hooks");
-    fs::create_dir_all(&hooks_dir).map_err(|e| format!("创建 hooks 目录失败: {e}"))?;
-    fs::write(
-        hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME),
-        CLAUDE_APPROVAL_SCRIPT,
-    )
-    .map_err(|e| format!("写入 approval hook 脚本失败: {e}"))?;
-    fs::write(
-        hooks_dir.join(CLAUDE_FINISHED_SCRIPT_NAME),
-        CLAUDE_FINISHED_SCRIPT,
-    )
-    .map_err(|e| format!("写入 finished hook 脚本失败: {e}"))?;
-
+    let exe = cli_manager_exe()?;
     let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let mut settings = read_json(&settings_path)?;
     ensure_root_object(&settings, "settings.json")?;
-    // 先清掉旧版本注册的条目（命令串/matcher 可能已变化），保证安装即升级
+    // 先清掉旧版本注册的条目（含历史 .ps1 命令与本应用 __hook 命令），保证安装即升级
     remove_hook_commands(
         &mut settings,
         &["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure"],
-        &[CLAUDE_APPROVAL_SCRIPT_NAME, CLAUDE_FINISHED_SCRIPT_NAME],
+        &CLAUDE_LEGACY_SCRIPTS,
     );
     // SessionStart：会话启动/恢复即回传 sessionId，绑定终端 Tab（不改 Tab 状态），
     // 让实时统计面板无需先发指令即可填充。空 matcher 匹配全部 source。
     add_hook_command(
         &mut settings,
         "SessionStart",
-        build_command(&hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME), "SessionStart"),
+        build_command(&exe, "claude", "SessionStart"),
     );
     add_hook_command(
         &mut settings,
         "UserPromptSubmit",
-        build_command(
-            &hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME),
-            "UserPromptSubmit",
-        ),
+        build_command(&exe, "claude", "UserPromptSubmit"),
     );
     // 只订阅需要用户介入的通知类型：permission_prompt（等待审批）、
     // idle_prompt（等待输入）；auth_success 等不该把 Tab 置为 attention
@@ -476,25 +170,21 @@ fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
         &mut settings,
         "Notification",
         "permission_prompt|idle_prompt",
-        build_command(&hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME), "Notification"),
+        build_command(&exe, "claude", "Notification"),
     );
-    add_hook_command(
-        &mut settings,
-        "Stop",
-        build_command(&hooks_dir.join(CLAUDE_FINISHED_SCRIPT_NAME), "Stop"),
-    );
+    add_hook_command(&mut settings, "Stop", build_command(&exe, "claude", "Stop"));
     add_hook_command(
         &mut settings,
         "StopFailure",
-        build_command(&hooks_dir.join(CLAUDE_FINISHED_SCRIPT_NAME), "StopFailure"),
+        build_command(&exe, "claude", "StopFailure"),
     );
+    // 清理历史 .ps1 脚本文件（若存在），新方案不再依赖脚本文件
+    cleanup_legacy_scripts(&claude_dir.join("hooks"), &CLAUDE_LEGACY_SCRIPTS);
     write_json(&settings_path, &settings)
 }
 
 fn uninstall_claude_hooks(claude_dir: &Path) -> Result<(), String> {
-    let hooks_dir = claude_dir.join("hooks");
-    remove_file_if_exists(&hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME))?;
-    remove_file_if_exists(&hooks_dir.join(CLAUDE_FINISHED_SCRIPT_NAME))?;
+    cleanup_legacy_scripts(&claude_dir.join("hooks"), &CLAUDE_LEGACY_SCRIPTS);
 
     let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let mut settings = read_json(&settings_path)?;
@@ -502,62 +192,42 @@ fn uninstall_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     remove_hook_commands(
         &mut settings,
         &["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure"],
-        &[CLAUDE_APPROVAL_SCRIPT_NAME, CLAUDE_FINISHED_SCRIPT_NAME],
+        &CLAUDE_LEGACY_SCRIPTS,
     );
     write_json(&settings_path, &settings)
 }
 
 fn install_codex_hooks(codex_dir: &Path) -> Result<(), String> {
-    let hooks_dir = codex_dir.join("hooks");
-    fs::create_dir_all(&hooks_dir).map_err(|e| format!("创建 Codex hooks 目录失败: {e}"))?;
-    fs::write(
-        hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME),
-        CODEX_ATTENTION_SCRIPT,
-    )
-    .map_err(|e| format!("写入 Codex attention hook 脚本失败: {e}"))?;
-    fs::write(
-        hooks_dir.join(CODEX_FINISHED_SCRIPT_NAME),
-        CODEX_FINISHED_SCRIPT,
-    )
-    .map_err(|e| format!("写入 Codex finished hook 脚本失败: {e}"))?;
-
+    let exe = cli_manager_exe()?;
     let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
     let mut settings = read_json(&hooks_path)?;
     ensure_root_object(&settings, "hooks.json")?;
-    // 先清掉旧版本注册的条目，保证安装即升级
+    // 先清掉旧版本注册的条目（含历史 .ps1 命令与本应用 __hook 命令），保证安装即升级
     remove_hook_commands(
         &mut settings,
         &["SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"],
-        &[CODEX_ATTENTION_SCRIPT_NAME, CODEX_FINISHED_SCRIPT_NAME],
+        &CODEX_LEGACY_SCRIPTS,
     );
     // SessionStart：会话启动/恢复即回传 sessionId 绑定终端 Tab（不改 Tab 状态）
     add_hook_command(
         &mut settings,
         "SessionStart",
-        build_command(&hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME), "SessionStart"),
+        build_command(&exe, "codex", "SessionStart"),
     );
     add_hook_command(
         &mut settings,
         "UserPromptSubmit",
-        build_command(
-            &hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME),
-            "UserPromptSubmit",
-        ),
+        build_command(&exe, "codex", "UserPromptSubmit"),
     );
     add_hook_command(
         &mut settings,
         "PermissionRequest",
-        build_command(
-            &hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME),
-            "PermissionRequest",
-        ),
+        build_command(&exe, "codex", "PermissionRequest"),
     );
-    add_hook_command(
-        &mut settings,
-        "Stop",
-        build_command(&hooks_dir.join(CODEX_FINISHED_SCRIPT_NAME), "Stop"),
-    );
+    add_hook_command(&mut settings, "Stop", build_command(&exe, "codex", "Stop"));
     ensure_codex_hooks_feature(codex_dir)?;
+    // 清理历史 .ps1 脚本文件（若存在），新方案不再依赖脚本文件
+    cleanup_legacy_scripts(&codex_dir.join("hooks"), &CODEX_LEGACY_SCRIPTS);
     write_json(&hooks_path, &settings)
 }
 
@@ -637,9 +307,7 @@ fn codex_hooks_feature_installed(config_path: &Path) -> Result<bool, String> {
 }
 
 fn uninstall_codex_hooks(codex_dir: &Path) -> Result<(), String> {
-    let hooks_dir = codex_dir.join("hooks");
-    remove_file_if_exists(&hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME))?;
-    remove_file_if_exists(&hooks_dir.join(CODEX_FINISHED_SCRIPT_NAME))?;
+    cleanup_legacy_scripts(&codex_dir.join("hooks"), &CODEX_LEGACY_SCRIPTS);
 
     let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
     let mut settings = read_json(&hooks_path)?;
@@ -647,7 +315,7 @@ fn uninstall_codex_hooks(codex_dir: &Path) -> Result<(), String> {
     remove_hook_commands(
         &mut settings,
         &["SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"],
-        &[CODEX_ATTENTION_SCRIPT_NAME, CODEX_FINISHED_SCRIPT_NAME],
+        &CODEX_LEGACY_SCRIPTS,
     );
     write_json(&hooks_path, &settings)
 }
@@ -728,44 +396,22 @@ fn build_claude_status(claude_dir: Option<PathBuf>) -> Result<ToolHookSettingsSt
 
     let hooks_dir = claude_dir.join("hooks");
     let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
-    let session_start_command = build_command(
-        &hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME),
-        "SessionStart",
-    );
-    let running_command = build_command(
-        &hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME),
-        "UserPromptSubmit",
-    );
-    let attention_command =
-        build_command(&hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME), "Notification");
-    let stop_command = build_command(&hooks_dir.join(CLAUDE_FINISHED_SCRIPT_NAME), "Stop");
-    let failure_command =
-        build_command(&hooks_dir.join(CLAUDE_FINISHED_SCRIPT_NAME), "StopFailure");
+    // 新方案不再有脚本文件，可执行体可解析即视为"脚本就绪"，命令是否注册才是关键。
+    let exe = cli_manager_exe().ok();
     let settings = read_json_if_exists(&settings_path)?;
+    let registered = |event: &str| {
+        exe.as_deref().is_some_and(|exe| {
+            exact_command_registered(&settings, event, &build_command(exe, "claude", event))
+        })
+    };
     let checks = ToolChecks {
-        attention_script_installed: hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME).is_file(),
-        finished_script_installed: hooks_dir.join(CLAUDE_FINISHED_SCRIPT_NAME).is_file(),
-        session_start_hook_installed: exact_command_registered(
-            &settings,
-            "SessionStart",
-            &session_start_command,
-        ),
-        running_hook_installed: exact_command_registered(
-            &settings,
-            "UserPromptSubmit",
-            &running_command,
-        ),
-        attention_hook_installed: exact_command_registered(
-            &settings,
-            "Notification",
-            &attention_command,
-        ),
-        stop_hook_installed: exact_command_registered(&settings, "Stop", &stop_command),
-        failure_hook_installed: exact_command_registered(
-            &settings,
-            "StopFailure",
-            &failure_command,
-        ),
+        attention_script_installed: exe.is_some(),
+        finished_script_installed: exe.is_some(),
+        session_start_hook_installed: registered("SessionStart"),
+        running_hook_installed: registered("UserPromptSubmit"),
+        attention_hook_installed: registered("Notification"),
+        stop_hook_installed: registered("Stop"),
+        failure_hook_installed: registered("StopFailure"),
         failure_hook_required: true,
         hooks_feature_installed: true,
     };
@@ -787,39 +433,20 @@ fn build_codex_status(codex_dir: Option<PathBuf>) -> Result<ToolHookSettingsStat
     let hooks_dir = codex_dir.join("hooks");
     let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
     let config_path = codex_dir.join(CODEX_CONFIG_FILE_NAME);
-    let session_start_command = build_command(
-        &hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME),
-        "SessionStart",
-    );
-    let running_command = build_command(
-        &hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME),
-        "UserPromptSubmit",
-    );
-    let attention_command = build_command(
-        &hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME),
-        "PermissionRequest",
-    );
-    let stop_command = build_command(&hooks_dir.join(CODEX_FINISHED_SCRIPT_NAME), "Stop");
+    let exe = cli_manager_exe().ok();
     let settings = read_json_if_exists(&hooks_path)?;
+    let registered = |event: &str| {
+        exe.as_deref().is_some_and(|exe| {
+            exact_command_registered(&settings, event, &build_command(exe, "codex", event))
+        })
+    };
     let checks = ToolChecks {
-        attention_script_installed: hooks_dir.join(CODEX_ATTENTION_SCRIPT_NAME).is_file(),
-        finished_script_installed: hooks_dir.join(CODEX_FINISHED_SCRIPT_NAME).is_file(),
-        session_start_hook_installed: exact_command_registered(
-            &settings,
-            "SessionStart",
-            &session_start_command,
-        ),
-        running_hook_installed: exact_command_registered(
-            &settings,
-            "UserPromptSubmit",
-            &running_command,
-        ),
-        attention_hook_installed: exact_command_registered(
-            &settings,
-            "PermissionRequest",
-            &attention_command,
-        ),
-        stop_hook_installed: exact_command_registered(&settings, "Stop", &stop_command),
+        attention_script_installed: exe.is_some(),
+        finished_script_installed: exe.is_some(),
+        session_start_hook_installed: registered("SessionStart"),
+        running_hook_installed: registered("UserPromptSubmit"),
+        attention_hook_installed: registered("PermissionRequest"),
+        stop_hook_installed: registered("Stop"),
         failure_hook_installed: false,
         failure_hook_required: false,
         hooks_feature_installed: codex_hooks_feature_installed(&config_path)?,
@@ -1045,13 +672,15 @@ fn event_has_exact_command(event_value: &Value, command: &str) -> bool {
     })
 }
 
-fn is_cli_manager_command(hook: &Value, script_names: &[&str]) -> bool {
+fn is_cli_manager_command(hook: &Value, legacy_scripts: &[&str]) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
         .is_some_and(|command| {
-            script_names
-                .iter()
-                .any(|script_name| command.contains(script_name))
+            // 新方案命令含 __hook 标志；同时兼容识别历史 .ps1 命令，便于安装即升级/卸载清理。
+            command.contains(HOOK_COMMAND_MARKER)
+                || legacy_scripts
+                    .iter()
+                    .any(|script_name| command.contains(script_name))
         })
 }
 
@@ -1075,21 +704,22 @@ fn ensure_child_object<'a>(
     value.as_object_mut().expect("value was just made object")
 }
 
-fn build_command(script_path: &Path, event: &str) -> String {
-    // -NoProfile：hook 高频触发，跳过 profile 加载显著降低每次事件的延迟，
-    // 也避免用户 profile 报错干扰脚本执行
-    format!(
-        "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{}\" -Event {}",
-        path_to_string(script_path),
-        event
-    )
+fn build_command(exe: &str, source: &str, event: &str) -> String {
+    // 注册命令直接指向本应用二进制的隐藏子命令，跨平台一致；
+    // exe 路径可能含空格（如 macOS .app bundle），统一用双引号包裹。
+    format!("\"{exe}\" {HOOK_COMMAND_MARKER} --source {source} --event {event}")
 }
 
-fn remove_file_if_exists(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("删除 {} 失败: {e}", path_to_string(path))),
+fn cli_manager_exe() -> Result<String, String> {
+    env::current_exe()
+        .map(|path| path_to_string(&path))
+        .map_err(|e| format!("获取程序路径失败: {e}"))
+}
+
+/// 删除历史遗留的 PowerShell hook 脚本（若存在）；新方案不再写脚本文件。
+fn cleanup_legacy_scripts(hooks_dir: &Path, scripts: &[&str]) {
+    for name in scripts {
+        let _ = fs::remove_file(hooks_dir.join(name));
     }
 }
 
@@ -1131,15 +761,73 @@ mod tests {
         .unwrap();
 
         assert!(matches!(status.codex.status, HookInstallStatus::Installed));
-        assert!(codex_dir
+        // 新方案不写脚本文件，改为校验 hooks.json 已注册指向二进制 __hook 的命令
+        assert!(codex_dir.join(CODEX_HOOKS_FILE_NAME).is_file());
+        assert!(codex_dir.join(CODEX_CONFIG_FILE_NAME).is_file());
+        let hooks_json = fs::read_to_string(codex_dir.join(CODEX_HOOKS_FILE_NAME)).unwrap();
+        assert!(hooks_json.contains(HOOK_COMMAND_MARKER));
+        assert!(hooks_json.contains("--source codex"));
+        assert!(!hooks_json.contains(".ps1"));
+        assert!(!codex_dir
             .join("hooks")
             .join(CODEX_ATTENTION_SCRIPT_NAME)
             .is_file());
-        assert!(codex_dir
-            .join("hooks")
-            .join(CODEX_FINISHED_SCRIPT_NAME)
-            .is_file());
-        assert!(codex_dir.join(CODEX_HOOKS_FILE_NAME).is_file());
-        assert!(codex_dir.join(CODEX_CONFIG_FILE_NAME).is_file());
+    }
+
+    #[tokio::test]
+    async fn install_then_uninstall_claude_removes_hook_commands() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join("claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+
+        hook_settings_install(Some(path_to_string(&claude_dir)), None)
+            .await
+            .unwrap();
+        let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
+        let after_install = fs::read_to_string(&settings_path).unwrap();
+        assert!(after_install.contains(HOOK_COMMAND_MARKER));
+        assert!(after_install.contains("--source claude"));
+
+        hook_settings_uninstall(Some(path_to_string(&claude_dir)), None)
+            .await
+            .unwrap();
+        let after_uninstall = fs::read_to_string(&settings_path).unwrap();
+        assert!(!after_uninstall.contains(HOOK_COMMAND_MARKER));
+    }
+
+    #[tokio::test]
+    async fn install_claude_cleans_legacy_ps1_command() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join("claude");
+        let hooks_dir = claude_dir.join("hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+        // 预置旧版 .ps1 脚本文件与对应注册命令，验证安装即升级会清掉历史项
+        fs::write(hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME), "old").unwrap();
+        let legacy = json!({
+            "hooks": {
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("powershell -File \"{}\" -Event Stop", CLAUDE_APPROVAL_SCRIPT_NAME),
+                        "timeout": 15
+                    }]
+                }]
+            }
+        });
+        fs::write(
+            claude_dir.join(CLAUDE_SETTINGS_FILE_NAME),
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        hook_settings_install(Some(path_to_string(&claude_dir)), None)
+            .await
+            .unwrap();
+
+        let settings = fs::read_to_string(claude_dir.join(CLAUDE_SETTINGS_FILE_NAME)).unwrap();
+        assert!(!settings.contains(".ps1"));
+        assert!(settings.contains(HOOK_COMMAND_MARKER));
+        assert!(!hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME).is_file());
     }
 }

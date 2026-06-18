@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod claude_hook;
+pub mod hook_client;
 mod commands;
 mod pty;
 mod shell_resolver;
