@@ -12,6 +12,38 @@
 
 ## Component Structure
 
+### Convention: Markdown rendering goes through the shared MarkdownContent component
+
+**What**: Any UI that renders user/session/release Markdown must use `src/components/ui/MarkdownContent.tsx`. Do not import `react-markdown` directly from feature components.
+
+**Why**: Markdown content comes from history files, prompts, update notes, and tool transcripts. Keeping rendering in one component preserves the same GFM support, `skipHtml` safety policy, link behavior, image placeholder behavior, code highlighting, search highlighting, and GitHub-style visual treatment everywhere.
+
+**Correct**:
+
+```tsx
+import { MarkdownContent } from "../ui/MarkdownContent";
+
+<MarkdownContent content={message.content} query={sessionQuery} />
+<MarkdownContent content={releaseNotes} linkBehavior="open" />
+```
+
+**Wrong**:
+
+```tsx
+import ReactMarkdown from "react-markdown";
+
+<ReactMarkdown>{releaseNotes}</ReactMarkdown>
+```
+
+**Contracts**:
+
+- Keep `skipHtml` enabled for untrusted Markdown.
+- Default links to preview-only behavior unless the surrounding flow explicitly allows opening external URLs.
+- Keep remote images as placeholders by default; do not load remote images from history/session content without a separate reviewed allowlist or setting.
+- When changing Markdown styles, update `src/components/ui/markdownSample.ts` so the manual preview covers the new element or edge case.
+
+**Tests**: Run `npx tsc --noEmit` and `npm run build`; manually inspect the Markdown style preview in Settings > About in both default and terminal variants.
+
 ### Convention: Keep settings tab ids stable when only renaming UI labels
 
 **What**: In `SettingsModal`, `SettingsTab` ids are part of the internal navigation contract. When a change only renames or reorganizes a settings page, keep the existing tab id and update only the visible label/title/description.

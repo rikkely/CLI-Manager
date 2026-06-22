@@ -2088,9 +2088,26 @@ samp,
 }
 
 .ui-markdown-h {
+  position: relative;
   margin: 1.1rem 0 0.56rem;
   line-height: 1.25;
   color: var(--md-text);
+  scroll-margin-top: 4rem;
+}
+
+.ui-markdown-heading-anchor {
+  position: absolute;
+  left: -0.9rem;
+  width: 0.8rem;
+  color: var(--md-subtle);
+  opacity: 0;
+  text-decoration: none;
+  transition: opacity 120ms ease;
+}
+
+.ui-markdown-h:hover .ui-markdown-heading-anchor,
+.ui-markdown-heading-anchor:focus {
+  opacity: 1;
 }
 
 .ui-markdown-h1 {
@@ -2168,6 +2185,20 @@ samp,
   border: 1px solid var(--md-border);
   border-radius: 6px;
   scrollbar-gutter: stable;
+}
+
+.ui-markdown-table-wrap::-webkit-scrollbar,
+.ui-markdown-code-block::-webkit-scrollbar,
+.ui-markdown-compact::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.ui-markdown-table-wrap::-webkit-scrollbar-thumb,
+.ui-markdown-code-block::-webkit-scrollbar-thumb,
+.ui-markdown-compact::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background-color: var(--ui-scrollbar-thumb);
 }
 
 .ui-markdown-table {
@@ -2277,6 +2308,10 @@ samp,
   background-color: #111827;
 }
 
+.ui-markdown-code-block pre {
+  min-width: max-content;
+}
+
 .ui-markdown-code-header {
   display: flex;
   align-items: center;
@@ -2340,6 +2375,25 @@ samp,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ui-markdown-preview summary {
+  list-style: none;
+}
+
+.ui-markdown-preview summary::-webkit-details-marker {
+  display: none;
+}
+
+.ui-markdown-preview summary::after {
+  content: "展开";
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.ui-markdown-preview[open] summary::after {
+  content: "收起";
 }
 
 .subagent-transcript-shell {
@@ -2825,6 +2879,7 @@ samp,
 .ui-terminal-action-drag-overlay .ui-primary-action,
 .ui-terminal-action-drag-overlay .ui-icon-action[data-active="true"] {
   background-color: transparent;
+  background-image: none;
   color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 88%, var(--terminal-tab-accent) 12%);
   border-color: transparent;
 }

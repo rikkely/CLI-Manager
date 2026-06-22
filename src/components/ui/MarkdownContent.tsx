@@ -103,6 +103,16 @@ function renderText(children: ReactNode, query: string): ReactNode {
   return children;
 }
 
+function extractPlainText(children: ReactNode): string {
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(extractPlainText).join("");
+  if (children && typeof children === "object" && "props" in children) {
+    const props = (children as { props?: { children?: ReactNode } }).props;
+    return props?.children ? extractPlainText(props.children) : "";
+  }
+  return "";
+}
+
 function openMarkdownUrl(href: string) {
   void openUrl(href).catch((err) => logError("打开 Markdown 链接失败", { href, err }));
 }
@@ -134,6 +144,7 @@ function makeLink(
         className={cn("ui-markdown-link", className)}
         href={href}
         title={title ?? href}
+        aria-label={`打开链接：${extractPlainText(children) || href}`}
         onClick={(e) => {
           e.preventDefault();
           openMarkdownUrl(href);
@@ -152,24 +163,88 @@ function makeLink(
   );
 }
 
-const makeComponents = (query: string, linkBehavior: MarkdownLinkBehavior): Components => ({
+const makeComponents = (query: string, linkBehavior: MarkdownLinkBehavior): Components => {
+  const headingCounts = new Map<string, number>();
+
+  const makeHeadingId = (children: ReactNode) => {
+    const raw = extractPlainText(children).trim().toLowerCase();
+    const base =
+      raw
+        .replace(/[^\p{L}\p{N}\s-]/gu, "")
+        .replace(/\s+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "") || "heading";
+    const count = headingCounts.get(base) ?? 0;
+    headingCounts.set(base, count + 1);
+    return count === 0 ? base : `${base}-${count + 1}`;
+  };
+
+  return {
   h1({ children, className }) {
-    return <h1 className={cn("ui-markdown-h ui-markdown-h1", className)}>{renderText(children, query)}</h1>;
+    const id = makeHeadingId(children);
+    return (
+      <h1 id={id} className={cn("ui-markdown-h ui-markdown-h1", className)}>
+        <a className="ui-markdown-heading-anchor" href={`#${id}`} aria-label="标题锚点">
+          #
+        </a>
+        {renderText(children, query)}
+      </h1>
+    );
   },
   h2({ children, className }) {
-    return <h2 className={cn("ui-markdown-h ui-markdown-h2", className)}>{renderText(children, query)}</h2>;
+    const id = makeHeadingId(children);
+    return (
+      <h2 id={id} className={cn("ui-markdown-h ui-markdown-h2", className)}>
+        <a className="ui-markdown-heading-anchor" href={`#${id}`} aria-label="标题锚点">
+          #
+        </a>
+        {renderText(children, query)}
+      </h2>
+    );
   },
   h3({ children, className }) {
-    return <h3 className={cn("ui-markdown-h ui-markdown-h3", className)}>{renderText(children, query)}</h3>;
+    const id = makeHeadingId(children);
+    return (
+      <h3 id={id} className={cn("ui-markdown-h ui-markdown-h3", className)}>
+        <a className="ui-markdown-heading-anchor" href={`#${id}`} aria-label="标题锚点">
+          #
+        </a>
+        {renderText(children, query)}
+      </h3>
+    );
   },
   h4({ children, className }) {
-    return <h4 className={cn("ui-markdown-h ui-markdown-h4", className)}>{renderText(children, query)}</h4>;
+    const id = makeHeadingId(children);
+    return (
+      <h4 id={id} className={cn("ui-markdown-h ui-markdown-h4", className)}>
+        <a className="ui-markdown-heading-anchor" href={`#${id}`} aria-label="标题锚点">
+          #
+        </a>
+        {renderText(children, query)}
+      </h4>
+    );
   },
   h5({ children, className }) {
-    return <h5 className={cn("ui-markdown-h ui-markdown-h5", className)}>{renderText(children, query)}</h5>;
+    const id = makeHeadingId(children);
+    return (
+      <h5 id={id} className={cn("ui-markdown-h ui-markdown-h5", className)}>
+        <a className="ui-markdown-heading-anchor" href={`#${id}`} aria-label="标题锚点">
+          #
+        </a>
+        {renderText(children, query)}
+      </h5>
+    );
   },
   h6({ children, className }) {
-    return <h6 className={cn("ui-markdown-h ui-markdown-h6", className)}>{renderText(children, query)}</h6>;
+    const id = makeHeadingId(children);
+    return (
+      <h6 id={id} className={cn("ui-markdown-h ui-markdown-h6", className)}>
+        <a className="ui-markdown-heading-anchor" href={`#${id}`} aria-label="标题锚点">
+          #
+        </a>
+        {renderText(children, query)}
+      </h6>
+    );
   },
   p({ children }) {
     return <p className="ui-markdown-p">{renderText(children, query)}</p>;
@@ -294,7 +369,8 @@ const makeComponents = (query: string, linkBehavior: MarkdownLinkBehavior): Comp
   pre({ children }) {
     return <>{children}</>;
   },
-});
+  };
+};
 
 export function MarkdownContent({
   content,
