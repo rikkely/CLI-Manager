@@ -266,7 +266,7 @@ function showClaudeHookToast(payload: CliHookPayload, tabId: string): void {
     {
       id: item.id,
       duration: settings.hookPopupAutoCloseEnabled ? settings.hookPopupAutoCloseSeconds * 1000 : Infinity,
-      position: "top-right",
+      position: "top-left",
     }
   );
 }

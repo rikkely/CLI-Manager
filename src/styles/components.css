@@ -2614,14 +2614,8 @@
   border-radius: 0;
 }
 
-[data-sonner-toaster][data-x-position="right"]:has(.claude-hook-toast) {
-  right: 24px;
-}
-
-@media (min-width: 1360px) {
-  [data-sonner-toaster][data-x-position="right"]:has(.claude-hook-toast) {
-    right: min(420px, calc(100vw - 1040px));
-  }
+[data-sonner-toaster][data-x-position="left"]:has(.claude-hook-toast) {
+  left: 24px;
 }
 
 [data-sonner-toaster][data-y-position="top"]:has(.claude-hook-toast) {
