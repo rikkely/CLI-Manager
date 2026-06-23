@@ -28,9 +28,9 @@
 
 ### 2. Pane Identity and Concurrency
 
-- [ ] 多个并发 `SubagentStart` 事件必须创建或更新不同的子 Agent pane，不得互相覆盖。
-- [ ] pane key 优先级应避免只使用父 `sessionId`；推荐优先使用 `agentId` 或独立 `agentTranscriptPath`，缺失时使用父 tab + timestamp/sequence 的稳定组合。
-- [ ] 同一个 `agentId` 的重复 `SubagentStart` 应幂等更新已有 pane/订阅，而不是创建重复 pane。
+- [x] 多个并发 `SubagentStart` 事件必须创建或更新不同的子 Agent pane，不得互相覆盖。
+- [x] pane key 优先级应避免只使用父 `sessionId`；推荐优先使用 `agentId` 或独立 `agentTranscriptPath`，缺失时使用父 tab + timestamp/sequence 的稳定组合。
+- [x] 同一个 `agentId` 的重复 `SubagentStart` 应幂等更新已有 pane/订阅，而不是创建重复 pane。
 - [ ] 两个没有独立 child transcript 的并发子 Agent 不应显示两份完全相同的父会话完整内容。
 
 ### 3. UI Source Disclosure
