@@ -83,7 +83,11 @@ impl PtyManager {
                 if cfg!(target_os = "windows") {
                     Ok(("powershell.exe".to_string(), vec!["-NoLogo".to_string()]))
                 } else {
-                    let fallback = if cfg!(target_os = "macos") { "zsh" } else { "bash" };
+                    let fallback = if cfg!(target_os = "macos") {
+                        "zsh"
+                    } else {
+                        "bash"
+                    };
                     let shell = std::env::var("SHELL").unwrap_or_else(|_| fallback.to_string());
                     Ok((shell, Vec::new()))
                 }
@@ -255,7 +259,9 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 match Self::write_bash_integration_rcfile() {
                     Ok(rcfile) => Ok((exe, vec!["--rcfile".to_string(), rcfile, "-i".to_string()])),
                     Err(err) => {
-                        warn!("bash integration rcfile write failed, fallback to plain shell: {err}");
+                        warn!(
+                            "bash integration rcfile write failed, fallback to plain shell: {err}"
+                        );
                         Ok((exe, args))
                     }
                 }
@@ -614,4 +620,3 @@ mod tests {
         assert_eq!(vars.get("WSLENV").unwrap(), "CLI_MANAGER_TAB_ID");
     }
 }
-

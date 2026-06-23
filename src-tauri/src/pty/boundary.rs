@@ -300,7 +300,8 @@ mod tests {
             emitted.extend_from_slice(&pending);
 
             assert_eq!(
-                emitted, original,
+                emitted,
+                original,
                 "mismatch at split_at={split_at}: emitted len={} vs original len={}",
                 emitted.len(),
                 original.len()
@@ -336,10 +337,10 @@ mod tests {
     #[test]
     fn invariant_emitted_prefix_is_valid_utf8_tail() {
         let cases: &[&[u8]] = &[
-            b"\xe4\xb8\xad\xe6\x96",       // 中 + 文截断
-            b"\x1b[41m\xe4\xb8",            // 中截断
-            b"\xf0\x9f\x98",                // emoji 截断
-            b"\x1b[41m text \x1b[",         // CSI 截断
+            b"\xe4\xb8\xad\xe6\x96", // 中 + 文截断
+            b"\x1b[41m\xe4\xb8",     // 中截断
+            b"\xf0\x9f\x98",         // emoji 截断
+            b"\x1b[41m text \x1b[",  // CSI 截断
         ];
         for case in cases {
             let safe = safe_emit_boundary(case);

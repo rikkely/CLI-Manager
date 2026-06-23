@@ -6,7 +6,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const LITELLM_PRICES_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const LITELLM_PRICES_URL: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const MIN_CANDIDATE_SCORE: f64 = 0.70;
 const MAX_SYNC_TARGETS: usize = 500;
@@ -151,11 +152,16 @@ pub async fn model_prices_sync(targets: Vec<String>) -> Result<ModelPriceSyncRes
             continue;
         }
 
-        candidates.extend(ranked.into_iter().take(5).map(|candidate| ModelPriceSyncCandidate {
-            target_model: target.clone(),
-            score: candidate.score,
-            remote: candidate.remote,
-        }));
+        candidates.extend(
+            ranked
+                .into_iter()
+                .take(5)
+                .map(|candidate| ModelPriceSyncCandidate {
+                    target_model: target.clone(),
+                    score: candidate.score,
+                    remote: candidate.remote,
+                }),
+        );
     }
 
     Ok(ModelPriceSyncResult {
@@ -187,7 +193,10 @@ pub fn find_cached_model_pricing(model: &str) -> CachedModelPricingLookup {
     let Some(exact) = guard.get(&normalized).or_else(|| {
         guard
             .iter()
-            .filter(|(key, _)| normalized.starts_with(key.as_str()) && normalized.as_bytes().get(key.len()) == Some(&b'-'))
+            .filter(|(key, _)| {
+                normalized.starts_with(key.as_str())
+                    && normalized.as_bytes().get(key.len()) == Some(&b'-')
+            })
             .max_by_key(|(key, _)| key.len())
             .map(|(_, value)| value)
     }) else {
@@ -225,7 +234,10 @@ async fn fetch_remote_prices() -> Result<Vec<RemoteModelPrice>, String> {
         .build()
         .map_err(|err| format!("failed to create HTTP client: {err}"))?;
 
-    let (litellm_result, openrouter_result) = tokio::join!(fetch_litellm_prices(&client), fetch_openrouter_prices(&client));
+    let (litellm_result, openrouter_result) = tokio::join!(
+        fetch_litellm_prices(&client),
+        fetch_openrouter_prices(&client)
+    );
     let mut errors = Vec::new();
     let mut prices = Vec::new();
 
@@ -256,7 +268,10 @@ async fn fetch_litellm_prices(client: &reqwest::Client) -> Result<Vec<RemoteMode
         .await
         .map_err(|err| format!("failed to fetch LiteLLM prices: {err}"))?;
     if !response.status().is_success() {
-        return Err(format!("LiteLLM price source returned {}", response.status()));
+        return Err(format!(
+            "LiteLLM price source returned {}",
+            response.status()
+        ));
     }
     let value: Value = response
         .json()
@@ -280,8 +295,20 @@ async fn fetch_litellm_prices(client: &reqwest::Client) -> Result<Vec<RemoteMode
             model: model.clone(),
             input_per_1m: per_million(input),
             output_per_1m: per_million(output),
-            cache_read_per_1m: per_million(number_field(raw, &["cache_read_input_token_cost", "input_cost_per_token_cache_read"])),
-            cache_creation_per_1m: per_million(number_field(raw, &["cache_creation_input_token_cost", "input_cost_per_token_cache_creation"])),
+            cache_read_per_1m: per_million(number_field(
+                raw,
+                &[
+                    "cache_read_input_token_cost",
+                    "input_cost_per_token_cache_read",
+                ],
+            )),
+            cache_creation_per_1m: per_million(number_field(
+                raw,
+                &[
+                    "cache_creation_input_token_cost",
+                    "input_cost_per_token_cache_creation",
+                ],
+            )),
             source: "litellm".to_string(),
             source_model_id: model.clone(),
             raw_json: raw.to_string(),
@@ -290,14 +317,19 @@ async fn fetch_litellm_prices(client: &reqwest::Client) -> Result<Vec<RemoteMode
     Ok(prices)
 }
 
-async fn fetch_openrouter_prices(client: &reqwest::Client) -> Result<Vec<RemoteModelPrice>, String> {
+async fn fetch_openrouter_prices(
+    client: &reqwest::Client,
+) -> Result<Vec<RemoteModelPrice>, String> {
     let response = client
         .get(OPENROUTER_MODELS_URL)
         .send()
         .await
         .map_err(|err| format!("failed to fetch OpenRouter prices: {err}"))?;
     if !response.status().is_success() {
-        return Err(format!("OpenRouter price source returned {}", response.status()));
+        return Err(format!(
+            "OpenRouter price source returned {}",
+            response.status()
+        ));
     }
     let value: Value = response
         .json()
@@ -358,7 +390,10 @@ fn rank_candidates(target: &str, remotes: &[RemoteModelPrice]) -> Vec<RankedRemo
         } else {
             let jaccard_score = jaccard(&target_alnum, &remote_alnum);
             let levenshtein_score = levenshtein_similarity(&target_alnum, &remote_alnum);
-            ((jaccard_score * 0.45) + (levenshtein_score * 0.55), MatchKind::Fuzzy)
+            (
+                (jaccard_score * 0.45) + (levenshtein_score * 0.55),
+                MatchKind::Fuzzy,
+            )
         };
 
         if score >= MIN_CANDIDATE_SCORE {
@@ -432,7 +467,10 @@ fn canonical_tail(model: &str) -> String {
 }
 
 fn normalized_alnum(model: &str) -> String {
-    model.chars().filter(|ch| ch.is_ascii_alphanumeric()).collect()
+    model
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
 }
 
 fn strip_model_date_suffix(model: &str) -> Option<String> {

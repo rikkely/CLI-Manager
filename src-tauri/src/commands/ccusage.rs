@@ -152,7 +152,10 @@ fn ccusage_report_payload(
 
     let output = command_output("bunx", &args, envs)?;
     if !output.status.success() {
-        return Err(format!("运行 ccusage {report_kind} 失败: {}", output_text(&output)));
+        return Err(format!(
+            "运行 ccusage {report_kind} 失败: {}",
+            output_text(&output)
+        ));
     }
 
     serde_json::from_slice(&output.stdout)

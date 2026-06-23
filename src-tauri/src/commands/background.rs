@@ -196,10 +196,7 @@ pub async fn cleanup_unused_backgrounds(
         .map_err(|e| format!("join_error: {e}"))?
 }
 
-fn cleanup_dir(
-    dir: &Path,
-    keep_names: &std::collections::HashSet<String>,
-) -> Result<u32, String> {
+fn cleanup_dir(dir: &Path, keep_names: &std::collections::HashSet<String>) -> Result<u32, String> {
     let mut deleted: u32 = 0;
     let read_dir = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -254,11 +251,26 @@ mod tests {
 
     #[test]
     fn rejects_webp_bmp_exe_and_missing_ext() {
-        assert_eq!(validate_extension("a.webp").unwrap_err(), "unsupported_format");
-        assert_eq!(validate_extension("a.WEBP").unwrap_err(), "unsupported_format");
-        assert_eq!(validate_extension("a.bmp").unwrap_err(), "unsupported_format");
-        assert_eq!(validate_extension("a.exe").unwrap_err(), "unsupported_format");
-        assert_eq!(validate_extension("noext").unwrap_err(), "missing_extension");
+        assert_eq!(
+            validate_extension("a.webp").unwrap_err(),
+            "unsupported_format"
+        );
+        assert_eq!(
+            validate_extension("a.WEBP").unwrap_err(),
+            "unsupported_format"
+        );
+        assert_eq!(
+            validate_extension("a.bmp").unwrap_err(),
+            "unsupported_format"
+        );
+        assert_eq!(
+            validate_extension("a.exe").unwrap_err(),
+            "unsupported_format"
+        );
+        assert_eq!(
+            validate_extension("noext").unwrap_err(),
+            "missing_extension"
+        );
     }
 
     // ---------- compute_filename ----------
@@ -307,10 +319,7 @@ mod tests {
             check_size_warning(SIZE_WARN_THRESHOLD + 1),
             Some("file_too_large")
         );
-        assert_eq!(
-            check_size_warning(8 * 1024 * 1024),
-            Some("file_too_large")
-        );
+        assert_eq!(check_size_warning(8 * 1024 * 1024), Some("file_too_large"));
     }
 
     // ---------- cleanup_dir ----------

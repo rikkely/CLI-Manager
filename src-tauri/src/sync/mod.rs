@@ -1,7 +1,7 @@
 use crate::webdav::{WebDavClient, WebDavConfig};
 use chrono::Local;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
-use log::{info, error};
 use std::fs::{self, File};
 use std::path::Path;
 
@@ -64,7 +64,11 @@ pub async fn test_connection(config: WebDavConfig) -> Result<bool, String> {
     client.test_connection().await.map_err(|e| e.message)
 }
 
-pub async fn upload(config: WebDavConfig, data: SyncData, remote_dir: Option<String>) -> Result<(), String> {
+pub async fn upload(
+    config: WebDavConfig,
+    data: SyncData,
+    remote_dir: Option<String>,
+) -> Result<(), String> {
     info!("Creating WebDAV client for {}", config.url);
     let client = WebDavClient::new(config);
     let dir = sanitize_remote_dir(remote_dir.as_deref());
@@ -73,26 +77,20 @@ pub async fn upload(config: WebDavConfig, data: SyncData, remote_dir: Option<Str
 
     // ensure_directory 会递归创建所有父目录（backups → backups/cli-mgr → backups/cli-mgr/devices）
     info!("Ensuring directory exists: {}", devices_dir);
-    client
-        .ensure_directory(&devices_dir)
-        .await
-        .map_err(|e| {
-            error!("Failed to ensure directory: {}", e);
-            e.message
-        })?;
+    client.ensure_directory(&devices_dir).await.map_err(|e| {
+        error!("Failed to ensure directory: {}", e);
+        e.message
+    })?;
 
     info!("Serializing sync data");
-    let json = serde_json::to_vec(&data)
-        .map_err(|e| format!("Failed to serialize sync data: {}", e))?;
+    let json =
+        serde_json::to_vec(&data).map_err(|e| format!("Failed to serialize sync data: {}", e))?;
 
     info!("Uploading to {}", remote_path);
-    client
-        .upload(&remote_path, json)
-        .await
-        .map_err(|e| {
-            error!("Upload failed: {}", e);
-            e.message
-        })?;
+    client.upload(&remote_path, json).await.map_err(|e| {
+        error!("Upload failed: {}", e);
+        e.message
+    })?;
 
     info!("Upload completed successfully");
     Ok(())
@@ -127,13 +125,17 @@ pub async fn download(
         Err(e) => return Err(e.message),
     };
 
-    let sync_data: SyncData = serde_json::from_slice(&data)
-        .map_err(|e| format!("Failed to parse sync data: {}", e))?;
+    let sync_data: SyncData =
+        serde_json::from_slice(&data).map_err(|e| format!("Failed to parse sync data: {}", e))?;
 
     Ok(sync_data)
 }
 
-pub async fn list_device_snapshots(config: WebDavConfig, device_names: Vec<String>, remote_dir: Option<String>) -> Result<Vec<DeviceSnapshotInfo>, String> {
+pub async fn list_device_snapshots(
+    config: WebDavConfig,
+    device_names: Vec<String>,
+    remote_dir: Option<String>,
+) -> Result<Vec<DeviceSnapshotInfo>, String> {
     let client = WebDavClient::new(config);
     let base_dir = sanitize_remote_dir(remote_dir.as_deref());
     let mut snapshots = Vec::new();
@@ -245,8 +247,7 @@ pub fn local_export(dir: &str, data: &SyncData) -> Result<String, String> {
         .start_file("sync.json", options)
         .map_err(|e| format!("写入 zip 失败: {}", e))?;
     // 直接序列化到 zip writer，避免先 to_string_pretty 再 write_all 的中间 String 分配。
-    serde_json::to_writer(&mut writer, data)
-        .map_err(|e| format!("序列化失败: {}", e))?;
+    serde_json::to_writer(&mut writer, data).map_err(|e| format!("序列化失败: {}", e))?;
     writer
         .finish()
         .map_err(|e| format!("完成 zip 失败: {}", e))?;
@@ -262,17 +263,14 @@ pub fn local_import(zip_path: &str) -> Result<SyncData, String> {
     }
 
     let file = File::open(path).map_err(|e| format!("打开 zip 失败: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("读取 zip 失败: {}", e))?;
-    let mut entry = archive
-        .by_name("sync.json")
-        .map_err(|e| {
-            error!("zip 中找不到 sync.json: {}", e);
-            format!("无效的同步文件: {}", e)
-        })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取 zip 失败: {}", e))?;
+    let mut entry = archive.by_name("sync.json").map_err(|e| {
+        error!("zip 中找不到 sync.json: {}", e);
+        format!("无效的同步文件: {}", e)
+    })?;
 
-    let data: SyncData = serde_json::from_reader(&mut entry)
-        .map_err(|e| format!("解析数据失败: {}", e))?;
+    let data: SyncData =
+        serde_json::from_reader(&mut entry).map_err(|e| format!("解析数据失败: {}", e))?;
     Ok(data)
 }
 
@@ -290,12 +288,18 @@ mod tests {
     #[test]
     fn sanitize_remote_dir_keeps_valid_paths() {
         assert_eq!(sanitize_remote_dir(Some("cli-manager")), "cli-manager");
-        assert_eq!(sanitize_remote_dir(Some("backups/cli-mgr")), "backups/cli-mgr");
+        assert_eq!(
+            sanitize_remote_dir(Some("backups/cli-mgr")),
+            "backups/cli-mgr"
+        );
     }
 
     #[test]
     fn sanitize_remote_dir_strips_surrounding_slashes() {
-        assert_eq!(sanitize_remote_dir(Some("/backups/cli-mgr/")), "backups/cli-mgr");
+        assert_eq!(
+            sanitize_remote_dir(Some("/backups/cli-mgr/")),
+            "backups/cli-mgr"
+        );
     }
 
     #[test]
@@ -327,6 +331,9 @@ mod tests {
 
     #[test]
     fn legacy_sync_file_path_uses_base_dir() {
-        assert_eq!(legacy_sync_file_path("cli-manager"), "cli-manager/sync.json");
+        assert_eq!(
+            legacy_sync_file_path("cli-manager"),
+            "cli-manager/sync.json"
+        );
     }
 }

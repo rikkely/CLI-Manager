@@ -154,14 +154,10 @@ pub async fn open_folder_in_explorer(path: String) -> Result<(), String> {
     {
         let result = if path_buf.is_file() {
             // 如果是文件，使用 /select 参数在文件管理器中选中该文件
-            Command::new("explorer")
-                .args(&["/select,", &path])
-                .spawn()
+            Command::new("explorer").args(&["/select,", &path]).spawn()
         } else {
             // 如果是目录，直接打开
-            Command::new("explorer")
-                .arg(&path)
-                .spawn()
+            Command::new("explorer").arg(&path).spawn()
         };
 
         result.map_err(|e| {

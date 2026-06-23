@@ -47,7 +47,10 @@ mod tests {
             Some("/mnt/c/Users/me/app.exe")
         );
         // 正斜杠输入与盘根
-        assert_eq!(windows_path_to_wsl("E:/data").as_deref(), Some("/mnt/e/data"));
+        assert_eq!(
+            windows_path_to_wsl("E:/data").as_deref(),
+            Some("/mnt/e/data")
+        );
         assert_eq!(windows_path_to_wsl(r"F:\").as_deref(), Some("/mnt/f"));
     }
 
@@ -61,7 +64,9 @@ mod tests {
 
     #[test]
     fn detects_wsl_config_dir() {
-        assert!(is_wsl_config_dir(r"\\wsl.localhost\Ubuntu-22.04\home\me\.claude"));
+        assert!(is_wsl_config_dir(
+            r"\\wsl.localhost\Ubuntu-22.04\home\me\.claude"
+        ));
         assert!(is_wsl_config_dir(r"\\wsl$\Ubuntu\home\me\.claude"));
         assert!(is_wsl_config_dir(r"\\WSL.LOCALHOST\Ubuntu\home")); // 大小写不敏感
         assert!(!is_wsl_config_dir(r"C:\Users\me\.claude"));

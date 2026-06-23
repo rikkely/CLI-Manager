@@ -40,7 +40,9 @@ pub struct CcSwitchProvidersResponse {
 
 pub(crate) fn is_secret_env_key(key: &str) -> bool {
     let lower = key.to_lowercase();
-    SECRET_KEY_MARKERS.iter().any(|marker| lower.contains(marker))
+    SECRET_KEY_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 pub(crate) fn mask_secret(value: &str) -> String {
@@ -79,7 +81,10 @@ fn parse_settings_config(raw: &str) -> Option<ParsedConfig> {
             let text = env_value_text(raw_value);
 
             // Generic pattern matching: *_BASE_URL / *_API_BASE / *_ENDPOINT
-            if key.ends_with("_BASE_URL") || key.ends_with("_API_BASE") || key.ends_with("_ENDPOINT") {
+            if key.ends_with("_BASE_URL")
+                || key.ends_with("_API_BASE")
+                || key.ends_with("_ENDPOINT")
+            {
                 parsed.base_url = Some(text.clone());
             }
             // Generic pattern matching: *_MODEL
@@ -129,9 +134,7 @@ fn resolve_db_path(app: &tauri::AppHandle, db_path: Option<String>) -> Result<Pa
 }
 
 async fn open_db_readonly(path: &Path) -> Result<SqliteConnection, String> {
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .read_only(true);
+    let options = SqliteConnectOptions::new().filename(path).read_only(true);
     SqliteConnection::connect_with(&options)
         .await
         .map_err(|err| format!("db_open_failed: {err}"))
@@ -276,9 +279,7 @@ pub(crate) fn merge_settings_text(
     provider_env: &Map<String, Value>,
 ) -> Result<String, String> {
     let mut settings: Value = match existing {
-        Some(raw) => {
-            serde_json::from_str(raw).map_err(|_| "settings_parse_failed".to_string())?
-        }
+        Some(raw) => serde_json::from_str(raw).map_err(|_| "settings_parse_failed".to_string())?,
         None => Value::Object(Map::new()),
     };
     let settings_obj = settings
@@ -376,13 +377,12 @@ pub async fn ccswitch_apply_provider(
 
     let path = resolve_db_path(&app, db_path)?;
     let mut conn = open_db_readonly(&path).await?;
-    let row = sqlx::query(
-        "SELECT settings_config FROM providers WHERE id = ?1 AND app_type = 'claude'",
-    )
-    .bind(provider_id.trim())
-    .fetch_optional(&mut conn)
-    .await
-    .map_err(|err| format!("db_query_failed: {err}"))?;
+    let row =
+        sqlx::query("SELECT settings_config FROM providers WHERE id = ?1 AND app_type = 'claude'")
+            .bind(provider_id.trim())
+            .fetch_optional(&mut conn)
+            .await
+            .map_err(|err| format!("db_query_failed: {err}"))?;
     let _ = conn.close().await;
 
     let row = row.ok_or_else(|| "provider_not_found".to_string())?;
@@ -455,11 +455,12 @@ fn reset_settings_file(project_dir: &Path) -> Result<(), String> {
     if !settings_path.is_file() {
         return Ok(());
     }
-    let existing = fs::read_to_string(&settings_path)
-        .map_err(|err| format!("settings_read_failed: {err}"))?;
+    let existing =
+        fs::read_to_string(&settings_path).map_err(|err| format!("settings_read_failed: {err}"))?;
     match strip_env_section(&existing)? {
-        None => fs::remove_file(&settings_path)
-            .map_err(|err| format!("settings_write_failed: {err}")),
+        None => {
+            fs::remove_file(&settings_path).map_err(|err| format!("settings_write_failed: {err}"))
+        }
         Some(next_text) => atomic_write_settings(&claude_dir, &settings_path, &next_text),
     }
 }
@@ -577,13 +578,12 @@ pub async fn ccswitch_list_common_configs(
     let mut conn = open_db_readonly(&path).await?;
 
     // Error tolerance: check if settings table exists
-    let table_exists = sqlx::query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"
-    )
-    .fetch_optional(&mut conn)
-    .await
-    .map_err(|err| format!("db_query_failed: {err}"))?
-    .is_some();
+    let table_exists =
+        sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
+            .fetch_optional(&mut conn)
+            .await
+            .map_err(|err| format!("db_query_failed: {err}"))?
+            .is_some();
 
     if !table_exists {
         let _ = conn.close().await;
@@ -665,11 +665,17 @@ mod tests {
         assert_eq!(parsed.base_url.as_deref(), Some("https://api.example.com"));
         assert_eq!(parsed.model.as_deref(), Some("claude-fable-5"));
         assert_eq!(
-            parsed.masked_env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+            parsed
+                .masked_env
+                .get("ANTHROPIC_AUTH_TOKEN")
+                .map(String::as_str),
             Some("sk-1…cdef")
         );
         assert_eq!(
-            parsed.masked_env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            parsed
+                .masked_env
+                .get("ANTHROPIC_BASE_URL")
+                .map(String::as_str),
             Some("https://api.example.com")
         );
     }
@@ -689,22 +695,18 @@ mod tests {
 
     #[test]
     fn replace_anthropic_env_clears_legacy_and_keeps_user_keys() {
-        let mut settings = obj(
-            r#"{
+        let mut settings = obj(r#"{
                 "env": {
                     "ANTHROPIC_BASE_URL": "https://old.example.com",
                     "ANTHROPIC_AUTH_TOKEN": "sk-old",
                     "ANTHROPIC_SMALL_FAST_MODEL": "old-haiku",
                     "HTTP_PROXY": "http://127.0.0.1:7890"
                 }
-            }"#,
-        );
-        let provider_env = obj(
-            r#"{
+            }"#);
+        let provider_env = obj(r#"{
                 "ANTHROPIC_BASE_URL": "https://new.example.com",
                 "ANTHROPIC_API_KEY": "sk-new"
-            }"#,
-        );
+            }"#);
         replace_anthropic_env(&mut settings, &provider_env);
         let env = settings.get("env").unwrap().as_object().unwrap();
         assert_eq!(
@@ -727,14 +729,12 @@ mod tests {
 
     #[test]
     fn replace_anthropic_env_keeps_other_top_level_fields() {
-        let mut settings = obj(
-            r#"{
+        let mut settings = obj(r#"{
                 "env": {"ANTHROPIC_AUTH_TOKEN": "sk-old"},
                 "hooks": {"UserPromptSubmit": [{"matcher": "*"}]},
                 "permissions": {"allow": ["Bash"]},
                 "skipDangerousModePermissionPrompt": true
-            }"#,
-        );
+            }"#);
         let hooks_before = settings.get("hooks").cloned();
         let permissions_before = settings.get("permissions").cloned();
         let provider_env = obj(r#"{"ANTHROPIC_BASE_URL": "https://new.example.com"}"#);
@@ -794,35 +794,36 @@ mod tests {
             value["env"]["ANTHROPIC_BASE_URL"].as_str(),
             Some("https://new.example.com")
         );
-        assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str(), Some("sk-new"));
+        assert_eq!(
+            value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str(),
+            Some("sk-new")
+        );
     }
 
     #[test]
     fn provider_match_requires_base_url_and_token() {
-        let provider = obj(
-            r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}"#,
-        );
+        let provider =
+            obj(r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}"#);
 
-        let by_auth_token = obj(
-            r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}"#,
-        );
+        let by_auth_token =
+            obj(r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}"#);
         assert!(provider_matches_project_env(&by_auth_token, &provider));
 
-        let wrong_base = obj(
-            r#"{"ANTHROPIC_BASE_URL": "https://b.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}"#,
-        );
+        let wrong_base =
+            obj(r#"{"ANTHROPIC_BASE_URL": "https://b.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}"#);
         assert!(!provider_matches_project_env(&wrong_base, &provider));
 
         let missing_token = obj(r#"{"ANTHROPIC_BASE_URL": "https://a.com"}"#);
         assert!(!provider_matches_project_env(&missing_token, &provider));
 
-        let provider_with_api_key = obj(
-            r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_API_KEY": "sk-2"}"#,
-        );
-        let by_api_key = obj(
-            r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_API_KEY": "sk-2"}"#,
-        );
-        assert!(provider_matches_project_env(&by_api_key, &provider_with_api_key));
+        let provider_with_api_key =
+            obj(r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_API_KEY": "sk-2"}"#);
+        let by_api_key =
+            obj(r#"{"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_API_KEY": "sk-2"}"#);
+        assert!(provider_matches_project_env(
+            &by_api_key,
+            &provider_with_api_key
+        ));
     }
 
     // ---------- Phase 3 ----------
@@ -912,11 +913,18 @@ mod tests {
 
         // 文件缺失 / 损坏 JSON / 无 env → hasOverride=false，不让整批失败
         assert_eq!(probe_settings_text(None, &providers), (false, None));
-        assert_eq!(probe_settings_text(Some("{ not json"), &providers), (false, None));
-        assert_eq!(probe_settings_text(Some(r#"{"hooks": {}}"#), &providers), (false, None));
+        assert_eq!(
+            probe_settings_text(Some("{ not json"), &providers),
+            (false, None)
+        );
+        assert_eq!(
+            probe_settings_text(Some(r#"{"hooks": {}}"#), &providers),
+            (false, None)
+        );
 
         // 匹配到供应商 → 返回名字
-        let matched = r#"{"env": {"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}}"#;
+        let matched =
+            r#"{"env": {"ANTHROPIC_BASE_URL": "https://a.com", "ANTHROPIC_AUTH_TOKEN": "sk-1"}}"#;
         assert_eq!(
             probe_settings_text(Some(matched), &providers),
             (true, Some("ProviderA".to_string()))

@@ -12,7 +12,10 @@ pub struct AppVersion {
 pub fn get_app_version(app: tauri::AppHandle) -> AppVersion {
     let config = app.config();
     AppVersion {
-        version: config.version.clone().unwrap_or_else(|| "unknown".to_string()),
+        version: config
+            .version
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
         name: config
             .product_name
             .clone()

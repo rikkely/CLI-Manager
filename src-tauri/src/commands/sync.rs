@@ -4,7 +4,7 @@ use crate::sync::{
 };
 use crate::webdav::WebDavConfig;
 use chrono::{DateTime, Utc};
-use log::{info, error};
+use log::{error, info};
 
 #[derive(serde::Deserialize)]
 pub struct SyncConfigInput {
@@ -100,7 +100,8 @@ pub async fn sync_upload(
     };
 
     let timestamp = data.last_modified.clone();
-    info!("Sync data: {} projects, {} groups, {} templates",
+    info!(
+        "Sync data: {} projects, {} groups, {} templates",
         data.data.projects.len(),
         data.data.groups.len(),
         data.data.command_templates.len()
@@ -138,14 +139,8 @@ pub async fn sync_download(
     // Check for conflict if local data is provided
     if let Some(local) = local_data {
         if !force {
-            let local_modified: Option<DateTime<Utc>> = local
-                .last_modified
-                .parse()
-                .ok();
-            let remote_modified: Option<DateTime<Utc>> = remote_data
-                .last_modified
-                .parse()
-                .ok();
+            let local_modified: Option<DateTime<Utc>> = local.last_modified.parse().ok();
+            let remote_modified: Option<DateTime<Utc>> = remote_data.last_modified.parse().ok();
 
             if let (Some(local_t), Some(remote_t)) = (local_modified, remote_modified) {
                 if local_t > remote_t {

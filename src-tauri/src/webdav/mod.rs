@@ -1,6 +1,6 @@
-use reqwest::{Client, Method, Response, header};
+use log::{debug, error, info};
+use reqwest::{header, Client, Method, Response};
 use serde::{Deserialize, Serialize};
-use log::{info, error, debug};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,13 +75,10 @@ impl WebDavClient {
                     });
                 }
             }
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| WebDavError {
-                    message: format!("Failed to read response: {}", e),
-                    status_code: None,
-                })?;
+            let bytes = response.bytes().await.map_err(|e| WebDavError {
+                message: format!("Failed to read response: {}", e),
+                status_code: None,
+            })?;
             if bytes.len() > MAX_RESPONSE_BYTES as usize {
                 return Err(WebDavError {
                     message: format!("Response too large: {} bytes", bytes.len()),
