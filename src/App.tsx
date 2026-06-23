@@ -328,6 +328,7 @@ function App() {
   const [statsOpen, setStatsOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
+  const terminalFullscreenMaximizedRef = useRef(false);
   const restoreWindowWidthRef = useRef<number | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
 
@@ -395,7 +396,15 @@ function App() {
 
     void (async () => {
       try {
-        await getCurrentWindow().setFullscreen(nextFullscreen);
+        const appWindow = getCurrentWindow();
+        if (nextFullscreen) {
+          const alreadyMaximized = await appWindow.isMaximized();
+          terminalFullscreenMaximizedRef.current = !alreadyMaximized;
+          if (!alreadyMaximized) await appWindow.toggleMaximize();
+        } else if (terminalFullscreenMaximizedRef.current) {
+          await appWindow.unmaximize();
+          terminalFullscreenMaximizedRef.current = false;
+        }
         setTerminalFullscreen(nextFullscreen);
       } catch (err) {
         toast.error(nextFullscreen ? "进入全屏失败" : "退出全屏失败", { description: String(err) });
