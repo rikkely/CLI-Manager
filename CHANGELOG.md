@@ -49,6 +49,7 @@
 - **新建终端继承当前 Tab 上下文**：从终端页、命令面板或快捷键新建普通终端时，继承当前普通 Tab 的工作目录与标题；不继承启动命令、项目环境变量或项目绑定，避免新终端自动执行命令。
 - **修复分屏后原 Tab 历史输出丢失**：重构 `SplitTerminalView` 为扁平绝对定位布局，所有终端面板作为稳定 keyed 子节点渲染；分屏操作仅改变布局位置与尺寸，不改变 React 组件父路径，从而避免 `XTermTerminal` 卸载并丢失 xterm.js 内存 scrollback buffer。手动分屏与 sub-agent hook 自动分屏均已修复。
 - **修复并发 sub-agent 转录 Tab 重复与丢失**：并发场景下 `AgentToolStart`（仅含 `toolUseId`）与 `SubagentStart`（仅含 `agentId`）无共同 ID，原逻辑导致 2 个子 Agent 产生 4 个 Tab，其中半数空白、半数被自动关闭后整体消失。现改为 `AgentToolStart` / `AgentToolStop` 仅触发 subagents 目录扫描、不创建 UI；真实 Tab 由携带 `agentId` + `agentType` 的 `SubagentStart` 创建，目录扫描负责将内容源升级为 child JSONL。`findSubagentSessionId` 的兜底匹配收紧为「仅当 payload 既无 `agentId` 也无 `toolUseId` 时才按 `parentTabId` 推断」，避免并发误匹配；子 Agent Tab 标题改为 `{agentType} (父Tab名)`，多个同父子 Agent 追加 `#N` 序号。
+- **修复 Codex 子 Agent 分屏空输出**：Codex `SubagentStart` 仅提供父 transcript、`SubagentStop` 才带独立 `agentTranscriptPath` 时，前端会先升级既有 pane 到 child JSONL、同步回填订阅前已写入的完整内容，再标记结束；Stop 后延长晚到 transcript pane 可见时间，避免自动分屏成功但输出为空。
 
 ### 字体设置
 

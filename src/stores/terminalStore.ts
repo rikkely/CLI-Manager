@@ -101,6 +101,11 @@ export interface SubagentTranscriptContent {
   source: SubagentTranscriptSource;
 }
 
+interface SubagentTranscriptSubscribeResult {
+  path: string;
+  initialContent: string;
+}
+
 export interface SplitState {
   direction: "horizontal" | "vertical";
   secondSessionId: string;
@@ -181,6 +186,7 @@ let subagentSeq = 0;
 const subagentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subagentDiscoveryTimers = new Map<string, ReturnType<typeof setInterval>>();
 const SUBAGENT_CLOSE_DELAY_MS = 1500;
+const SUBAGENT_CODEX_LATE_TRANSCRIPT_CLOSE_DELAY_MS = 10000;
 const SUBAGENT_DISCOVERY_INTERVAL_MS = 1000;
 const SUBAGENT_DISCOVERY_TTL_MS = 15000;
 
@@ -353,17 +359,17 @@ function startSubagentDiscovery(
 
           if (existingSession) {
             // 推导 child JSONL 路径并升级 pane
-            void invoke<string>("subagent_transcript_subscribe", {
+            void invoke<SubagentTranscriptSubscribeResult>("subagent_transcript_subscribe", {
               key: existingSession.id,
               transcriptPath: null,
               cwd,
               sessionId: parentSessionId,
               agentId: discoveredAgentId,
             })
-              .then((derivedPath) => {
+              .then((result) => {
                 const childSource: SubagentTranscriptSource = {
                   kind: "child-jsonl",
-                  transcriptPath: derivedPath,
+                  transcriptPath: result.path,
                 };
                 useTerminalStore.setState((state) => ({
                   sessions: state.sessions.map((session) =>
@@ -379,7 +385,15 @@ function startSubagentDiscovery(
                     },
                   },
                 }));
-                logInfo("[subagent_discovery] upgraded to child-jsonl", { parentTabId, agentId: discoveredAgentId, derivedPath });
+                if (result.initialContent) {
+                  useTerminalStore.getState().appendSubagentTranscript(existingSession.id, result.initialContent, true);
+                }
+                logInfo("[subagent_discovery] upgraded to child-jsonl", {
+                  parentTabId,
+                  agentId: discoveredAgentId,
+                  derivedPath: result.path,
+                  initialBytes: result.initialContent.length,
+                });
               })
               .catch((err) => logWarn("[subagent_discovery] subscribe failed", { parentTabId, agentId: discoveredAgentId, err }));
           }
@@ -1268,7 +1282,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       reason: source.reason,
     });
 
-    const subscribeChild = () => {
+    const subscribeChild = async () => {
       if (source.kind !== "child-jsonl" || !source.transcriptPath) {
         logWarn("[subagent_transcript] skip full parent transcript tail", {
           event: payload.event,
@@ -1278,50 +1292,74 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           sourceKind: source.kind,
           reason: source.reason,
         });
-        return;
+        return false;
       }
-      void invoke<string>("subagent_transcript_subscribe", {
-        key: pseudoId,
-        transcriptPath: source.transcriptPath,
-        cwd: payload.cwd ?? null,
-        sessionId: payload.sessionId ?? null,
-        agentId,
-      }).catch((err) => logError("subagent_transcript_subscribe failed", { pseudoId, err }));
+      try {
+        const result = await invoke<SubagentTranscriptSubscribeResult>("subagent_transcript_subscribe", {
+          key: pseudoId,
+          transcriptPath: source.transcriptPath,
+          cwd: payload.cwd ?? null,
+          sessionId: payload.sessionId ?? null,
+          agentId,
+        });
+        if (result.initialContent) {
+          useTerminalStore.getState().appendSubagentTranscript(pseudoId, result.initialContent, true);
+        }
+        logInfo("[subagent_transcript] subscribed child transcript", {
+          pseudoId,
+          path: result.path,
+          initialBytes: result.initialContent.length,
+        });
+        return true;
+      } catch (err) {
+        logError("subagent_transcript_subscribe failed", { pseudoId, err });
+        return false;
+      }
     };
 
-    const subscribeDerivedChild = () => {
+    const subscribeDerivedChild = async () => {
       if (!shouldAttemptDerivedChildTranscript(payload, source)) return false;
-      void invoke<string>("subagent_transcript_subscribe", {
-        key: pseudoId,
-        transcriptPath: null,
-        cwd: payload.cwd ?? null,
-        sessionId: payload.sessionId ?? null,
-        agentId,
-      })
-        .then((derivedPath) => {
-          const childSource: SubagentTranscriptSource = {
-            kind: "child-jsonl",
-            transcriptPath: derivedPath,
-            parentTranscriptPath: source.parentTranscriptPath,
-          };
-          useTerminalStore.setState((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === pseudoId && session.kind === "subagent-transcript" && session.subagent
-                ? { ...session, subagent: { ...session.subagent, source: childSource } }
-                : session
-            ),
-            subagentTranscripts: {
-              ...state.subagentTranscripts,
-              [pseudoId]: {
-                ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false }),
-                source: childSource,
-              },
+      try {
+        const result = await invoke<SubagentTranscriptSubscribeResult>("subagent_transcript_subscribe", {
+          key: pseudoId,
+          transcriptPath: null,
+          cwd: payload.cwd ?? null,
+          sessionId: payload.sessionId ?? null,
+          agentId,
+        });
+        const childSource: SubagentTranscriptSource = {
+          kind: "child-jsonl",
+          transcriptPath: result.path,
+          parentTranscriptPath: source.parentTranscriptPath,
+        };
+        useTerminalStore.setState((state) => ({
+          sessions: state.sessions.map((session) =>
+            session.id === pseudoId && session.kind === "subagent-transcript" && session.subagent
+              ? { ...session, subagent: { ...session.subagent, source: childSource } }
+              : session
+          ),
+          subagentTranscripts: {
+            ...state.subagentTranscripts,
+            [pseudoId]: {
+              ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false }),
+              source: childSource,
             },
-          }));
-          logInfo("[subagent_transcript] derived child transcript subscription", { pseudoId, agentId, derivedPath });
-        })
-        .catch((err) => logWarn("[subagent_transcript] derived child transcript unavailable", { pseudoId, agentId, err }));
-      return true;
+          },
+        }));
+        if (result.initialContent) {
+          useTerminalStore.getState().appendSubagentTranscript(pseudoId, result.initialContent, true);
+        }
+        logInfo("[subagent_transcript] derived child transcript subscription", {
+          pseudoId,
+          agentId,
+          derivedPath: result.path,
+          initialBytes: result.initialContent.length,
+        });
+        return true;
+      } catch (err) {
+        logWarn("[subagent_transcript] derived child transcript unavailable", { pseudoId, agentId, err });
+        return true;
+      }
     };
 
     // 去重：同一子 Agent 已有面板则更新 source；仅发现/切换 child JSONL 时订阅。
@@ -1361,8 +1399,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           [pseudoId]: { ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false }), ended: false, source },
         },
       }));
-      if (shouldSubscribe) subscribeChild();
-      else if (!subscribeDerivedChild() && source.kind !== "child-jsonl") subscribeChild();
+      if (shouldSubscribe) await subscribeChild();
+      else if (!(await subscribeDerivedChild()) && source.kind !== "child-jsonl") await subscribeChild();
       return;
     }
 
@@ -1419,8 +1457,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     // 持久化（sessionStore 会过滤掉转录伪会话）。
     void useSessionStore.getState().saveSessions(newSessions).catch(() => {});
 
-    if (shouldSubscribe) subscribeChild();
-    else if (!subscribeDerivedChild()) subscribeChild();
+    if (shouldSubscribe) await subscribeChild();
+    else if (!(await subscribeDerivedChild())) await subscribeChild();
   },
 
   finishSubagentTranscript: (payload) => {
@@ -1464,12 +1502,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const existingTimer = subagentCloseTimers.get(sessionId);
     if (existingTimer) clearTimeout(existingTimer);
+    const closeDelayMs =
+      payload.source === "codex" && trimOptional(payload.agentTranscriptPath)
+        ? SUBAGENT_CODEX_LATE_TRANSCRIPT_CLOSE_DELAY_MS
+        : SUBAGENT_CLOSE_DELAY_MS;
     const timer = setTimeout(() => {
       subagentCloseTimers.delete(sessionId);
       const store = useTerminalStore.getState();
       if (!store.sessions.some((session) => session.id === sessionId)) return;
       void store.closeSession(sessionId);
-    }, SUBAGENT_CLOSE_DELAY_MS);
+    }, closeDelayMs);
     subagentCloseTimers.set(sessionId, timer);
   },
 

@@ -439,7 +439,13 @@ function App() {
         return;
       }
       if (event.payload.event === "SubagentStop") {
-        useTerminalStore.getState().finishSubagentTranscript(event.payload);
+        if (event.payload.source === "codex" && event.payload.agentTranscriptPath?.trim()) {
+          void useTerminalStore.getState().openSubagentTranscript(event.payload).finally(() => {
+            useTerminalStore.getState().finishSubagentTranscript(event.payload);
+          });
+        } else {
+          useTerminalStore.getState().finishSubagentTranscript(event.payload);
+        }
         return;
       }
       const tabId = useTerminalStore.getState().handleCliHookEvent(event.payload);

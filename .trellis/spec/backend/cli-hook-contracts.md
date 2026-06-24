@@ -13,7 +13,7 @@ Concrete contracts for Claude/Codex hook integration.
 
 - Installed hook command: `<cli-manager-exe> __hook --source <claude|codex> --event <event>`.
 - Bridge event name: `claude-hook-notification`.
-- Frontend subscribe command: `subagent_transcript_subscribe({ key, transcriptPath, cwd, sessionId, agentId })`.
+- Frontend subscribe command: `subagent_transcript_subscribe({ key, transcriptPath, cwd, sessionId, agentId }) -> { path, initialContent }`.
 - Frontend store action on start/update: `openSubagentTranscript(payload)`.
 - Frontend store action on stop: `finishSubagentTranscript(payload)`.
 - Agent tool fallback hook names: `AgentToolStart` (from PreToolUse with matcher Agent), `AgentToolStop` (from PostToolUse with matcher Agent).
@@ -30,6 +30,10 @@ Concrete contracts for Claude/Codex hook integration.
   - Backend derivation from `cwd/sessionId/agentId` remains available for explicit transcript subscriptions, but frontend must not use it to disguise a parent transcript as child output.
   - `AgentToolStart` should create/update a `pending` pane only; it must not subscribe to the parent transcript.
   - `AgentToolStop` may upgrade the matching pending pane to `child-jsonl` when it has an independent `agentTranscriptPath` or enough `cwd/sessionId/agentId` data to derive `subagents/agent-<agentId>.jsonl`.
+- `SubagentStop` may also carry the first independent child transcript path, especially for Codex. When a matching pane already exists, the frontend must call `openSubagentTranscript(payload)` and await subscription/initial backfill before `finishSubagentTranscript(payload)`.
+- Subscribe response fields:
+  - `path`: resolved child JSONL path actually tailed by the backend.
+  - `initialContent`: existing complete JSONL lines already present before tail startup. The frontend must append this immediately; the backend tail starts after the consumed offset to avoid duplicate output.
 - `SubagentStart` and `SubagentStop` must be installed/uninstalled together for each source. Claude `PreToolUse`/`PostToolUse` Agent/Task fallback hooks must be installed/uninstalled with the Claude subagent hooks.
 - Stop routing priority: match by `agentId`; if missing, close only when exactly one transcript pane belongs to the parent `tabId`.
 
@@ -39,19 +43,23 @@ Concrete contracts for Claude/Codex hook integration.
 - Unknown `source` -> bridge rejects with `400 invalid payload`.
 - Event not allowed for its source -> bridge rejects with `400 invalid payload`.
 - Missing explicit transcript path and missing derivation fields -> `subagent_transcript_subscribe` returns the specific missing field error.
+- Child transcript already has complete lines at subscribe time -> backend returns them in `initialContent` and starts tailing from that offset; an incomplete final line must wait for completion before emit.
 - Missing or ambiguous stop target -> frontend does nothing; it must not guess and close multiple child panes.
 
 ### 5. Good/Base/Bad Cases
 
 - Good: Codex `SubagentStart` includes `transcript_path`; frontend subscribes directly to that path.
+- Good: Codex `SubagentStart` only has the parent `transcriptPath`, then `SubagentStop` includes `agentTranscriptPath`; frontend upgrades the existing pane, appends subscribe `initialContent`, then marks it ended.
 - Base: Claude `SubagentStart` includes `agent_transcript_path`; frontend uses it unchanged.
 - Good: `SubagentStop` includes `agent_id`; frontend marks the pane ended and closes it after the grace delay.
+- Bad: `SubagentStop` calls `finishSubagentTranscript` before awaiting the late child transcript subscription; the pane can close with empty output.
 - Bad: A new hook event is installed but not added to the bridge whitelist; the hook silently posts but the bridge rejects it.
 - Bad: `SubagentStop` has no `agent_id` while multiple child panes share one parent; frontend must not close all of them.
 
 ### 6. Tests Required
 
 - Hook install/uninstall tests assert `SubagentStart`/`SubagentStop` and, for Claude, `PreToolUse`/`PostToolUse` Agent tool fallback commands are written and removed for the affected source.
+- Rust unit test: `read_new_lines` returns only complete JSONL lines and the consumed offset used for subscribe `initialContent`.
 - Rust compile check must pass after bridge payload or command signature changes.
 - TypeScript type-check must pass after `CliHookPayload` field changes.
 
@@ -70,7 +78,8 @@ transcriptPath: payload.agentTranscriptPath ?? payload.transcriptPath ?? null
 ```ts
 const source = resolveSubagentTranscriptSource(payload);
 if (source.kind === "child-jsonl") {
-  subscribe(source.transcriptPath);
+  const { initialContent } = await subscribe(source.transcriptPath);
+  append(initialContent);
 } else {
   showDegradedSourceState(source.kind, source.reason);
 }
