@@ -21,7 +21,7 @@ interface TranscriptSection {
   status?: string;
 }
 
-const XML_BLOCK_TAGS = new Set(["session-context", "current-state", "workflow", "system-reminder"]);
+const XML_BLOCK_TAGS = new Set(["session-context", "current-state", "workflow", "system-reminder", "codex_internal_context"]);
 const LONG_BLOCK_LINE_THRESHOLD = 12;
 const LONG_BLOCK_CHAR_THRESHOLD = 1_200;
 const LONG_LIST_LINE_THRESHOLD = 10;
@@ -199,7 +199,11 @@ function getBlockKind(section: TranscriptSection): string {
 
 function shouldCollapse(section: TranscriptSection, lines: string[]): boolean {
   if (section.kind === "list") return lines.length >= LONG_LIST_LINE_THRESHOLD;
-  if (section.kind === "workflow-state" || section.kind === "xml") {
+  if (section.kind === "workflow-state") return true;
+  if (section.kind === "xml" && section.tag && XML_BLOCK_TAGS.has(section.tag)) {
+    return lines.length > PREVIEW_LINE_COUNT || section.text.length >= LONG_BLOCK_CHAR_THRESHOLD;
+  }
+  if (section.kind === "xml") {
     return lines.length >= LONG_BLOCK_LINE_THRESHOLD || section.text.length >= LONG_BLOCK_CHAR_THRESHOLD;
   }
   return false;

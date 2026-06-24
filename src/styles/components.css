@@ -2249,6 +2249,10 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--terminal-tab-accent) 54%, transparent);
 }
 
+.ui-terminal-pane-chrome .ui-tab-trigger[data-session-kind="file-editor"] {
+  color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 94%, var(--terminal-tab-accent) 6%);
+}
+
 .ui-terminal-pane-chrome .ui-terminal-actions {
   gap: 6px;
   padding-inline: 8px;
@@ -2921,6 +2925,69 @@
   border-radius: 14px;
   background-color: color-mix(in srgb, var(--surface-container-lowest) 92%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--surface-container-lowest) 10%, transparent);
+}
+
+.ui-history-message-collapse {
+  overflow: hidden;
+  border-radius: 10px;
+  background-color: transparent;
+}
+
+.ui-history-message-collapse summary {
+  display: flex;
+  cursor: pointer;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.1rem 0.15rem 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  list-style: none;
+  border-radius: 8px;
+}
+
+.ui-history-message-collapse summary::-webkit-details-marker {
+  display: none;
+}
+
+.ui-history-message-collapse summary:hover {
+  color: var(--text-primary);
+}
+
+.ui-history-message-collapse[open] summary {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 16%, transparent);
+}
+
+.ui-history-message-collapse-preview {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.18rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.ui-history-message-collapse-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-history-message-collapse-meta {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-ui-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.ui-history-message-collapse > .ui-history-transcript,
+.ui-history-message-collapse > .ui-markdown {
+  padding: 0.45rem 0.15rem 0.1rem;
 }
 
 .ui-history-transcript {

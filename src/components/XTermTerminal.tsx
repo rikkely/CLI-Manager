@@ -9,10 +9,14 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useShallow } from "zustand/shallow";
 import { applyTransparency, getTerminalTheme, getTerminalBackground } from "../lib/terminalThemes";
 import { backgroundAssetUrl } from "../lib/assetUrl";
+import { TERMINAL_FILE_PATH_MIME } from "../lib/aiPathFormatter";
+import { endTerminalFileDrag, getTerminalFileDragText } from "../lib/terminalFileDrag";
 import { Portal } from "./ui/Portal";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
 import { useProjectStore } from "../stores/projectStore";
@@ -118,6 +122,10 @@ const copyTextToClipboard = async (text: string) => {
     }
   }
 };
+
+const quoteShellPath = (path: string) => `'${path.replace(/'/g, "''")}'`;
+
+const formatShellPathList = (paths: string[]) => paths.filter(Boolean).map(quoteShellPath).join(" ");
 
 const openHttpUrl = (sessionId: string, uri: string) => {
   if (!/^https?:\/\//i.test(uri)) return;
@@ -591,6 +599,55 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     };
 
     pasteTarget.addEventListener("paste", onPaste, pasteListenerOptions);
+
+    const isPointInsidePasteTarget = (x: number, y: number) => {
+      const rect = pasteTarget.getBoundingClientRect();
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    };
+
+    const onDragOver = (e: DragEvent) => {
+      if (!isPointInsidePasteTarget(e.clientX, e.clientY)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const onDrop = (e: DragEvent) => {
+      const text = getTerminalFileDragText()
+        || e.dataTransfer?.getData(TERMINAL_FILE_PATH_MIME)
+        || e.dataTransfer?.getData("text/plain")
+        || "";
+      if (!isPointInsidePasteTarget(e.clientX, e.clientY)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!text) return;
+      pasteIntoTerminal(text);
+      endTerminalFileDrag();
+      terminal.focus();
+    };
+    window.addEventListener("dragover", onDragOver, true);
+    window.addEventListener("drop", onDrop, true);
+
+    let unlistenFileDrop: UnlistenFn | null = null;
+    let fileDropCancelled = false;
+    getCurrentWebview().onDragDropEvent(async (event) => {
+      const payload = event.payload;
+      if (payload.type !== "drop" || payload.paths.length === 0) return;
+      const scaleFactor = await getCurrentWindow().scaleFactor().catch(() => window.devicePixelRatio || 1);
+      if (fileDropCancelled) return;
+      const position = payload.position.toLogical(scaleFactor);
+      if (!isPointInsidePasteTarget(position.x, position.y)) return;
+
+      pasteIntoTerminal(formatShellPathList(payload.paths));
+      terminal.focus();
+    }).then((fn) => {
+      if (fileDropCancelled) {
+        fn();
+      } else {
+        unlistenFileDrop = fn;
+      }
+    }).catch((err) => {
+      logError("Failed to listen terminal file drop", { sessionId, err });
+    });
 
     const contextMenuTarget = containerRef.current;
     const onContextMenu = (e: MouseEvent) => {
@@ -1139,6 +1196,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       cancelled = true;
       cancelPendingCursorShow();
       pasteTarget.removeEventListener("paste", onPaste, pasteListenerOptions);
+      window.removeEventListener("dragover", onDragOver, true);
+      window.removeEventListener("drop", onDrop, true);
+      fileDropCancelled = true;
+      unlistenFileDrop?.();
       contextMenuTarget.removeEventListener("contextmenu", onContextMenu);
       textarea?.removeEventListener("compositionstart", onCompositionStart);
       textarea?.removeEventListener("compositionupdate", onCompositionUpdate);

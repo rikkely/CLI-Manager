@@ -153,7 +153,6 @@ struct HistoryIndexEntry {
 struct HistorySessionIndex {
     roots: HistoryRoots,
     entries: Vec<HistoryIndexEntry>,
-    by_path: HashMap<String, usize>,
     refreshed_at: i64,
     generation: u64,
 }
@@ -548,6 +547,7 @@ pub async fn history_list_sessions(
         if query_lower.is_none() {
             // 先按 project_path 过滤再算 fingerprint：避免对全部历史文件 fs::metadata。
             // claude 仅看 project_key（零 IO），codex 走 project_cache 缓存；命中面板轮询热路径。
+            let index_hints = cached_history_index_entries(&roots);
             let all_files = collect_session_files(source_filter.as_deref(), &roots);
             let total_files = all_files.len();
             let mut files: Vec<(SessionFileRef, SessionFileFingerprint)> = all_files
@@ -564,11 +564,12 @@ pub async fn history_list_sessions(
                 })
                 .collect();
             debug!(
-                "history_list_sessions project candidates: source={:?}, project_path={:?}, total_files={}, matched_files={}",
+                "history_list_sessions project candidates: source={:?}, project_path={:?}, total_files={}, matched_files={}, index_hints={}",
                 source_filter,
                 target_project_path,
                 total_files,
-                files.len()
+                files.len(),
+                index_hints.as_ref().map(|entries| entries.len()).unwrap_or(0)
             );
             files.sort_by(|a, b| {
                 b.1.updated_at
@@ -577,7 +578,7 @@ pub async fn history_list_sessions(
             });
 
             let mut matched = 0usize;
-            for (file_ref, _) in files {
+            for (file_ref, fingerprint) in files {
                 if matched < start_offset {
                     matched += 1;
                     continue;
@@ -586,7 +587,15 @@ pub async fn history_list_sessions(
                     break;
                 }
                 matched += 1;
-                let computed = get_or_scan_session_computation(&file_ref);
+                let path_key = path_to_key(&file_ref.path);
+                let indexed_entry = index_hints
+                    .as_ref()
+                    .and_then(|entries| entries.get(&path_key));
+                let computed = get_or_scan_session_computation_with_fingerprint(
+                    &file_ref,
+                    fingerprint,
+                    indexed_entry,
+                );
                 debug!(
                     "history_list_sessions matched file: source={}, project_key={}, session_id={}, path={}",
                     file_ref.source,
@@ -1729,7 +1738,7 @@ fn invalidate_history_caches() {
 // 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首个 history_get_stats 必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-const HISTORY_INDEX_CACHE_VERSION: u32 = 1;
+const HISTORY_INDEX_CACHE_VERSION: u32 = 2;
 const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -1792,19 +1801,40 @@ fn load_persisted_history_index(roots: &HistoryRoots) -> Option<HistorySessionIn
         return None;
     }
     let entries = persisted.entries;
-    let mut by_path = HashMap::with_capacity(entries.len());
-    for (index, entry) in entries.iter().enumerate() {
-        by_path.insert(path_to_key(&entry.file_ref.path), index);
-    }
     set_persisted_generation(&roots_key, persisted.generation);
     Some(HistorySessionIndex {
         roots: roots.clone(),
         entries,
-        by_path,
         // refreshed_at=0 → 刷新逻辑视为已过期，会重建并按 fingerprint 复用磁盘 computed。
         refreshed_at: 0,
         generation: persisted.generation,
     })
+}
+
+fn history_index_entries_by_path(index: &HistorySessionIndex) -> HashMap<String, HistoryIndexEntry> {
+    index
+        .entries
+        .iter()
+        .cloned()
+        .map(|entry| (path_to_key(&entry.file_ref.path), entry))
+        .collect()
+}
+
+fn cached_history_index_entries(roots: &HistoryRoots) -> Option<HashMap<String, HistoryIndexEntry>> {
+    if let Ok(index) = get_history_index().read() {
+        if index.roots.eq(roots) && !index.entries.is_empty() {
+            return Some(history_index_entries_by_path(&index));
+        }
+    }
+
+    let persisted = load_persisted_history_index(roots)?;
+    let entries = history_index_entries_by_path(&persisted);
+    if let Ok(mut index) = get_history_index().write() {
+        if !index.roots.eq(roots) || index.entries.is_empty() {
+            *index = persisted;
+        }
+    }
+    Some(entries)
 }
 
 fn save_persisted_history_index(index: &HistorySessionIndex) {
@@ -1972,11 +2002,6 @@ fn build_history_index(
 
     entries.sort_by(|a, b| b.computed.updated_at.cmp(&a.computed.updated_at));
 
-    let mut by_path = HashMap::with_capacity(entries.len());
-    for (index, entry) in entries.iter().enumerate() {
-        by_path.insert(path_to_key(&entry.file_ref.path), index);
-    }
-
     let changed = previous
         .as_ref()
         .map(|previous| !history_index_entries_match(&previous.entries, &entries))
@@ -1990,7 +2015,6 @@ fn build_history_index(
     HistorySessionIndex {
         roots: roots.clone(),
         entries,
-        by_path,
         refreshed_at: now,
         generation,
     }
@@ -2028,22 +2052,17 @@ fn history_index_entries_match(previous: &[HistoryIndexEntry], next: &[HistoryIn
     })
 }
 
-fn lookup_indexed_computation(file_ref: &SessionFileRef) -> Option<CachedSessionComputation> {
-    let index = get_history_index().read().ok()?;
-    let path_key = path_to_key(&file_ref.path);
-    let entry_index = *index.by_path.get(&path_key)?;
-    let entry = index.entries.get(entry_index)?;
+fn indexed_computation_from_entry(
+    file_ref: &SessionFileRef,
+    fingerprint: SessionFileFingerprint,
+    entry: &HistoryIndexEntry,
+) -> Option<CachedSessionComputation> {
     if entry.file_ref.source != file_ref.source
         || entry.file_ref.project_key != file_ref.project_key
+        || !can_reuse_session_scan(entry.fingerprint, fingerprint)
     {
         return None;
     }
-
-    let fingerprint = session_file_fingerprint(&file_ref.path);
-    if !can_reuse_session_scan(entry.fingerprint, fingerprint) {
-        return None;
-    }
-
     let mut computed = entry.computed.clone();
     computed.created_at = fingerprint.created_at;
     computed.updated_at = fingerprint.updated_at;
@@ -2175,12 +2194,17 @@ fn build_session_computation(
     }
 }
 
-fn get_or_scan_session_computation(file_ref: &SessionFileRef) -> CachedSessionComputation {
-    if let Some(computed) = lookup_indexed_computation(file_ref) {
+fn get_or_scan_session_computation_with_fingerprint(
+    file_ref: &SessionFileRef,
+    fingerprint: SessionFileFingerprint,
+    indexed_entry: Option<&HistoryIndexEntry>,
+) -> CachedSessionComputation {
+    if let Some(computed) = indexed_entry
+        .and_then(|entry| indexed_computation_from_entry(file_ref, fingerprint, entry))
+    {
         return computed;
     }
 
-    let fingerprint = session_file_fingerprint(&file_ref.path);
     let key = path_to_key(&file_ref.path);
 
     if let Ok(cache) = get_stats_cache().lock() {
@@ -3044,11 +3068,14 @@ fn scan_session_inner(
 
         if let Some(mut msg) = parse_message(&value) {
             message_count += 1;
+            let title_candidate = message_title_candidate(&msg);
             if first_message.is_none() {
-                first_message = Some(msg.content.clone());
+                first_message = title_candidate
+                    .clone()
+                    .or_else(|| Some(msg.content.clone()));
             }
             if first_user_message.is_none() && msg.role == "user" {
-                first_user_message = Some(msg.content.clone());
+                first_user_message = title_candidate;
             }
             if collect_messages {
                 if msg.model.is_none() && msg.role == "assistant" {
@@ -4230,6 +4257,128 @@ fn parse_message(value: &Value) -> Option<HistoryMessage> {
     })
 }
 
+fn message_title_candidate(message: &HistoryMessage) -> Option<String> {
+    title_candidate_from_text(&message.content)
+}
+
+fn title_candidate_from_text(text: &str) -> Option<String> {
+    if let Some(objective) = extract_simple_tag_block(text, "objective") {
+        if let Some(candidate) = title_candidate_from_lines(objective) {
+            return Some(candidate);
+        }
+    }
+    title_candidate_from_lines(text)
+}
+
+fn extract_simple_tag_block<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&close)? + start;
+    Some(&text[start..end])
+}
+
+fn title_candidate_from_lines(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        if trimmed.is_empty() || is_title_noise_line(trimmed) {
+            index += 1;
+            continue;
+        }
+
+        if is_injected_prompt_title_line(trimmed) {
+            return None;
+        }
+
+        if is_workflow_state_start_line(trimmed) {
+            index += 1;
+            while index < lines.len() && !is_workflow_state_end_line(lines[index].trim()) {
+                index += 1;
+            }
+            if index < lines.len() {
+                index += 1;
+            }
+            continue;
+        }
+
+        if let Some(tag) = title_xml_tag_name(trimmed) {
+            if is_title_noise_block_tag(&tag) {
+                index += 1;
+                if !title_line_closes_tag(trimmed, &tag) {
+                    while index < lines.len() && !title_line_closes_tag(lines[index].trim(), &tag)
+                    {
+                        index += 1;
+                    }
+                    if index < lines.len() {
+                        index += 1;
+                    }
+                }
+                continue;
+            }
+        }
+
+        return Some(trimmed.to_string());
+    }
+
+    None
+}
+
+fn title_xml_tag_name(line: &str) -> Option<String> {
+    let rest = line.trim_start().strip_prefix('<')?;
+    if rest.starts_with('/') || rest.starts_with('!') || rest.starts_with('?') {
+        return None;
+    }
+    let name: String = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+        .collect();
+    (!name.is_empty()).then(|| name.to_lowercase())
+}
+
+fn is_title_noise_block_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "codex_internal_context"
+            | "current-state"
+            | "instructions"
+            | "session-context"
+            | "system-reminder"
+            | "workflow"
+    )
+}
+
+fn title_line_closes_tag(line: &str, tag: &str) -> bool {
+    line.to_lowercase().contains(&format!("</{tag}>"))
+}
+
+fn is_workflow_state_start_line(line: &str) -> bool {
+    line.starts_with("[workflow-state:")
+}
+
+fn is_workflow_state_end_line(line: &str) -> bool {
+    line.starts_with("[/workflow-state")
+}
+
+fn is_title_noise_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower == "<objective>"
+        || lower == "</objective>"
+        || lower.starts_with("knowledge cutoff:")
+        || lower.starts_with("current date:")
+        || lower.starts_with("continuation behavior:")
+        || lower.starts_with("budget:")
+}
+
+fn is_injected_prompt_title_line(line: &str) -> bool {
+    let normalized = line.trim_start_matches('#').trim().to_lowercase();
+    normalized.starts_with("agents.md instructions for ")
+        || normalized.starts_with("system prompt")
+        || normalized.starts_with("developer instructions")
+}
+
 fn extract_role(value: &Value) -> Option<String> {
     let candidates = [
         value.get("role").and_then(Value::as_str),
@@ -4655,6 +4804,78 @@ mod tests {
         let computed = scan_session_computation(&file, 1, 2);
 
         assert_eq!(computed.session_id, "claude-session");
+    }
+
+    #[test]
+    fn build_session_computation_title_uses_objective_from_internal_context() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-session.jsonl");
+        let content = concat!(
+            "<codex_internal_context source=\"goal\">\n",
+            "Continue working toward the active thread goal.\n",
+            "<objective>\n",
+            "历史会话列表加载的太久\n",
+            "</objective>\n",
+            "</codex_internal_context>"
+        );
+        let line = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": content }
+        })
+        .to_string();
+        write_text(&file, &line);
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.title, "历史会话列表加载的太久");
+    }
+
+    #[test]
+    fn build_session_computation_title_skips_system_like_user_blocks() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("session.jsonl");
+        let system_line = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "<system-reminder>\nDo not show this as title.\n</system-reminder>"
+            }
+        })
+        .to_string();
+        let user_line = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": "真实用户第一句话" }
+        })
+        .to_string();
+        write_text(&file, &format!("{system_line}\n{user_line}\n"));
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.title, "真实用户第一句话");
+    }
+
+    #[test]
+    fn build_session_computation_title_skips_agents_instructions() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("session.jsonl");
+        let system_line = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "# AGENTS.md instructions for D:\\work\\pythonProject\\CLI-Manager\n\n## 角色定位\n..."
+            }
+        })
+        .to_string();
+        let user_line = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": "历史会话还是加载太慢了，重新优化" }
+        })
+        .to_string();
+        write_text(&file, &format!("{system_line}\n{user_line}\n"));
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.title, "历史会话还是加载太慢了，重新优化");
     }
 
     #[test]

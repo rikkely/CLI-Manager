@@ -1,8 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useCommandPaletteStore } from "../components/CommandPalette";
 import { useHistoryStore } from "../stores/historyStore";
+import { copyAiText } from "../lib/aiClipboard";
+import { formatAiPathBlock } from "../lib/aiPathFormatter";
 import { TERMINAL_TAB_CLOSE_REQUEST_EVENT, type TerminalTabCloseRequestDetail } from "../lib/terminalCloseConfirm";
 
 /** Convert a KeyboardEvent to a combo string like "Ctrl+Shift+T" */
@@ -49,6 +52,9 @@ export function useKeyboardShortcuts(options: KeyboardShortcutOptions = {}) {
       if (!combo) return;
       const shortcuts = shortcutsRef.current;
       const viewMode = viewModeRef.current;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isFileEditorTarget = !!target?.closest(".ui-file-editor-pane");
 
       // Command palette toggle works regardless of focus context
       if (isShortcutMatch(combo, shortcuts.commandPalette)) {
@@ -77,8 +83,6 @@ export function useKeyboardShortcuts(options: KeyboardShortcutOptions = {}) {
         return;
       }
 
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
       const isXtermTarget = !!target?.closest(".xterm");
       const isEditingTarget =
         tag === "INPUT" ||
@@ -88,6 +92,18 @@ export function useKeyboardShortcuts(options: KeyboardShortcutOptions = {}) {
 
       if (combo === "Ctrl+F" && !isXtermTarget) {
         e.preventDefault();
+      }
+
+      if (isShortcutMatch(combo, shortcuts.copyAi)) {
+        if (isEditingTarget || isXtermTarget || isFileEditorTarget) return;
+        const { project, activeFile } = useFileExplorerStore.getState();
+        if (!project) return;
+        e.preventDefault();
+        void copyAiText(
+          formatAiPathBlock(project, activeFile?.path ?? "", activeFile ? "file" : "directory"),
+          "AI 路径已复制"
+        );
+        return;
       }
 
       const terminalState = useTerminalStore.getState();

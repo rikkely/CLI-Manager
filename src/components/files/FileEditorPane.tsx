@@ -1,5 +1,8 @@
-import Editor from "@monaco-editor/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import Editor, { type OnMount } from "@monaco-editor/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { eventToCombo } from "../../hooks/useKeyboardShortcuts";
+import { copyAiText } from "../../lib/aiClipboard";
+import { formatAiAnchor, formatAiContextBlock, type AiTextSelection } from "../../lib/aiPathFormatter";
 import type { TerminalSession } from "../../lib/types";
 import { configureMonaco, languageFromPath } from "../../lib/monacoSetup";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -7,7 +10,7 @@ import { useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { MarkdownContent } from "../ui/MarkdownContent";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../ui/dialog";
-import { FileCode, Image, Save, X } from "../icons";
+import { Copy, FileCode, Image, Save, X } from "../icons";
 
 configureMonaco();
 
@@ -22,8 +25,12 @@ type PendingAction =
   | { kind: "close-file"; path: string }
   | null;
 
+type MonacoEditor = Parameters<OnMount>[0];
+
 export function FileEditorPane({ session, isActive, onClose }: FileEditorPaneProps) {
+  const editorRef = useRef<MonacoEditor | null>(null);
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
+  const copyAiShortcut = useSettingsStore((s) => s.keyboardShortcuts.copyAi);
   const project = useFileExplorerStore((s) => s.project);
   const openProject = useFileExplorerStore((s) => s.openProject);
   const openFiles = useFileExplorerStore((s) => s.openFiles);
@@ -43,6 +50,10 @@ export function FileEditorPane({ session, isActive, onClose }: FileEditorPanePro
   const dirtyFiles = visibleFiles.filter((file) => file.content !== file.savedContent);
   const language = useMemo(() => visibleFile ? languageFromPath(visibleFile.path) : "plaintext", [visibleFile]);
 
+  const handleEditorMount = useCallback<OnMount>((editor) => {
+    editorRef.current = editor;
+  }, []);
+
   useEffect(() => {
     const fileProject = session.fileEditor?.project;
     if (!isActive || !project || !fileProject || project.id === fileProject.id) return;
@@ -57,6 +68,46 @@ export function FileEditorPane({ session, isActive, onClose }: FileEditorPanePro
     if (!visibleFile || visibleFile.previewKind === "image") return;
     await saveActiveFile();
   }, [saveActiveFile, visibleFile]);
+
+  const getEditorSelection = useCallback((): AiTextSelection | null => {
+    const selection = editorRef.current?.getSelection();
+    if (!editorRef.current || !selection || selection.isEmpty()) return null;
+    return {
+      startLine: selection.startLineNumber,
+      endLine: selection.endLineNumber,
+      text: editorRef.current.getModel()?.getValueInRange(selection),
+    };
+  }, []);
+
+  const copyActiveAiPath = useCallback(() => {
+    if (!project || !visibleFile) return;
+    const selection = (visibleFile.previewKind === "text" || visibleFile.previewKind === "markdown") && previewMode === "source"
+      ? getEditorSelection()
+      : null;
+    void copyAiText(formatAiAnchor(project, visibleFile.path, selection), "AI 路径已复制");
+  }, [getEditorSelection, previewMode, project, visibleFile]);
+
+  const copyActiveAiContext = useCallback(() => {
+    if (!project || !visibleFile) return;
+    const selection = (visibleFile.previewKind === "text" || visibleFile.previewKind === "markdown") && previewMode === "source"
+      ? getEditorSelection()
+      : null;
+    void copyAiText(formatAiContextBlock(project, visibleFile.path, selection), "AI 上下文已复制");
+  }, [getEditorSelection, previewMode, project, visibleFile]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!isActive || !copyAiShortcut.trim()) return;
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest(".ui-file-editor-pane")) return;
+      if (eventToCombo(event) !== copyAiShortcut) return;
+      event.preventDefault();
+      event.stopPropagation();
+      copyActiveAiPath();
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [copyActiveAiPath, copyAiShortcut, isActive]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -145,6 +196,14 @@ export function FileEditorPane({ session, isActive, onClose }: FileEditorPanePro
             </button>
           </div>
         )}
+        <Button size="sm" variant="outline" disabled={!visibleFile} onClick={copyActiveAiPath}>
+          <Copy size={13} />
+          AI 路径
+        </Button>
+        <Button size="sm" variant="outline" disabled={!visibleFile} onClick={copyActiveAiContext}>
+          <Copy size={13} />
+          AI 上下文
+        </Button>
         <Button size="sm" variant="outline" disabled={!dirty} onClick={() => void save()}>
           <Save size={13} />
           保存
@@ -230,6 +289,7 @@ export function FileEditorPane({ session, isActive, onClose }: FileEditorPanePro
               value={visibleFile.content}
               language={language}
               theme={resolvedTheme === "dark" ? "vs-dark" : "vs"}
+              onMount={handleEditorMount}
               onChange={(value) => setActiveContent(value ?? "")}
               options={{
                 automaticLayout: true,

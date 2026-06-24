@@ -303,7 +303,7 @@ export function GitTreeNodeComponent({ node, depth, treeId, onFileClick, onReque
               <span className="truncate" style={{ color: TERM.fg }}>{node.name}</span>
               {suffixParts.length > 0 && (
                 <span className="truncate text-[12px] font-normal" style={{ color: TERM.dim }}>
-                  {suffixParts.join("\\")}
+                  /{suffixParts.join("/")}
                 </span>
               )}
             </span>

@@ -214,6 +214,7 @@ interface SortableTabProps {
   id: string;
   paneId: string;
   title: string;
+  sessionKind: TerminalSession["kind"];
   isActive: boolean;
   isEditing: boolean;
   notification: TabNotificationState;
@@ -232,6 +233,7 @@ function SortableTab({
   id,
   paneId,
   title,
+  sessionKind,
   isActive,
   isEditing,
   notification,
@@ -297,6 +299,7 @@ function SortableTab({
           style={style}
           className={`ui-interactive ui-tab-trigger mx-1 flex h-7 ${tabMinWidthClass} max-w-[180px] shrink-0 cursor-pointer items-center gap-2 rounded-lg px-3 text-[12px] font-medium`}
           data-terminal-tab-id={id}
+          data-session-kind={sessionKind}
           data-selected={isActive ? "true" : "false"}
           onClick={onActivate}
           onDoubleClick={onStartEdit}
@@ -692,6 +695,7 @@ function PaneTabBar({
               id={session.id}
               paneId={pane.id}
               title={session.title}
+              sessionKind={session.kind}
               isActive={session.id === activeSessionId}
               isEditing={editingSessionId === session.id}
               notification={tabNotifications[session.id] ?? "none"}

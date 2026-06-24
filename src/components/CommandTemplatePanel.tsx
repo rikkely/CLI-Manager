@@ -154,7 +154,7 @@ export function CommandTemplatePanel({ popoverSide = "bottom", toneClassName = "
       <PopoverTrigger asChild>
         <button
           className={`ui-focus-ring ui-icon-action ${toneClassName}`.trim()}
-          title="Command templates"
+          title="命令模板"
           aria-label="打开命令模板面板"
         >
           <TerminalSquare size={14} strokeWidth={1.5} />

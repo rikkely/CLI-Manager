@@ -17,6 +17,7 @@ const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
   prevTab: "上一个标签",
   commandPalette: "命令面板",
   sessionHistory: "会话历史",
+  copyAi: "Copy AI",
   toggleTerminalFullscreen: "终端全屏",
 };
 

@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Folder, RefreshCw, Search, Star, Terminal, X
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { VendorIcon, inferVendor } from "../VendorIcon";
 import { Portal } from "../ui/Portal";
 import { formatTime, makeSessionLabel } from "./historyViewUtils";
 
@@ -119,6 +120,11 @@ function countProjects(node: HistoryProjectTreeNode): number {
   return node.children.reduce((sum, child) => sum + countProjects(child), 0);
 }
 
+function ProjectFilterIcon({ project, size = 13 }: { project: Project; size?: number }) {
+  const vendor = project.cli_tool ? inferVendor(project.cli_tool) : null;
+  return vendor ? <VendorIcon vendor={vendor} size={size} /> : <Terminal size={size} strokeWidth={1.5} />;
+}
+
 export function HistoryListPane({
   historySidebarWidth,
   sidebarRef,
@@ -160,15 +166,15 @@ export function HistoryListPane({
   const projectDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const projectTree = useMemo(() => buildHistoryProjectTree(groups, projects), [groups, projects]);
-  const selectedProjectName = useMemo(
-    () => projects.find((project) => project.path === projectPathFilter)?.name ?? null,
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.path === projectPathFilter) ?? null,
     [projectPathFilter, projects]
   );
   const selectedProjectLabel = useMemo(() => {
-    if (selectedProjectName) return selectedProjectName;
+    if (selectedProject) return selectedProject.name;
     if (!projectPathFilter) return "全部项目";
     return projectPathFilter.split(/[\\/]/).pop() || projectPathFilter;
-  }, [projectPathFilter, selectedProjectName]);
+  }, [projectPathFilter, selectedProject]);
 
   const toggleFilterGroup = useCallback((groupId: string) => {
     setCollapsedFilterGroups((prev) => {
@@ -316,7 +322,9 @@ export function HistoryListPane({
         style={{ paddingLeft }}
         title={node.project.path}
       >
-        <Terminal size={13} className="shrink-0" />
+        <span className="ui-tree-leading-icon">
+          <ProjectFilterIcon project={node.project} size={13} />
+        </span>
         <span className="min-w-0 flex-1 truncate font-medium">{node.project.name}</span>
       </button>
     );
@@ -382,7 +390,13 @@ export function HistoryListPane({
             aria-expanded={projectMenuOpen}
             title={projectPathFilter ?? "全部项目"}
           >
-            <Folder size={13} className="shrink-0 text-text-muted" />
+            {selectedProject ? (
+              <span className="ui-tree-leading-icon">
+                <ProjectFilterIcon project={selectedProject} size={13} />
+              </span>
+            ) : (
+              <Folder size={13} className="shrink-0 text-text-muted" />
+            )}
             <span className="min-w-0 flex-1 truncate">
               <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">项目来源</span>
               <span className="font-semibold text-text-primary">{selectedProjectLabel}</span>

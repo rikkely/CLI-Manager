@@ -522,14 +522,25 @@ function DailyUsageTrendChart({
 
   const hasData = items.some((item) => totalTokensOf(item) > 0 || item.total_cost_usd > 0);
   const option = useMemo<EChartsOption>(() => {
-    const tokenAxisMax = niceAxisMax(Math.max(0, ...items.map(totalTokensOf)));
+    const tokenAxisMax = niceAxisMax(
+      Math.max(
+        0,
+        ...items.flatMap((item) => [
+          totalTokensOf(item),
+          item.input_tokens,
+          item.output_tokens,
+          item.cache_creation_tokens,
+          item.cache_read_tokens,
+        ])
+      )
+    );
     const costAxisMax = niceAxisMax(Math.max(0, ...items.map((item) => item.total_cost_usd)));
     const denseLabels = items.length > 18;
     return {
       backgroundColor: "transparent",
       animationDuration: 650,
-      // 固定折线配色：主题语义色在部分主题里 accent≈success 会撞色（总Token 与输入同色），故写死区分。
-      color: ["#4F9DF7", "#46C06A", "#F0617A", "#E8A33D"],
+      // 固定主折线配色：主题语义色在部分主题里 accent≈success 会撞色（总Token 与输入同色），故总/输入/输出写死区分。
+      color: ["#4F9DF7", "#46C06A", "#F0617A", SERIES_COLORS.cacheCreation, SERIES_COLORS.cacheRead],
       tooltip: {
         trigger: "axis",
         confine: true,
@@ -608,7 +619,8 @@ function DailyUsageTrendChart({
         },
         { name: "输入", type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.input_tokens) },
         { name: "输出", type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.output_tokens) },
-        { name: "缓存", type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.cache_creation_tokens + item.cache_read_tokens) },
+        { name: "缓存写入", type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.cache_creation_tokens) },
+        { name: "缓存命中", type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.cache_read_tokens) },
         {
           name: "费用",
           type: "bar",

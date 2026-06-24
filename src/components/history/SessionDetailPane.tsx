@@ -1,6 +1,6 @@
 ﻿import { useVirtualizer } from "@tanstack/react-virtual";
 import { BookCopy, Copy, GitCompare, Star } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { HistoryMessage, HistorySessionDetail, HistorySessionView } from "../../lib/types";
 import { EmptyState } from "../ui/EmptyState";
@@ -60,6 +60,82 @@ const DETAIL_VIEWS: Array<{ id: HistoryDetailView; label: string }> = [
   { id: "tools", label: "工具" },
   { id: "subtasks", label: "子任务" },
 ];
+
+function isInjectedPromptContent(content: string): boolean {
+  const trimmed = content.trimStart();
+  const lowerTrimmed = trimmed.toLowerCase();
+  const firstLine = lowerTrimmed.split(/\r?\n/, 1)[0]?.replace(/^#+\s*/, "").trim() ?? "";
+  return (
+    firstLine.startsWith("agents.md instructions for ") ||
+    firstLine.startsWith("system prompt") ||
+    firstLine.startsWith("developer instructions") ||
+    lowerTrimmed.startsWith("<system-reminder") ||
+    lowerTrimmed.startsWith("<codex_internal_context") ||
+    lowerTrimmed.startsWith("<session-context")
+  );
+}
+
+function shouldAutoCollapseMessage(message: HistoryMessage): boolean {
+  if (isInjectedPromptContent(message.content)) return true;
+  const role = message.role;
+  const normalized = role.toLowerCase();
+  return normalized !== "user";
+}
+
+function getCollapsedMessagePreview(content: string): string[] {
+  const lines: string[] = [];
+  let start = 0;
+
+  for (let i = 0; i <= content.length && lines.length < 2; i++) {
+    if (i < content.length && content[i] !== "\n") continue;
+    const line = content.slice(start, i).replace(/\r$/, "").trim();
+    if (line) lines.push(line);
+    start = i + 1;
+  }
+
+  return lines.length > 0 ? lines : ["无文本内容"];
+}
+
+function AutoCollapsedMessageContent({
+  message,
+  query,
+  forceOpen,
+}: {
+  message: HistoryMessage;
+  query: string;
+  forceOpen: boolean;
+}) {
+  const [open, setOpen] = useState(forceOpen);
+
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
+
+  if (!shouldAutoCollapseMessage(message)) {
+    return <SessionTranscriptContent content={message.content} query={query} />;
+  }
+
+  const previewLines = getCollapsedMessagePreview(message.content);
+
+  return (
+    <details
+      className="ui-history-message-collapse"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary aria-label={open ? "收起内容" : "展开折叠内容"}>
+        {!open && (
+          <span className="ui-history-message-collapse-preview">
+            {previewLines.map((line, index) => (
+              <span key={index}>{line}</span>
+            ))}
+          </span>
+        )}
+      </summary>
+      <SessionTranscriptContent content={message.content} query={query} />
+    </details>
+  );
+}
 
 export function SessionDetailPane({
   activeView,
@@ -161,6 +237,7 @@ export function SessionDetailPane({
               <button
                 onClick={() => copyText(activeView.session_id, "sessionId")}
                 className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                style={{ color: "var(--accent)" }}
                 title="复制 sessionId"
               >
                 <Copy size={11} />
@@ -169,6 +246,7 @@ export function SessionDetailPane({
               <button
                 onClick={() => copyText(locationText, "会话定位信息")}
                 className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                style={{ color: "var(--primary)" }}
                 title="复制 source/project/filePath 定位信息"
               >
                 <Copy size={11} />
@@ -181,6 +259,7 @@ export function SessionDetailPane({
               onClick={onOpenPrompt}
               aria-label="打开历史 Prompt 库"
               className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+              style={{ color: "var(--success)" }}
               title="历史 Prompt 库"
             >
               <BookCopy size={12} />
@@ -190,6 +269,7 @@ export function SessionDetailPane({
               onClick={onOpenDiff}
               aria-label="打开 Diff 视图"
               className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+              style={{ color: "var(--danger)" }}
               title="Diff 视图"
             >
               <GitCompare size={12} />
@@ -199,7 +279,11 @@ export function SessionDetailPane({
               onClick={onToggleStar}
               aria-label={activeView.starred ? "取消收藏会话" : "收藏会话"}
               className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-              style={{ color: activeView.starred ? "var(--warning)" : undefined }}
+              style={{
+                color: activeView.starred
+                  ? "var(--warning)"
+                  : "color-mix(in srgb, var(--warning) 78%, var(--on-surface-variant))",
+              }}
               title="收藏"
             >
               <Star size={12} fill={activeView.starred ? "currentColor" : "none"} />
@@ -281,7 +365,7 @@ export function SessionDetailPane({
                     </span>
                     <span>{msg.timestamp ?? "-"}</span>
                   </div>
-                  <SessionTranscriptContent content={msg.content} query={sessionQuery} />
+                  <AutoCollapsedMessageContent message={msg} query={sessionQuery} forceOpen={isMatched || isFocused} />
                 </div>
               );
             })}

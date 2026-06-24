@@ -1161,14 +1161,25 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
   const peakLabel = granularity === "小时" ? "峰值小时" : granularity === "月" ? "峰值月份" : "最高使用日";
   const option = useMemo<EChartsOption>(() => {
     const dates = items.map((item) => item.date);
-    const tokenAxisMax = niceAxisMax(Math.max(0, ...items.flatMap((item) => [item.totalTokens, item.inputTokens, item.outputTokens])));
+    const tokenAxisMax = niceAxisMax(
+      Math.max(
+        0,
+        ...items.flatMap((item) => [
+          item.totalTokens,
+          item.inputTokens,
+          item.outputTokens,
+          item.cacheCreationTokens,
+          item.cacheReadTokens,
+        ])
+      )
+    );
     const costAxisMax = niceAxisMax(Math.max(0, ...items.map((item) => item.totalCost)));
     const denseDailyLabels = granularity === "天" && dates.length > 18;
     const xAxisLabelInterval = denseDailyLabels ? Math.ceil(dates.length / 8) : 0;
     return {
       backgroundColor: "transparent",
       animationDuration: 700,
-      color: [ACCENT, SERIES_COLORS.input, SERIES_COLORS.output, SERIES_COLORS.cacheCreation],
+      color: [ACCENT, SERIES_COLORS.input, SERIES_COLORS.output, SERIES_COLORS.cacheCreation, SERIES_COLORS.cacheRead],
       tooltip: {
         trigger: "axis",
         confine: true,
@@ -1279,6 +1290,22 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           symbol: "none",
           lineStyle: { width: 1.8, opacity: 0.9 },
           data: items.map((item) => item.outputTokens),
+        },
+        {
+          name: "缓存写入",
+          type: "line",
+          smooth: true,
+          symbol: "none",
+          lineStyle: { width: 1.8, opacity: 0.9 },
+          data: items.map((item) => item.cacheCreationTokens),
+        },
+        {
+          name: "缓存命中",
+          type: "line",
+          smooth: true,
+          symbol: "none",
+          lineStyle: { width: 1.8, opacity: 0.9 },
+          data: items.map((item) => item.cacheReadTokens),
         },
         {
           name: "费用",

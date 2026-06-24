@@ -48,6 +48,7 @@ interface FileExplorerStore {
   refreshGitChanges: () => Promise<void>;
   loadDir: (path: string) => Promise<void>;
   toggleDir: (path: string) => Promise<void>;
+  collapseDir: (path: string) => void;
   setSearchQuery: (query: string) => Promise<void>;
   openFile: (entry: ProjectFileEntry) => Promise<void>;
   setActiveFilePath: (path: string) => void;
@@ -60,6 +61,184 @@ interface FileExplorerStore {
   deleteEntry: (path: string) => Promise<void>;
   setClipboard: (clipboard: FileClipboard | null) => void;
   pasteInto: (targetParentPath: string, overwrite: boolean) => Promise<void>;
+}
+
+export const DEFAULT_COLLAPSED_DIRECTORY_NAMES = [
+  ".git",
+  ".hg",
+  ".svn",
+  ".ace-tool",
+  ".aider",
+  ".augment",
+  ".claude",
+  ".cline",
+  ".codex",
+  ".continue",
+  ".context",
+  ".copilot",
+  ".cody",
+  ".cursor",
+  ".devcontainer",
+  ".devbox",
+  ".devenv",
+  ".direnv",
+  ".eclipse",
+  ".emacs.d",
+  ".fleet",
+  ".gemini",
+  ".goose",
+  ".helix",
+  ".history",
+  ".idea",
+  ".idea_modules",
+  ".ionide",
+  ".jdtls",
+  ".kiro",
+  ".kdev4",
+  ".lapce",
+  ".lsp",
+  ".metadata",
+  ".netbeans",
+  ".nvim",
+  ".nova",
+  ".openhands",
+  ".opencode",
+  ".omnisharp",
+  ".projectile",
+  ".qoder",
+  ".ropeproject",
+  ".roo",
+  ".run",
+  ".serena",
+  ".settings",
+  ".superpowers",
+  ".tabnine",
+  ".trae",
+  ".trellis",
+  ".vscode",
+  ".vscode-insiders",
+  ".vscode-test",
+  ".vagrant",
+  ".vim",
+  ".windsurf",
+  ".worktrees",
+  ".zed",
+  ".zed-server",
+  "nbproject",
+  "node_modules",
+  "bower_components",
+  ".yarn",
+  ".pnpm-store",
+  "vendor",
+  "Pods",
+  "Carthage",
+  "deps",
+  "dist",
+  "build",
+  "out",
+  "output",
+  ".output",
+  "target",
+  "bin",
+  "obj",
+  "Debug",
+  "Release",
+  "x64",
+  "x86",
+  "coverage",
+  "htmlcov",
+  "reports",
+  "arthas-output",
+  "BASE_HOME_IS_UNDEFINED",
+  "nul",
+  "artifacts",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".astro",
+  ".remix",
+  ".vite",
+  ".turbo",
+  ".parcel-cache",
+  ".webpack",
+  ".angular",
+  ".expo",
+  ".vercel",
+  ".netlify",
+  ".docusaurus",
+  "storybook-static",
+  ".cache",
+  "cache",
+  ".gradle",
+  ".intellijPlatform",
+  ".bloop",
+  ".bsp",
+  ".ccls-cache",
+  ".clangd",
+  ".metals",
+  ".scala-build",
+  ".dart_tool",
+  ".bundle",
+  ".terraform",
+  ".serverless",
+  ".aws-sam",
+  ".build",
+  ".vs",
+  "xcuserdata",
+  "_ReSharper.Caches",
+  "DerivedData",
+  "CMakeFiles",
+  "cmake-build-debug",
+  "cmake-build-release",
+  "cmake-build-relwithdebinfo",
+  "cmake-build-minsizerel",
+  "generated",
+  "generated-sources",
+  "generated-test-sources",
+  "classes",
+  "TestResults",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".nox",
+  ".tox",
+  ".pyre",
+  ".pytype",
+  ".hypothesis",
+  ".ipynb_checkpoints",
+  ".venv",
+  "venv",
+  "env",
+  ".env",
+  "logs",
+  "log",
+  "tmp",
+  "temp",
+] as const;
+
+const DEFAULT_COLLAPSED_DIRECTORY_NAME_SET = new Set(
+  DEFAULT_COLLAPSED_DIRECTORY_NAMES.map((name) => name.toLowerCase())
+);
+
+export function isDefaultCollapsedDirectoryName(name: string): boolean {
+  return DEFAULT_COLLAPSED_DIRECTORY_NAME_SET.has(name.toLowerCase());
+}
+
+function isDefaultCollapsedPath(path: string): boolean {
+  if (!path) return false;
+  return path
+    .split("/")
+    .some(isDefaultCollapsedDirectoryName);
+}
+
+function pruneDefaultCollapsedPaths(paths: Set<string>): Set<string> {
+  return new Set(Array.from(paths).filter((path) => path === "" || !isDefaultCollapsedPath(path)));
+}
+
+function collapsePath(paths: Set<string>, targetPath: string): Set<string> {
+  if (!targetPath) return new Set([""]);
+  return new Set(Array.from(paths).filter((path) => path !== targetPath && !path.startsWith(`${targetPath}/`)));
 }
 
 function normalizeEntry(entry: ProjectFileEntry): ProjectFileEntry {
@@ -149,17 +328,18 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
 
   openProject: async (project) => {
     const current = get().project;
+    const keepCurrentProject = current?.id === project.id;
     set({
       project,
       loading: true,
       searchQuery: "",
       searchResults: [],
-      expandedPaths: current?.id === project.id ? get().expandedPaths : new Set([""]),
-      openFiles: current?.id === project.id ? get().openFiles : [],
-      activeFilePath: current?.id === project.id ? get().activeFilePath : null,
-      activeFile: current?.id === project.id ? get().activeFile : null,
-      gitChanges: current?.id === project.id ? get().gitChanges : [],
-      clipboard: current?.id === project.id ? get().clipboard : null,
+      expandedPaths: keepCurrentProject ? pruneDefaultCollapsedPaths(get().expandedPaths) : new Set([""]),
+      openFiles: keepCurrentProject ? get().openFiles : [],
+      activeFilePath: keepCurrentProject ? get().activeFilePath : null,
+      activeFile: keepCurrentProject ? get().activeFile : null,
+      gitChanges: keepCurrentProject ? get().gitChanges : [],
+      clipboard: keepCurrentProject ? get().clipboard : null,
     });
     try {
       const [tree, gitChanges] = await Promise.all([
@@ -220,6 +400,10 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     expanded.add(path);
     set({ expandedPaths: expanded });
     await get().loadDir(path);
+  },
+
+  collapseDir: (path) => {
+    set((state) => ({ expandedPaths: collapsePath(state.expandedPaths, path) }));
   },
 
   setSearchQuery: async (query) => {

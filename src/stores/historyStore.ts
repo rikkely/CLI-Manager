@@ -112,6 +112,7 @@ const DEFAULT_SEARCH_LIMIT = 120;
 const STATS_CACHE_TTL_MS = 5 * 60 * 1000;
 const STATS_CACHE_MAX = 16;
 const STATS_PROJECT_OPTIONS_CACHE_MAX = 8;
+const AUTO_OPEN_SESSION_DELAY_MS = 180;
 
 interface StatsCacheEntry {
   payload: HistoryStatsPayload;
@@ -126,6 +127,14 @@ interface StatsProjectOptionsCacheEntry {
 const statsCache = new Map<string, StatsCacheEntry>();
 const statsProjectOptionsCache = new Map<string, StatsProjectOptionsCacheEntry>();
 let statsRequestSeq = 0;
+let pendingAutoOpenSessionTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPendingAutoOpenSession() {
+  if (pendingAutoOpenSessionTimer !== null) {
+    clearTimeout(pendingAutoOpenSessionTimer);
+    pendingAutoOpenSessionTimer = null;
+  }
+}
 
 function statsCacheGet(key: string): StatsCacheEntry | undefined {
   const entry = statsCache.get(key);
@@ -629,6 +638,10 @@ function makeSessionKey(source: HistorySource, sessionId: string, filePath: stri
   return `${source}:${sessionId}:${filePath}`;
 }
 
+function normalizeMetaPath(path: string): string {
+  return path.replace(/\\/g, "/").toLowerCase();
+}
+
 function makeStatsProjectOptionsCacheKey(
   source: HistorySourceFilter,
   historyPathKey: string
@@ -682,9 +695,26 @@ function toView(summary: HistorySessionSummary, meta?: SessionMeta): HistorySess
 }
 
 function applyMeta(summaries: HistorySessionSummary[], metaMap: SessionMetaMap): HistorySessionView[] {
+  const metaBySourceSession = new Map<string, SessionMeta>();
+  const metaBySourcePath = new Map<string, SessionMeta>();
+  for (const meta of Object.values(metaMap)) {
+    const source = meta.source.toLowerCase();
+    if (meta.session_id) {
+      metaBySourceSession.set(`${source}:${meta.session_id}`, meta);
+    }
+    if (meta.file_path) {
+      metaBySourcePath.set(`${source}:${normalizeMetaPath(meta.file_path)}`, meta);
+    }
+  }
+
   const views = summaries.map((summary) => {
     const key = makeSessionKey(summary.source, summary.session_id, summary.file_path);
-    return toView(summary, metaMap[key]);
+    const source = summary.source.toLowerCase();
+    const meta =
+      metaMap[key] ??
+      metaBySourceSession.get(`${source}:${summary.session_id}`) ??
+      metaBySourcePath.get(`${source}:${normalizeMetaPath(summary.file_path)}`);
+    return toView(summary, meta);
   });
   views.sort((a, b) => {
     if (a.starred !== b.starred) {
@@ -797,6 +827,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   closeHistory: () => {
+    clearPendingAutoOpenSession();
     set({ isOpen: false });
   },
 
@@ -861,7 +892,19 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         focusedMessageIndex: null,
       });
       if (nextActiveKey && !activeExists) {
-        await get().openSession(nextActiveKey);
+        clearPendingAutoOpenSession();
+        pendingAutoOpenSessionTimer = setTimeout(() => {
+          pendingAutoOpenSessionTimer = null;
+          const state = get();
+          if (!state.isOpen || state.activeSessionKey !== nextActiveKey) return;
+          if (
+            state.activeSession &&
+            makeSessionKey(state.activeSession.source, state.activeSession.session_id, state.activeSession.file_path) === nextActiveKey
+          ) {
+            return;
+          }
+          void state.openSession(nextActiveKey).catch(() => undefined);
+        }, AUTO_OPEN_SESSION_DELAY_MS);
       }
     } finally {
       set({ loadingSessions: false });
@@ -904,11 +947,10 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       for (const summary of nextSummaries) {
         summaryMap.set(makeSessionKey(summary.source, summary.session_id, summary.file_path), summary);
       }
-      const metaMap = await readMetaMap();
+      const metaMap = get().metaMap;
       const sessions = applyMeta(Array.from(summaryMap.values()), metaMap);
       set({
         sessions,
-        metaMap,
         hasMoreSessions: allSummaries.length > SESSION_PAGE_SIZE,
         sessionListOffset: offset + nextSummaries.length,
       });
@@ -922,6 +964,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   openSession: async (sessionKey) => {
+    clearPendingAutoOpenSession();
     const stopPerf = createPerfMarker("history.session.detail", { sessionKey });
     const target = get().sessions.find((item) => item.sessionKey === sessionKey);
     if (!target) {

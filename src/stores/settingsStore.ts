@@ -43,11 +43,13 @@ export type ShortcutAction =
   | "prevTab"
   | "commandPalette"
   | "sessionHistory"
+  | "copyAi"
   | "toggleTerminalFullscreen";
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
 export type TerminalNewlineShortcut = "Shift+Enter" | "Ctrl+Enter" | "Alt+Enter";
 export type UnsplitBehavior = "merge" | "close";
+export type FileExplorerIgnoredPaths = Record<string, string[]>;
 
 export type HookEventType =
   | "SessionStart"
@@ -64,6 +66,7 @@ const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
   "prevTab",
   "commandPalette",
   "sessionHistory",
+  "copyAi",
   "toggleTerminalFullscreen",
 ];
 
@@ -89,6 +92,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   prevTab: "Alt+ArrowLeft",
   commandPalette: "Ctrl+P",
   sessionHistory: "Ctrl+K",
+  copyAi: "Alt+P",
   toggleTerminalFullscreen: "F11",
 };
 
@@ -179,6 +183,7 @@ interface Settings {
   /** Git 变更树分组模式：directory（按目录树） / module（按顶层目录模块） */
   gitGroupBy: "directory" | "module";
   confirmBeforeClosingTerminalTab: boolean;
+  fileExplorerIgnoredPaths: FileExplorerIgnoredPaths;
 }
 
 interface SettingsStore extends Settings {
@@ -264,6 +269,7 @@ const DEFAULTS: Settings = {
   ccSwitchDbPath: null,
   gitGroupBy: "directory",
   confirmBeforeClosingTerminalTab: false,
+  fileExplorerIgnoredPaths: {},
 };
 
 const LEGACY_LIGHT_PALETTE_MAP: Partial<Record<string, LightThemePalette>> = {
@@ -392,6 +398,27 @@ export function migrateTerminalToolbarOrder(value: unknown): string[] {
 
 function migrateUnsplitBehavior(value: unknown): UnsplitBehavior {
   return value === "close" || value === "merge" ? value : DEFAULTS.unsplitBehavior;
+}
+
+function migrateFileExplorerIgnoredPaths(value: unknown): FileExplorerIgnoredPaths {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+
+  const result: FileExplorerIgnoredPaths = {};
+  for (const [projectId, paths] of Object.entries(value as Record<string, unknown>)) {
+    if (!projectId || !Array.isArray(paths)) continue;
+    const cleanPaths = Array.from(new Set(paths.filter((path): path is string => (
+      typeof path === "string"
+      && path.length > 0
+      && !path.includes("\\")
+      && !path.split("/").includes("..")
+    ))));
+    if (cleanPaths.length > 0) {
+      result[projectId] = cleanPaths;
+    }
+  }
+  return result;
 }
 
 export function migrateTerminalBackground(value: unknown): TerminalBackgroundSettings {
@@ -594,6 +621,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.confirmBeforeClosingTerminalTab === "boolean"
         ? entries.confirmBeforeClosingTerminalTab
         : DEFAULTS.confirmBeforeClosingTerminalTab;
+    entries.fileExplorerIgnoredPaths = migrateFileExplorerIgnoredPaths(entries.fileExplorerIgnoredPaths);
 
     // 检测背景图是否仍存在；若不存在，仅在内存中清空 imagePath，保留 settings.json
     // 中的原配置，便于后续提示用户「之前选的图丢了」。
