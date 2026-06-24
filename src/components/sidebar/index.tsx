@@ -1090,7 +1090,7 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
                   }}
                 >
                   <ListClockIcon size={14} />
-                  会话历史
+                  {t("sidebar.menu.sessionHistory")}
                 </button>
                 {contextMenu.project.cli_tool.toLowerCase().includes("claude") && (
                   <button
