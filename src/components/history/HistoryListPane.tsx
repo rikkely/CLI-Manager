@@ -53,6 +53,7 @@ interface HistoryListPaneProps {
   searchHits: HistorySearchHit[];
   globalSearchRef: RefObject<HTMLInputElement | null>;
   onRefresh: () => void;
+  onClose: () => void;
   onSourceFilterChange: (value: HistorySourceFilter) => void;
   onProjectPathFilterChange: (value: string | null) => void;
   onGlobalQueryChange: (value: string) => void;
@@ -72,7 +73,8 @@ const SOURCE_FILTER_OPTIONS: { value: HistorySourceFilter; label: string }[] = [
 
 function rowHeight(row: HistoryListRow): number {
   if (row.type === "group" || row.type === "searchHeader" || row.type === "searching") return 32;
-  if (row.type === "loading" || row.type === "empty" || row.type === "loadMore") return 56;
+  if (row.type === "empty") return 88;
+  if (row.type === "loading" || row.type === "loadMore") return 56;
   if (row.type === "searchHit") return 72;
   return 96;
 }
@@ -141,6 +143,7 @@ export function HistoryListPane({
   searchHits,
   globalSearchRef,
   onRefresh,
+  onClose,
   onSourceFilterChange,
   onProjectPathFilterChange,
   onGlobalQueryChange,
@@ -169,6 +172,26 @@ export function HistoryListPane({
     if (!projectPathFilter) return "全部项目";
     return projectPathFilter.split(/[\\/]/).pop() || projectPathFilter;
   }, [projectPathFilter, selectedProjectName]);
+
+  const emptySessionCopy = useMemo(() => {
+    const sourceLabel = sourceFilter === "all" ? "Claude/Codex" : sourceFilter === "claude" ? "Claude" : "Codex";
+    if (normalizedGlobal) {
+      return {
+        title: "未找到匹配会话",
+        description: "换个关键词，或清空搜索后再看当前筛选范围",
+      };
+    }
+    if (projectPathFilter) {
+      return {
+        title: "暂无历史会话",
+        description: `${selectedProjectLabel} 下暂无 ${sourceLabel} 会话`,
+      };
+    }
+    return {
+      title: "暂无历史会话",
+      description: `当前来源暂无 ${sourceLabel} 会话`,
+    };
+  }, [normalizedGlobal, projectPathFilter, selectedProjectLabel, sourceFilter]);
 
   const toggleFilterGroup = useCallback((groupId: string) => {
     setCollapsedFilterGroups((prev) => {
@@ -359,6 +382,15 @@ export function HistoryListPane({
           >
             <RefreshCw size={12} />
           </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭历史会话"
+            className="ui-flat-action ui-toolbar-button-compact h-8 w-8 shrink-0 px-0"
+            title="关闭历史会话"
+          >
+            <X size={13} />
+          </button>
         </div>
 
         <div className="ui-history-search-shell mt-2 gap-2 px-2.5 py-1.5 text-text-secondary">
@@ -500,7 +532,10 @@ export function HistoryListPane({
                 )}
 
                 {row.type === "empty" && (
-                  <div className="px-3 py-6 text-center text-xs text-text-muted">未找到匹配会话</div>
+                  <div className="px-3 py-5 text-center">
+                    <div className="text-xs font-semibold text-text-secondary">{emptySessionCopy.title}</div>
+                    <div className="mt-1 text-[11px] leading-relaxed text-text-muted">{emptySessionCopy.description}</div>
+                  </div>
                 )}
 
                 {row.type === "loadMore" && (

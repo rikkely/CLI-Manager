@@ -3,6 +3,7 @@ import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
+import { useHistoryStore } from "../../stores/historyStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
 import type { Project, TreeNode as TNode, Group } from "../../lib/types";
@@ -111,6 +112,7 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const updateSetting = useSettingsStore((s) => s.update);
   const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
+  const closeHistory = useHistoryStore((s) => s.closeHistory);
 
   const initialSidebarWidth = normalizePersistedSidebarWidth(persistedSidebarWidth);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
@@ -560,11 +562,13 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
         shell: project.shell || undefined,
       }))
     );
-  }, []);
+    closeHistory();
+  }, [closeHistory]);
 
   const openProjectInternal = async (project: Project, targetPaneId?: string) => {
     const options = buildProjectSplitOptions(project);
     await createSession(options.projectId, options.cwd, options.title, options.startupCmd, options.envVars, options.shell, targetPaneId);
+    closeHistory();
   };
 
   const openProjects = async (items: Project[]) => {
@@ -590,8 +594,9 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     async (project: Project, direction: TerminalPaneSplitDirection) => {
       if (!activeSessionId || compactMode || useExternalTerminal) return;
       await splitTerminal(activeSessionId, direction, buildProjectSplitOptions(project));
+      closeHistory();
     },
-    [activeSessionId, compactMode, splitTerminal, useExternalTerminal]
+    [activeSessionId, closeHistory, compactMode, splitTerminal, useExternalTerminal]
   );
 
   const handleCloneProject = useCallback((project: Project) => {
@@ -653,15 +658,19 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
 
     setSelectedProjectIds(new Set([project.id]));
     selectionAnchorRef.current = project.id;
-    activateFirstProjectSession(project.id);
-  }, [activateFirstProjectSession, visibleProjectIds]);
+    if (activateFirstProjectSession(project.id)) {
+      closeHistory();
+    }
+  }, [activateFirstProjectSession, closeHistory, visibleProjectIds]);
 
   const handleSelectProjectByKeyboard = useCallback((project: Project) => {
     setSelectedId(project.id);
     setSelectedProjectIds(new Set([project.id]));
     selectionAnchorRef.current = project.id;
-    activateFirstProjectSession(project.id);
-  }, [activateFirstProjectSession]);
+    if (activateFirstProjectSession(project.id)) {
+      closeHistory();
+    }
+  }, [activateFirstProjectSession, closeHistory]);
 
   const handleToggleSelection = useCallback((project: Project) => {
     setSelectedProjectIds((prev) => {

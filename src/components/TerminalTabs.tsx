@@ -1267,11 +1267,14 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       : { cwd: activeSession?.cwd, title: activeSession?.title ?? "Terminal" };
     if (useExternalTerminal) {
       await openWindowsTerminal([{ title: newTerminalContext.title, cwd: newTerminalContext.cwd ?? undefined }]);
+      closeHistory();
+      setActiveWorkspaceTab("terminal");
       return;
     }
     await createSession(undefined, newTerminalContext.cwd ?? undefined, newTerminalContext.title);
+    closeHistory();
     setActiveWorkspaceTab("terminal");
-  }, [activeSession, useExternalTerminal, createSession]);
+  }, [activeSession, closeHistory, createSession, useExternalTerminal]);
 
   const handleDuplicateSession = useCallback((session: TerminalSession) => {
     void createSession(
@@ -1282,14 +1285,16 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       session.envVars ? { ...session.envVars } : undefined,
       session.shell ?? undefined,
     ).then(() => {
+      closeHistory();
       setActiveWorkspaceTab("terminal");
     }).catch(() => {});
-  }, [createSession]);
+  }, [closeHistory, createSession]);
 
   const handleActivateSession = useCallback((sessionId: string) => {
+    closeHistory();
     setActiveWorkspaceTab("terminal");
     setActive(sessionId);
-  }, [setActive]);
+  }, [closeHistory, setActive]);
 
   const handleCloseSessions = useCallback((sessionIds: string[]) => {
     const uniqueSessionIds = Array.from(new Set(sessionIds)).filter((sessionId) => sessions.some((session) => session.id === sessionId));
@@ -1410,15 +1415,17 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     if (!splitPicker) return;
     void splitTerminal(splitPicker.sessionId, splitPicker.direction, { title: "Terminal" });
     handleCloseSplitPicker();
+    closeHistory();
     setActiveWorkspaceTab("terminal");
-  }, [handleCloseSplitPicker, splitPicker, splitTerminal]);
+  }, [closeHistory, handleCloseSplitPicker, splitPicker, splitTerminal]);
 
   const handleSplitProject = useCallback((project: Project) => {
     if (!splitPicker) return;
     void splitTerminal(splitPicker.sessionId, splitPicker.direction, buildProjectSplitOptions(project));
     handleCloseSplitPicker();
+    closeHistory();
     setActiveWorkspaceTab("terminal");
-  }, [handleCloseSplitPicker, splitPicker, splitTerminal]);
+  }, [closeHistory, handleCloseSplitPicker, splitPicker, splitTerminal]);
 
   const findPaneForSession = useCallback((sessionId: string) => {
     return allPanes.find((pane) => pane.sessionIds.includes(sessionId)) ?? null;

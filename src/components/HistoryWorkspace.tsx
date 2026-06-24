@@ -169,13 +169,6 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   );
 
   useEffect(() => {
-    if (sessions.length > 0 || loadingSessions) return;
-    void loadSessions().catch((err) => {
-      toast.error("加载历史会话失败", { description: String(err) });
-    });
-  }, [loadSessions, loadingSessions, sessions.length]);
-
-  useEffect(() => {
     setAliasDraft(activeView?.alias ?? "");
     setTagsDraft(activeTagText);
   }, [activeView?.sessionKey, activeView?.alias, activeTagText]);
@@ -457,6 +450,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           searchHits={searchHits}
           globalSearchRef={globalSearchRef}
           onRefresh={handleRefreshSessions}
+          onClose={closeHistory}
           onSourceFilterChange={(value) => {
             void setSourceFilter(value as HistorySourceFilter);
           }}
