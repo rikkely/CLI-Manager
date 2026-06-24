@@ -410,3 +410,36 @@ Fixed xterm IME composition anchor fallback so candidate windows stay near the a
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 新增设置关于模块
+
+**Date**: 2026-06-24
+**Task**: 新增设置关于模块
+**Branch**: `feature/v1.1.9`
+
+### Summary
+
+设置新增独立关于页；通用页移除关于区块；关于页集中展示应用更新、项目介绍、Git 开源地址、操作手册和作者信息，并更新 V1.1.9 CHANGELOG。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3438c6b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
