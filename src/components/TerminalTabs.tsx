@@ -333,6 +333,7 @@ function SortableTab({
   const [hoverCardPosition, setHoverCardPosition] = useState<{ left: number; top: number } | null>(null);
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
+  const terminalTabHoverInfoEnabled = useSettingsStore((s) => s.terminalTabHoverInfoEnabled);
 
   const clearHoverOpenTimer = useCallback(() => {
     if (hoverOpenTimerRef.current === null) return;
@@ -366,7 +367,7 @@ function SortableTab({
   }, [clearHoverCloseTimer, clearHoverOpenTimer]);
 
   const scheduleHoverCard = useCallback(() => {
-    if (isEditing || isDragging) return;
+    if (!terminalTabHoverInfoEnabled || isEditing || isDragging) return;
     clearHoverOpenTimer();
     clearHoverCloseTimer();
     hoverOpenTimerRef.current = window.setTimeout(() => {
@@ -381,7 +382,7 @@ function SortableTab({
         top: clampNumber(rect.bottom + 6, 8, maxTop),
       });
     }, TERMINAL_TAB_HOVER_DELAY_MS);
-  }, [clearHoverCloseTimer, clearHoverOpenTimer, isDragging, isEditing]);
+  }, [clearHoverCloseTimer, clearHoverOpenTimer, isDragging, isEditing, terminalTabHoverInfoEnabled]);
 
   const copySessionId = useCallback(() => {
     void navigator.clipboard
@@ -398,6 +399,10 @@ function SortableTab({
   useEffect(() => {
     if (isEditing || isDragging) hideHoverCard();
   }, [hideHoverCard, isDragging, isEditing]);
+
+  useEffect(() => {
+    if (!terminalTabHoverInfoEnabled) hideHoverCard();
+  }, [hideHoverCard, terminalTabHoverInfoEnabled]);
 
   const submitEdit = useCallback(() => {
     const trimmed = editValue.trim();
@@ -523,7 +528,7 @@ function SortableTab({
       </ContextMenuTrigger>
       <ContextMenuContent className={menuClassName} style={menuStyle}>{menuContent(getTabAnchor)}</ContextMenuContent>
       </ContextMenu>
-      {hoverCardPosition && !isEditing && !isDragging && (
+      {terminalTabHoverInfoEnabled && hoverCardPosition && !isEditing && !isDragging && (
         <Portal>
           <TerminalTabHoverCard info={hoverInfo} position={hoverCardPosition} onPointerEnter={keepHoverCardOpen} onPointerLeave={scheduleHideHoverCard} onCopySessionId={copySessionId} />
         </Portal>

@@ -419,6 +419,7 @@ export function GeneralSettingsPage() {
   const viewMode = useSettingsStore((s) => s.viewMode);
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
   const confirmBeforeClosingTerminalTab = useSettingsStore((s) => s.confirmBeforeClosingTerminalTab);
+  const terminalTabHoverInfoEnabled = useSettingsStore((s) => s.terminalTabHoverInfoEnabled);
   const debugMode = useSettingsStore((s) => s.debugMode);
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
   const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
@@ -881,6 +882,29 @@ export function GeneralSettingsPage() {
                     confirmBeforeClosingTerminalTab
                       ? t("settings.general.disableCloseTabConfirm")
                       : t("settings.general.enableCloseTabConfirm")
+                  }
+                />
+              </Group>
+            </Card>
+
+            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+              <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+                <Box>
+                  <Text size="xs" c="var(--on-surface-variant)">
+                    {t("settings.general.tabHoverInfo")}
+                  </Text>
+                  <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
+                    {t("settings.general.tabHoverInfoDescription")}
+                  </Text>
+                </Box>
+                <Switch
+                  color="cliPrimary"
+                  checked={terminalTabHoverInfoEnabled}
+                  onChange={(event) => void update("terminalTabHoverInfoEnabled", event.currentTarget.checked)}
+                  aria-label={
+                    terminalTabHoverInfoEnabled
+                      ? t("settings.general.disableTabHoverInfo")
+                      : t("settings.general.enableTabHoverInfo")
                   }
                 />
               </Group>

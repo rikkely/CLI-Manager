@@ -187,6 +187,7 @@ interface Settings {
   /** Git 变更树分组模式：directory（按目录树） / module（按顶层目录模块） */
   gitGroupBy: "directory" | "module";
   confirmBeforeClosingTerminalTab: boolean;
+  terminalTabHoverInfoEnabled: boolean;
   fileExplorerIgnoredPaths: FileExplorerIgnoredPaths;
   /** 批量启动分组时，同一分组终端放在同一个 pane 中（多 tab），不同分组创建在不同 pane。默认关闭。 */
   batchLaunchGroupInPane: boolean;
@@ -279,6 +280,7 @@ const DEFAULTS: Settings = {
   ccSwitchDbPath: null,
   gitGroupBy: "directory",
   confirmBeforeClosingTerminalTab: false,
+  terminalTabHoverInfoEnabled: true,
   fileExplorerIgnoredPaths: {},
   batchLaunchGroupInPane: false,
   batchLaunchPaneDirection: "horizontal",
@@ -642,6 +644,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.confirmBeforeClosingTerminalTab === "boolean"
         ? entries.confirmBeforeClosingTerminalTab
         : DEFAULTS.confirmBeforeClosingTerminalTab;
+    entries.terminalTabHoverInfoEnabled =
+      typeof entries.terminalTabHoverInfoEnabled === "boolean"
+        ? entries.terminalTabHoverInfoEnabled
+        : DEFAULTS.terminalTabHoverInfoEnabled;
     entries.fileExplorerIgnoredPaths = migrateFileExplorerIgnoredPaths(entries.fileExplorerIgnoredPaths);
     entries.batchLaunchGroupInPane =
       typeof entries.batchLaunchGroupInPane === "boolean"

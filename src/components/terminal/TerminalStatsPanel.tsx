@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { FolderGit2, GitBranch, RefreshCw, FolderOpen } from "lucide-react";
+import { Copy, FolderGit2, GitBranch, RefreshCw, FolderOpen } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import type { HistorySessionDetail, HistorySource } from "../../lib/types";
 import {
   fetchLatestProjectSessionDetail,
@@ -63,6 +64,19 @@ function inferHistorySource(haystack: string): HistorySource | null {
   return null;
 }
 
+function formatStatsShellLabel(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return "PowerShell";
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "powershell") return "PowerShell";
+  if (normalized === "pwsh") return "PowerShell 7";
+  if (normalized === "cmd") return "CMD";
+  if (normalized === "wsl") return "WSL";
+  if (normalized === "gitbash" || normalized === "git-bash" || normalized === "git bash") return "Git Bash";
+  if (normalized === "bash") return "Bash";
+  return trimmed;
+}
+
 /**
  * A6+A7: 统一定时器调度 - 实时查询项目当前 git 分支
  * 初始值为会话静态分支，避免首屏闪烁；轮询由外部统一调度
@@ -114,12 +128,14 @@ function useCurrentGitBranch(
   return branch;
 }
 
-function SessionInfoCard({ session, statsSession, projectName, projectPath, currentBranch }: {
+function SessionInfoCard({ session, statsSession, projectName, projectPath, currentBranch, shell, sessionId }: {
   session: HistorySessionDetail;
   statsSession: HistorySessionDetail | null;
   projectName: string;
   projectPath: string;
   currentBranch: string | null;
+  shell: string;
+  sessionId: string;
 }) {
   const { t } = useI18n();
   // 统计数据（消息/时长/角色分布）只认 hook 绑定的会话，未绑定时置空；
@@ -139,6 +155,7 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
   const messageCount = statsSession?.messages.length ?? 0;
   // 实时统计面板优先显示当前实时分支，回退到会话记录的静态分支
   const branch = currentBranch ?? session.branch ?? "—";
+  const sessionIdTitle = `${sessionId}\n\n${t("termStats.copySessionIdHint")}`;
 
   // 双击打开项目文件夹
   const handleOpenFolder = useCallback(() => {
@@ -146,6 +163,13 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
       console.error("Failed to open folder:", err);
     });
   }, [projectPath]);
+
+  const handleCopySessionId = useCallback(() => {
+    void navigator.clipboard
+      .writeText(sessionId)
+      .then(() => toast.success(t("termStats.copySessionIdSuccess")))
+      .catch((err) => toast.error(t("termStats.copySessionIdFailed"), { description: String(err) }));
+  }, [sessionId, t]);
 
   return (
     <StatCard
@@ -164,6 +188,14 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
         color={TERM.dim}
         title={`${projectPath}\n\n${t("termStats.openFolderHint")}`}
         onDoubleClick={handleOpenFolder}
+      />
+      <Row label={t("termStats.shell")} value={shell} color={TERM.cyan} title={shell} />
+      <Row
+        icon={<Copy size={10} />}
+        label={t("termStats.sessionId")}
+        value={sessionId}
+        title={sessionIdTitle}
+        onDoubleClick={handleCopySessionId}
       />
       <div className="flex items-baseline justify-between gap-2 text-[11px] leading-5">
         <span className="flex shrink-0 items-center gap-1" style={{ color: TERM.dim }}>
@@ -362,6 +394,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   if (!panelActive) return null;
 
   const projectName = project?.name || latestSession?.project_key || "—";
+  const shellLabel = formatStatsShellLabel(terminalSession?.shell ?? project?.shell ?? "powershell");
 
   // 未绑定 hook 会话时，4 张会话级卡片照常渲染但数据置空（保留图形骨架）
   const boundSession = tokensBound ? latestSession : null;
@@ -407,7 +440,15 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
         <EmptyHint text={t("termStats.noSessionRecord", { source: sourceFilter ?? "CLI" })} />
       ) : (
         <>
-          <SessionInfoCard session={latestSession} statsSession={boundSession} projectName={projectName} projectPath={projectPath} currentBranch={currentBranch} />
+          <SessionInfoCard
+            session={latestSession}
+            statsSession={boundSession}
+            projectName={projectName}
+            projectPath={projectPath}
+            currentBranch={currentBranch}
+            shell={shellLabel}
+            sessionId={terminalSession?.cliSessionId ?? latestSession.session_id}
+          />
           <TokenUsageCard stats={boundStats} />
           <TrendCard session={boundSession} />
           <ModelContextCard stats={boundStats} session={boundSession} />
