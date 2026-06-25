@@ -1679,6 +1679,8 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
         {
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
           codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+          ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
+          autoRepair: settings.claudeHookAutoRepairKnownInstalled,
         }
       );
       if (status.claude.status !== "installed" && status.codex.status !== "installed") {

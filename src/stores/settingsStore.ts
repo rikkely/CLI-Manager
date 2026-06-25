@@ -179,6 +179,8 @@ interface Settings {
   systemNotificationsEnabled: boolean;
   systemNotificationEvents: Record<HookEventType, boolean>;
   claudeHookConfigDir: string | null;
+  claudeHookAutoRepairKnownInstalled: boolean;
+  claudeHookAutoRepairNoticeShown: boolean;
   codexHookConfigDir: string | null;
   /** cc-switch 数据库路径；null 表示使用默认路径 ~/.cc-switch/cc-switch.db */
   ccSwitchDbPath: string | null;
@@ -271,6 +273,8 @@ const DEFAULTS: Settings = {
     PermissionRequest: true,
   },
   claudeHookConfigDir: null,
+  claudeHookAutoRepairKnownInstalled: false,
+  claudeHookAutoRepairNoticeShown: false,
   codexHookConfigDir: null,
   ccSwitchDbPath: null,
   gitGroupBy: "directory",
@@ -618,6 +622,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.claudeHookConfigDir === "string" && entries.claudeHookConfigDir.trim()
         ? entries.claudeHookConfigDir
         : null;
+    entries.claudeHookAutoRepairKnownInstalled =
+      typeof entries.claudeHookAutoRepairKnownInstalled === "boolean"
+        ? entries.claudeHookAutoRepairKnownInstalled
+        : DEFAULTS.claudeHookAutoRepairKnownInstalled;
+    entries.claudeHookAutoRepairNoticeShown =
+      typeof entries.claudeHookAutoRepairNoticeShown === "boolean"
+        ? entries.claudeHookAutoRepairNoticeShown
+        : DEFAULTS.claudeHookAutoRepairNoticeShown;
     entries.codexHookConfigDir =
       typeof entries.codexHookConfigDir === "string" && entries.codexHookConfigDir.trim()
         ? entries.codexHookConfigDir

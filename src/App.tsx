@@ -53,6 +53,7 @@ type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled
 interface HookSettingsStatusPayload {
   claude: { status: HookInstallStatus };
   codex: { status: HookInstallStatus };
+  claudeAutoRepaired?: boolean;
 }
 
 interface SubagentTranscriptAppendPayload {
@@ -66,7 +67,15 @@ async function hasInstalledCliHook(): Promise<boolean> {
   const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
     selectedDir: settings.claudeHookConfigDir?.trim() || null,
     codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+    ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
+    autoRepair: settings.claudeHookAutoRepairKnownInstalled,
   });
+  if (status.claudeAutoRepaired && !settings.claudeHookAutoRepairNoticeShown) {
+    toast.info("Claude Hook 已自动恢复", {
+      description: "检测到 Hook 被外部工具覆盖，CLI-Manager 已重新写入全局 Hook 配置。",
+    });
+    void settings.update("claudeHookAutoRepairNoticeShown", true);
+  }
   return status.claude.status === "installed" || status.codex.status === "installed";
 }
 
@@ -432,9 +441,13 @@ function App() {
         return;
       }
       if (event.payload.event === "SubagentStop") {
-        void useTerminalStore.getState().openSubagentTranscript(event.payload).finally(() => {
+        if (event.payload.source === "codex" && event.payload.agentTranscriptPath?.trim()) {
+          void useTerminalStore.getState().openSubagentTranscript(event.payload).finally(() => {
+            useTerminalStore.getState().finishSubagentTranscript(event.payload);
+          });
+        } else {
           useTerminalStore.getState().finishSubagentTranscript(event.payload);
-        });
+        }
         return;
       }
       const tabId = useTerminalStore.getState().handleCliHookEvent(event.payload);

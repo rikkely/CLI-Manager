@@ -236,6 +236,7 @@ function normalizeDetail(raw: unknown): HistorySessionDetail {
   });
   return {
     ...summary,
+    cwd: asString(rec.cwd ?? "") || null,
     usage: normalizeSessionUsage(rec.usage),
     tool_events: normalizeToolEvents(rec.tool_events ?? rec.toolEvents),
     messages,

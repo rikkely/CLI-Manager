@@ -1,10 +1,10 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 import { useHistoryStore } from "../stores/historyStore";
-import type { HistoryMessage, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../lib/types";
+import { useTerminalStore } from "../stores/terminalStore";
+import type { HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, Project } from "../lib/types";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
-import { useTerminalStore } from "../stores/terminalStore";
 import { useI18n } from "../lib/i18n";
 import { PromptLibrary } from "./prompts/PromptLibrary";
 import { DiffModal } from "./history/DiffModal";
@@ -34,9 +34,9 @@ function normalizePathKey(value: string): string {
   return value.trim().replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
 }
 
-function pathTail(value: string): string {
-  const normalized = normalizePathKey(value);
-  return normalized.split("/").filter(Boolean).pop() ?? normalized;
+function projectPathName(path: string): string {
+  const normalized = path.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+  return normalized.split("/").filter(Boolean).pop() ?? "";
 }
 
 function claudeProjectKeyFromPath(path: string): string {
@@ -53,7 +53,7 @@ function isAbsolutePathLike(value: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\") || trimmed.startsWith("/");
 }
 
-function parseProjectEnvVars(project?: Project): Record<string, string> | undefined {
+function parseProjectEnvVars(project?: Project | null): Record<string, string> | undefined {
   if (!project) return undefined;
   try {
     const parsed = JSON.parse(project.env_vars || "{}");
@@ -65,10 +65,16 @@ function parseProjectEnvVars(project?: Project): Record<string, string> | undefi
   }
 }
 
-function findProjectForHistorySession(session: HistorySessionView, projects: Project[]): Project | undefined {
-  const projectKey = session.project_key.trim();
-  const normalizedProjectKey = normalizePathKey(projectKey);
-  if (!normalizedProjectKey) return undefined;
+function findHistoryProject(session: HistorySessionView | HistorySessionDetail, projects: Project[]): Project | null {
+  const cwd = "cwd" in session ? session.cwd?.trim() : null;
+  if (cwd) {
+    const normalizedCwd = normalizePathKey(cwd);
+    const cwdProject = projects.find((project) => normalizePathKey(project.path) === normalizedCwd);
+    if (cwdProject) return cwdProject;
+  }
+
+  const normalizedProjectKey = normalizePathKey(session.project_key);
+  if (!normalizedProjectKey) return null;
 
   return projects.find((project) => {
     const projectPath = normalizePathKey(project.path);
@@ -76,19 +82,23 @@ function findProjectForHistorySession(session: HistorySessionView, projects: Pro
     return (
       projectPath === normalizedProjectKey ||
       claudeProjectKeyFromPath(project.path) === normalizedProjectKey ||
-      pathTail(project.path) === normalizedProjectKey ||
+      projectPathName(project.path).toLowerCase() === normalizedProjectKey ||
       projectName === normalizedProjectKey
     );
-  });
+  }) ?? null;
 }
 
-function buildHistoryResumeCommand(session: HistorySessionView): string {
-  return session.source === "claude"
-    ? `claude --resume ${session.session_id}`
-    : `codex resume --no-alt-screen ${session.session_id}`;
+function resolveResumeCommand(session: HistorySessionView | HistorySessionDetail): string | null {
+  const sessionId = session.session_id.trim();
+  if (!sessionId || /\s/.test(sessionId) || /[\r\n]/.test(sessionId)) return null;
+  if (session.source === "claude") return `claude --resume ${sessionId}`;
+  if (session.source === "codex") return `codex resume --no-alt-screen ${sessionId}`;
+  return null;
 }
 
-function resolveHistoryResumeCwd(session: HistorySessionView, project?: Project): string | undefined {
+function resolveHistoryResumeCwd(session: HistorySessionView | HistorySessionDetail, project?: Project | null): string | undefined {
+  const cwd = "cwd" in session ? session.cwd?.trim() : null;
+  if (cwd) return cwd;
   if (project) return project.path;
   return isAbsolutePathLike(session.project_key) ? session.project_key.trim() : undefined;
 }
@@ -439,6 +449,37 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     }
   };
 
+  const resumeConversation = useCallback(async () => {
+    if (!activeSession) {
+      toast.error("会话详情尚未加载完成");
+      return;
+    }
+
+    const command = resolveResumeCommand(activeSession);
+    if (!command) {
+      toast.error("无法继续对话", { description: "历史会话缺少有效的 sessionId 或来源不受支持" });
+      return;
+    }
+
+    const project = findHistoryProject(activeSession, projects);
+    const cwd = resolveHistoryResumeCwd(activeSession, project);
+    if (!cwd) {
+      toast.error("无法继续对话", { description: "未能识别该历史会话的项目目录" });
+      return;
+    }
+
+    try {
+      const titlePrefix = activeSession.source === "claude" ? "Claude" : "Codex";
+      const title = `${titlePrefix} 继续：${activeView?.displayTitle ?? activeSession.title}`;
+      const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
+      await createSession(project?.id, cwd, title, command, parseProjectEnvVars(project), shell);
+      closeHistory();
+      toast.success("已创建继续对话终端");
+    } catch (err) {
+      toast.error("继续对话失败", { description: String(err) });
+    }
+  }, [activeSession, activeView?.displayTitle, closeHistory, createSession, projects]);
+
   const openByHit = async (hit: HistorySearchHit) => {
     try {
       await openSearchHit(hit);
@@ -474,18 +515,23 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
   const resumeSessionInTerminal = useCallback(
     (session: HistorySessionView) => {
-      const project = findProjectForHistorySession(session, projects);
+      const command = resolveResumeCommand(session);
+      if (!command) {
+        toast.error(t("history.toast.resumeTerminalFailed"), { description: "历史会话缺少有效的 sessionId 或来源不受支持" });
+        return;
+      }
+
+      const project = findHistoryProject(session, projects);
+      const cwd = resolveHistoryResumeCwd(session, project);
+      if (!cwd) {
+        toast.error(t("history.toast.resumeTerminalFailed"), { description: "未能识别该历史会话的项目目录" });
+        return;
+      }
+
       const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
       const title = `${session.source === "claude" ? "Claude" : "Codex"}: ${session.displayTitle || session.session_id}`;
 
-      void createSession(
-        project?.id,
-        resolveHistoryResumeCwd(session, project),
-        title,
-        buildHistoryResumeCommand(session),
-        parseProjectEnvVars(project),
-        shell
-      )
+      void createSession(project?.id, cwd, title, command, parseProjectEnvVars(project), shell)
         .then(() => {
           closeHistory();
         })
@@ -599,6 +645,9 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
             onJumpNext={jumpNext}
             onOpenPrompt={() => setPromptOpen(true)}
             onOpenDiff={() => setDiffOpen(true)}
+            onResumeSession={() => {
+              void resumeConversation();
+            }}
             onJumpToMessage={(messageIndex) => {
               void jumpToMessage(messageIndex);
             }}

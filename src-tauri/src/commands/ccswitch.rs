@@ -111,7 +111,10 @@ fn parse_api_format(meta: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn resolve_db_path(app: &tauri::AppHandle, db_path: Option<String>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_db_path(
+    app: &tauri::AppHandle,
+    db_path: Option<String>,
+) -> Result<PathBuf, String> {
     let custom = db_path
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty());

@@ -59,11 +59,19 @@
 - **文件浏览器偏好持久化**：新增按项目记录的自动折叠忽略列表，并在加载设置时清洗非法路径片段。
 - **远程主分支同步**：合并 `origin/master` 最新 README 更新，并同步新增的微信群二维码资源。
 
+### cc-switch Hook 防覆盖保护
+
+- **新增 cc-switch 通用配置保护**：Claude/Codex Hook 安装、卸载与状态检测会同步 cc-switch 数据库中的通用配置片段，避免切换供应商时被重写导致 Hook 丢失；支持用户在「设置 -> 供应商」选择自定义 `cc-switch.db` 路径，未配置时使用平台默认 `~/.cc-switch/cc-switch.db`。
+- **区分 Claude JSON 与 Codex TOML**：`common_config_claude` 按 JSON 合并 CLI-Manager Hook 命令，`common_config_codex` 按 TOML 仅启用 `[features].hooks = true`，Codex 具体 Hook 命令继续保存在 `hooks.json`，不再误报 Codex 通用配置不是 JSON。
+- **Hook 设置页状态反馈**：在系统通知设置上方新增单一 cc-switch 保护状态卡片，展示同步、未检测到、路径无效、WSL 环境不匹配等结果；安装完成后返回重新检测状态，避免写入成功后 UI 仍显示未检测到。
+- **Claude Hook 自动修复**：记录用户已安装过 Claude Hook 后，启动/刷新状态时可检测外部覆盖并自动恢复 CLI-Manager 全局 Hook，只显示一次系统内提示。
+
 ### 历史会话
 
 - **补回历史会话关闭入口**：在历史会话侧栏顶部新增固定关闭按钮，并在新建、激活、分屏终端以及从项目树打开终端时自动退出历史界面，避免进入历史会话后找不到返回终端的路径。([#48](https://github.com/dark-hxx/CLI-Manager/issues/48))
 - **修复无会话空态加载循环**：历史会话列表为空时不再反复自动加载；按搜索、项目和来源筛选展示明确空态提示，当前项目没有 Claude/Codex 会话时正确显示为空。([#49](https://github.com/dark-hxx/CLI-Manager/issues/49))
 - **项目右键直达会话历史**：项目右键菜单新增「会话历史」入口，打开时默认匹配当前项目路径与当前 CLI 来源；项目来源筛选下拉默认折叠分组，并支持按项目名、路径或 CLI 输入检索。([#52](https://github.com/dark-hxx/CLI-Manager/issues/52))
+- **继续历史对话**：会话详情新增「继续对话」按钮，自动识别历史会话来源与项目目录，新建内部终端执行 `claude --resume <sessionId>` 或 `codex resume <sessionId>`。([#51](https://github.com/dark-hxx/CLI-Manager/issues/51))
 
 ### 删除项目树徽章
 
@@ -113,6 +121,7 @@
 - **新建终端继承当前 Tab 上下文**：从终端页、命令面板或快捷键新建普通终端时，继承当前普通 Tab 的工作目录与标题；不继承启动命令、项目环境变量或项目绑定，避免新终端自动执行命令。
 - **修复分屏后原 Tab 历史输出丢失**：重构 `SplitTerminalView` 为扁平绝对定位布局，所有终端面板作为稳定 keyed 子节点渲染；分屏操作仅改变布局位置与尺寸，不改变 React 组件父路径，从而避免 `XTermTerminal` 卸载并丢失 xterm.js 内存 scrollback buffer。手动分屏与 sub-agent hook 自动分屏均已修复。
 - **修复并发 sub-agent 转录 Tab 重复与丢失**：并发场景下 `AgentToolStart`（仅含 `toolUseId`）与 `SubagentStart`（仅含 `agentId`）无共同 ID，原逻辑导致 2 个子 Agent 产生 4 个 Tab，其中半数空白、半数被自动关闭后整体消失。现改为 `AgentToolStart` / `AgentToolStop` 仅触发 subagents 目录扫描、不创建 UI；真实 Tab 由携带 `agentId` + `agentType` 的 `SubagentStart` 创建，目录扫描负责将内容源升级为 child JSONL。`findSubagentSessionId` 的兜底匹配收紧为「仅当 payload 既无 `agentId` 也无 `toolUseId` 时才按 `parentTabId` 推断」，避免并发误匹配；子 Agent Tab 标题改为 `{agentType} (父Tab名)`，多个同父子 Agent 追加 `#N` 序号。
+- **修复 Codex 子 Agent 分屏空输出**：Codex `SubagentStart` 仅提供父 transcript、`SubagentStop` 才带独立 `agentTranscriptPath` 时，前端会先升级既有 pane 到 child JSONL、同步回填订阅前已写入的完整内容，再标记结束；Stop 后延长晚到 transcript pane 可见时间，避免自动分屏成功但输出为空。
 
 ### 修复
 

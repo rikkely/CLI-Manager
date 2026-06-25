@@ -90,6 +90,7 @@ interface HistoryToolEvent {
 }
 
 interface HistorySessionDetail {
+  cwd?: string | null;
   tool_events?: HistoryToolEvent[];
 }
 
@@ -114,6 +115,7 @@ interface TerminalSession {
 - Explicit cost fields from the source payload are not billing authority for CLI-Manager history stats. Local `model_prices` decides cost when model pricing is available; otherwise usage is counted as unpriced.
 - Codex session project keys should prefer session metadata `cwd`; path-derived keys are only a fallback.
 - Codex session identity should prefer `session_meta.payload.id` for rollout JSONL files (`rollout-*.jsonl`) so `HistorySessionSummary.session_id` / `HistorySessionDetail.session_id` match the hook-reported `TerminalSession.cliSessionId`. If the metadata id is missing, fall back to the file stem. This Codex-only normalization must not change Claude Code session identity, which continues to use the existing file-stem id.
+- `HistorySessionDetail.cwd` is a detail-only resume/location field derived from the same `SessionProjectScan` metadata used for project matching. Do not add `cwd` scanning to `history_list_sessions`; the list path must stay cheap. Missing `cwd` normalizes to `null` on the frontend.
 - `HistorySessionDetail.tool_events` is detail-only diagnostic data, not part of list/stats aggregation. It may require an additional detail-path scan and must not pollute `SessionStatsScan` caches used by list/stats hot paths.
 - Tool event extraction must preserve source truth: return `duration_ms`, `status`, input/output summaries only when the raw JSONL exposes them. Do not synthesize durations or success states from tool names or message text. Missing fields normalize to `null` or an empty list on the frontend.
 - Tool event categories use stable strings: `builtin`, `skill`, or `mcp:<server>`. Claude `tool_use` names like `mcp__exa__web_search_exa` and Codex namespaces like `mcp__gitnexus` must map to the same MCP category shape.
@@ -141,6 +143,7 @@ interface TerminalSession {
 | Explicit cost is present | Ignore it for CLI-Manager billing; calculate from local model prices when possible, otherwise add tokens to `unpriced_tokens`. |
 | Date range exceeds 366 days | Return `date_range_too_large`. |
 | Codex session lacks metadata cwd | Fall back to the path-derived project key. |
+| History detail has no discoverable cwd | Return `cwd: null`; resume UI may fall back to a configured project match, otherwise show an error instead of opening a terminal in the wrong directory. |
 | Codex rollout session lacks `session_meta.payload.id` | Fall back to the file-stem `session_id`. |
 | Claude file contains a `session_meta.payload.id`-shaped field | Keep Claude's file-stem `session_id`; do not apply Codex identity normalization. |
 | History cache invalidation runs | Clear file, stats, project, and aggregate caches together. |
@@ -149,6 +152,7 @@ interface TerminalSession {
 
 - Good: a Claude session with input/output/cache usage and known model produces complete totals, cost, model distribution, daily trend, and per-session message token fields.
 - Good: a Codex session with multiple cumulative `token_count` events returns `token_trend` as adjacent deltas, and two Codex windows in the same project show different realtime session details after their hook `sessionId` values arrive.
+- Good: a history detail payload exposes `cwd` when the JSONL contains session metadata, allowing the frontend to create a resume terminal in the original project directory.
 - Good: a history detail payload includes `tool_events` for Claude `tool_use` and Codex `function_call` rows; missing per-call duration remains `null` and the frontend says no duration data is available.
 - Good: a Codex rollout file with `session_meta.payload.id` returns that UUID as `session_id`, allowing realtime stats strict binding to match the hook session id; a Claude file with a similar metadata id still keeps its original file-stem identity.
 - Base: a Codex session without model pricing still appears in stats with token totals and `unpriced_tokens`; a single-day stats view can map `hourly_activity` into 24 hourly trend and heatmap buckets.
@@ -159,6 +163,7 @@ interface TerminalSession {
 - Rust tests:
   - Date bounds accept a full 366-day range and reject larger ranges.
   - Codex session collection uses metadata `cwd` as project key when present.
+  - `build_session_detail` exposes metadata `cwd` on `HistorySessionDetail`.
   - Session project cache reuses matching fingerprints.
   - Codex rollout files expose `session_meta.payload.id` as `session_id`, fall back to file stem when absent, and Claude files keep file-stem identity.
   - Case-insensitive ASCII search avoids per-message lowercasing regressions.
@@ -171,6 +176,7 @@ interface TerminalSession {
   - Realtime terminal stats passes `cliSessionId` into history lookup when present and keeps project fallback when absent.
   - Token trend UI renders explicit empty/single-point states when there are fewer than two trend points.
   - Tool diagnostics renders `tool_events` when present and renders a missing-duration state when `duration_ms` is absent.
+  - History resume creates a new internal terminal with `claude --resume <id>` or `codex resume <id>` only after resolving a `cwd` from detail payload or configured project match.
   - Single-day stats must use `hourly_activity` for Token/cost trend and session heatmap; multi-day ranges must keep using `daily_series` and `heatmap`.
 - Release checks:
   - `cargo test` must pass before tagging a release that changes history stats contracts.

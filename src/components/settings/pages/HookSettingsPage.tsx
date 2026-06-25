@@ -27,6 +27,23 @@ interface ToolHookSettingsStatus {
 interface HookSettingsStatus {
   claude: ToolHookSettingsStatus;
   codex: ToolHookSettingsStatus;
+  ccSwitch: CcSwitchHookProtectionStatus;
+  claudeAutoRepaired: boolean;
+}
+
+type CcSwitchHookProtectionState =
+  | "notDetected"
+  | "notSynced"
+  | "synced"
+  | "invalidDb"
+  | "unavailable"
+  | "syncFailed";
+
+interface CcSwitchHookProtectionStatus {
+  state: CcSwitchHookProtectionState;
+  dbPath: string | null;
+  message: string | null;
+  wslMismatch: boolean;
 }
 
 const STATUS_LABELS: Record<HookInstallStatus, string> = {
@@ -43,6 +60,24 @@ const STATUS_COLORS: Record<HookInstallStatus, string> = {
   installed: "green",
 };
 
+const CCSWITCH_STATE_LABELS: Record<CcSwitchHookProtectionState, string> = {
+  notDetected: "未检测到 cc-switch",
+  notSynced: "未同步",
+  synced: "已同步",
+  invalidDb: "数据库路径无效",
+  unavailable: "不可用",
+  syncFailed: "同步失败",
+};
+
+const CCSWITCH_STATE_COLORS: Record<CcSwitchHookProtectionState, string> = {
+  notDetected: "gray",
+  notSynced: "yellow",
+  synced: "green",
+  invalidDb: "red",
+  unavailable: "yellow",
+  syncFailed: "red",
+};
+
 
 function formatPath(value: string | null): string {
   return value && value.trim() ? value : "未选择";
@@ -50,6 +85,96 @@ function formatPath(value: string | null): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatCcSwitchMessage(message: string | null): string | null {
+  if (!message) return null;
+  const messages: Record<string, string> = {
+    db_not_found: "设置中的 cc-switch 数据库不存在，请在「设置 -> 供应商」重新选择。",
+    unsupported_format: "cc-switch 数据库路径必须指向 .db 文件。",
+    wsl_environment_mismatch: "当前 Claude 配置在 WSL 内，cc-switch 数据库在宿主环境，未自动跨环境写入。",
+    common_config_parse_failed: "Claude 通用配置片段不是有效 JSON，未自动覆盖。",
+  };
+  return messages[message] ?? message;
+}
+
+function getCcSwitchProtectionDescription(status?: CcSwitchHookProtectionStatus | null): string {
+  if (!status) return "正在检测 cc-switch 通用配置保护状态。";
+  switch (status.state) {
+    case "synced":
+      return "已同步到 cc-switch 通用配置片段，切换供应商时会保留 CLI-Manager Hook。";
+    case "notSynced":
+      return "尚未同步到 cc-switch 通用配置片段，重新安装对应 Hook 可重试。";
+    case "notDetected":
+      return "未检测到 cc-switch 数据库，Hook 已按普通全局配置工作。";
+    case "invalidDb":
+      return "设置中的 cc-switch 数据库路径不可用，已停止自动写入以避免误写。";
+    case "unavailable":
+      return status.wslMismatch
+        ? "检测到 WSL 环境不匹配，请在「设置 -> 供应商」选择同一环境内的 cc-switch.db。"
+        : "cc-switch 数据库暂不可用于通用配置同步。";
+    case "syncFailed":
+      return "cc-switch 通用配置同步失败，Hook 本身已安装，可稍后重试。";
+  }
+}
+
+function CcSwitchProtectionCard({ status }: { status?: CcSwitchHookProtectionStatus | null }) {
+  const state = status?.state ?? "notDetected";
+  const isHealthy = state === "synced";
+  const isWarning = state === "notSynced" || state === "unavailable";
+  const Icon = isHealthy ? CheckCircle : isWarning || state === "notDetected" ? HelpCircle : AlertTriangle;
+  const formattedMessage = formatCcSwitchMessage(status?.message ?? null);
+
+  return (
+    <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
+      <Stack gap="xs">
+        <Group justify="space-between" gap="sm" align="flex-start">
+          <Group gap="sm" wrap="nowrap" className="min-w-0">
+            <Box
+              style={{
+                color: isHealthy
+                  ? "var(--success)"
+                  : state === "syncFailed" || state === "invalidDb"
+                    ? "var(--error)"
+                    : "var(--warning)",
+                marginTop: 2,
+                flexShrink: 0,
+              }}
+            >
+              <Icon size={18} />
+            </Box>
+            <Box className="min-w-0">
+              <Text size="sm" fw={500} c="var(--on-surface)">
+                cc-switch 通用配置保护
+              </Text>
+              <Text mt={4} size="xs" c="var(--on-surface-variant)">
+                {getCcSwitchProtectionDescription(status)}
+              </Text>
+            </Box>
+          </Group>
+          <Badge variant="light" color={CCSWITCH_STATE_COLORS[state]} radius="xl" className="shrink-0">
+            {CCSWITCH_STATE_LABELS[state]}
+          </Badge>
+        </Group>
+        {status?.dbPath && (
+          <Text
+            component="code"
+            size="xs"
+            ff="var(--font-ui-mono)"
+            c="var(--on-surface-variant)"
+            className="break-all"
+          >
+            {status.dbPath}
+          </Text>
+        )}
+        {formattedMessage && (
+          <Text size="xs" c={state === "syncFailed" || state === "invalidDb" ? "red" : "yellow"}>
+            {formattedMessage}
+          </Text>
+        )}
+      </Stack>
+    </Card>
+  );
 }
 
 function PathRow({ label, value }: { label: string; value: string | null }) {
@@ -264,6 +389,9 @@ export function HookSettingsPage() {
   const hookPopupAutoCloseSeconds = useSettingsStore((s) => s.hookPopupAutoCloseSeconds);
   const systemNotificationsEnabled = useSettingsStore((s) => s.systemNotificationsEnabled);
   const systemNotificationEvents = useSettingsStore((s) => s.systemNotificationEvents);
+  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
+  const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
+  const claudeHookAutoRepairNoticeShown = useSettingsStore((s) => s.claudeHookAutoRepairNoticeShown);
   const updateSetting = useSettingsStore((s) => s.update);
   const [autoCloseSecondsDraft, setAutoCloseSecondsDraft] = useState(String(hookPopupAutoCloseSeconds));
   const [claudePathsOpen, setClaudePathsOpen] = useState(false);
@@ -284,6 +412,8 @@ export function HookSettingsPage() {
       const nextStatus = await invoke<HookSettingsStatus>("hook_settings_get_status", {
         selectedDir: dir,
         codexSelectedDir: codexDir,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+        autoRepair: claudeHookAutoRepairKnownInstalled,
       });
       setStatus(nextStatus);
       if (nextStatus.claude.configDir) {
@@ -291,6 +421,12 @@ export function HookSettingsPage() {
       }
       if (nextStatus.codex.configDir) {
         setCodexSelectedDir(nextStatus.codex.configDir);
+      }
+      if (nextStatus.claudeAutoRepaired && !claudeHookAutoRepairNoticeShown) {
+        toast.info("Claude Hook 已自动恢复", {
+          description: "检测到 Hook 被外部工具覆盖，已重新写入全局 Hook 配置。",
+        });
+        await updateSetting("claudeHookAutoRepairNoticeShown", true);
       }
     } catch (error) {
       toast.error("刷新 Hook 状态失败", { description: getErrorMessage(error) });
@@ -353,10 +489,15 @@ export function HookSettingsPage() {
       const nextStatus = await invoke<HookSettingsStatus>("hook_settings_install", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.claude.configDir) setSelectedDir(nextStatus.claude.configDir);
-      toast.success("Claude Hook 已安装");
+      await updateSetting("claudeHookAutoRepairKnownInstalled", true);
+      await updateSetting("claudeHookAutoRepairNoticeShown", false);
+      toast.success("Claude Hook 已安装", {
+        description: getCcSwitchProtectionDescription(nextStatus.ccSwitch),
+      });
     } catch (error) {
       toast.error("安装 Claude Hook 失败", { description: getErrorMessage(error) });
     } finally {
@@ -370,9 +511,12 @@ export function HookSettingsPage() {
       const nextStatus = await invoke<HookSettingsStatus>("hook_settings_uninstall", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.claude.configDir) setSelectedDir(nextStatus.claude.configDir);
+      await updateSetting("claudeHookAutoRepairKnownInstalled", false);
+      await updateSetting("claudeHookAutoRepairNoticeShown", false);
       toast.success("Claude Hook 已删除");
     } catch (error) {
       toast.error("删除 Claude Hook 失败", { description: getErrorMessage(error) });
@@ -387,10 +531,13 @@ export function HookSettingsPage() {
       const nextStatus = await invoke<HookSettingsStatus>("hook_settings_install_codex", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.codex.configDir) setCodexSelectedDir(nextStatus.codex.configDir);
-      toast.success("Codex Hook 已安装");
+      toast.success("Codex Hook 已安装", {
+        description: getCcSwitchProtectionDescription(nextStatus.ccSwitch),
+      });
     } catch (error) {
       toast.error("安装 Codex Hook 失败", { description: getErrorMessage(error) });
     } finally {
@@ -404,6 +551,7 @@ export function HookSettingsPage() {
       const nextStatus = await invoke<HookSettingsStatus>("hook_settings_uninstall_codex", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.codex.configDir) setCodexSelectedDir(nextStatus.codex.configDir);
@@ -427,6 +575,7 @@ export function HookSettingsPage() {
 
   const claude = status?.claude;
   const codex = status?.codex;
+  const ccSwitchProtection = status?.ccSwitch ?? null;
   const claudeStatus = claude?.status ?? "directoryMissing";
   const codexStatus = codex?.status ?? "directoryMissing";
   const claudeSessionStartInstalled = Boolean(claude?.attentionScriptInstalled && claude.sessionStartHookInstalled);
@@ -514,6 +663,8 @@ export function HookSettingsPage() {
           </Card>
         </Stack>
       </section>
+
+      <CcSwitchProtectionCard status={ccSwitchProtection} />
 
       <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
         <Group justify="space-between" align="center" gap="md">

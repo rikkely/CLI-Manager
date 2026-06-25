@@ -19,6 +19,7 @@ interface ToolHookSettingsStatus {
 interface HookSettingsStatus {
   claude: ToolHookSettingsStatus;
   codex: ToolHookSettingsStatus;
+  claudeAutoRepaired?: boolean;
 }
 
 interface SidebarFooterProps {
@@ -56,6 +57,10 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const { t } = useI18n();
   const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
+  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
+  const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
+  const claudeHookAutoRepairNoticeShown = useSettingsStore((s) => s.claudeHookAutoRepairNoticeShown);
+  const updateSetting = useSettingsStore((s) => s.update);
   const [status, setStatus] = useState<HookSettingsStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
@@ -67,18 +72,32 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const refreshStatus = useCallback(async () => {
     setLoading(true);
     try {
-      setStatus(
-        await invoke<HookSettingsStatus>("hook_settings_get_status", {
-          selectedDir,
-          codexSelectedDir,
-        })
-      );
+      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_get_status", {
+        selectedDir,
+        codexSelectedDir,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+        autoRepair: claudeHookAutoRepairKnownInstalled,
+      });
+      setStatus(nextStatus);
+      if (nextStatus.claudeAutoRepaired && !claudeHookAutoRepairNoticeShown) {
+        toast.info("Claude Hook 已自动恢复", {
+          description: "检测到 Hook 被外部工具覆盖，已重新写入全局 Hook 配置。",
+        });
+        void updateSetting("claudeHookAutoRepairNoticeShown", true);
+      }
     } catch (error) {
       toast.error(t("sidebar.hook.refreshFailed"), { description: getErrorMessage(error) });
     } finally {
       setLoading(false);
     }
-  }, [codexSelectedDir, selectedDir]);
+  }, [
+    ccSwitchDbPath,
+    claudeHookAutoRepairKnownInstalled,
+    claudeHookAutoRepairNoticeShown,
+    codexSelectedDir,
+    selectedDir,
+    updateSetting,
+  ]);
 
   useEffect(() => {
     void refreshStatus();
@@ -95,12 +114,30 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
     setWorking(true);
     try {
       if (tools.includes("claude")) {
-        await invoke<HookSettingsStatus>("hook_settings_uninstall", { selectedDir, codexSelectedDir });
-        await invoke<HookSettingsStatus>("hook_settings_install", { selectedDir, codexSelectedDir });
+        await invoke<HookSettingsStatus>("hook_settings_uninstall", {
+          selectedDir,
+          codexSelectedDir,
+          ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+        });
+        await invoke<HookSettingsStatus>("hook_settings_install", {
+          selectedDir,
+          codexSelectedDir,
+          ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+        });
+        await updateSetting("claudeHookAutoRepairKnownInstalled", true);
+        await updateSetting("claudeHookAutoRepairNoticeShown", false);
       }
       if (tools.includes("codex")) {
-        await invoke<HookSettingsStatus>("hook_settings_uninstall_codex", { selectedDir, codexSelectedDir });
-        await invoke<HookSettingsStatus>("hook_settings_install_codex", { selectedDir, codexSelectedDir });
+        await invoke<HookSettingsStatus>("hook_settings_uninstall_codex", {
+          selectedDir,
+          codexSelectedDir,
+          ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+        });
+        await invoke<HookSettingsStatus>("hook_settings_install_codex", {
+          selectedDir,
+          codexSelectedDir,
+          ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+        });
       }
       await refreshStatus();
       toast.success(t("sidebar.hook.reinstalled"));

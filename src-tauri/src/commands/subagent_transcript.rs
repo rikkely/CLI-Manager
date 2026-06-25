@@ -37,6 +37,13 @@ struct AppendPayload {
     reset: bool,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscribeResult {
+    pub path: String,
+    pub initial_content: String,
+}
+
 /// 持有每个订阅的停止开关（drop/置位即让对应轮询线程退出）。
 #[derive(Default)]
 pub struct SubagentTranscriptBridge {
@@ -54,7 +61,7 @@ impl SubagentTranscriptBridge {
         app_handle: AppHandle,
         key: String,
         path: String,
-    ) -> Result<(), String> {
+    ) -> Result<SubscribeResult, String> {
         if path.trim().is_empty() {
             return Err("empty_transcript_path".to_string());
         }
@@ -70,10 +77,28 @@ impl SubagentTranscriptBridge {
             guard.insert(key.clone(), stop.clone());
         }
 
+        let path_buf = PathBuf::from(&path);
+        let (initial_content, initial_offset) = read_new_lines(&path_buf, 0)
+            .map(|(content, offset, _)| (content, offset))
+            .unwrap_or_else(|| (String::new(), 0));
+        let has_initial_content = initial_offset > 0;
         let thread_key = key.clone();
+        let thread_path = path.clone();
+        thread::spawn(move || {
+            tail_loop(
+                app_handle,
+                thread_key,
+                thread_path,
+                initial_offset,
+                has_initial_content,
+                stop,
+            )
+        });
         info!("[subagent_transcript] subscribe: key={key} path={path}");
-        thread::spawn(move || tail_loop(app_handle, thread_key, path, stop));
-        Ok(())
+        Ok(SubscribeResult {
+            path,
+            initial_content,
+        })
     }
 
     /// 停止并移除指定订阅。
@@ -88,10 +113,17 @@ impl SubagentTranscriptBridge {
 }
 
 /// 轮询循环：每 POLL_MS 读取自上次 offset 起的新完整行并推送，直到 stop 置位。
-fn tail_loop(app_handle: AppHandle, key: String, path: String, stop: Arc<AtomicBool>) {
+fn tail_loop(
+    app_handle: AppHandle,
+    key: String,
+    path: String,
+    initial_offset: u64,
+    initial_started: bool,
+    stop: Arc<AtomicBool>,
+) {
     let path = PathBuf::from(path);
-    let mut offset: u64 = 0;
-    let mut started = false;
+    let mut offset = initial_offset;
+    let mut started = initial_started;
     let mut missing_logged = false;
     info!(
         "[subagent_transcript] tail started: key={key} path={}",
@@ -394,7 +426,7 @@ pub async fn subagent_transcript_subscribe(
     session_id: Option<String>,
     agent_id: Option<String>,
     wsl_distro_name: Option<String>,
-) -> Result<String, String> {
+) -> Result<SubscribeResult, String> {
     if key.trim().is_empty() {
         return Err("missing_key".to_string());
     }
@@ -406,8 +438,7 @@ pub async fn subagent_transcript_subscribe(
         wsl_distro_name,
     )?;
     info!("[subagent_transcript] subscribe resolved path: key={key} path={path}");
-    bridge.subscribe(app_handle, key, path.clone())?;
-    Ok(path)
+    bridge.subscribe(app_handle, key, path)
 }
 
 /// 取消订阅并停止 tail 线程。
@@ -611,5 +642,27 @@ mod tests {
         let err = resolve_transcript_path(None, None, None, None, None).unwrap_err();
         // 缺 home 或缺 cwd 都应报错（不静默编出错误路径）。
         assert!(err == "missing_cwd" || err == "no_home_dir", "got {err}");
+    }
+
+    #[test]
+    fn read_new_lines_returns_offset_for_complete_lines_only() {
+        let path = std::env::temp_dir().join(format!(
+            "cli-manager-subagent-transcript-{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(&path, "{\"a\":1}\n{\"b\":2}\n{\"partial\":").unwrap();
+
+        let (content, offset, shrank) = read_new_lines(&path, 0).unwrap();
+        assert_eq!(content, "{\"a\":1}\n{\"b\":2}\n");
+        assert_eq!(offset as usize, content.len());
+        assert!(!shrank);
+
+        fs::write(&path, "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n").unwrap();
+        let (content, next_offset, shrank) = read_new_lines(&path, offset).unwrap();
+        assert_eq!(content, "{\"c\":3}\n");
+        assert_eq!(next_offset as usize, "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n".len());
+        assert!(!shrank);
+
+        let _ = fs::remove_file(path);
     }
 }
