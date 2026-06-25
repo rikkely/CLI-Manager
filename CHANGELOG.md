@@ -14,6 +14,7 @@
 - **补回历史会话关闭入口**：在历史会话侧栏顶部新增固定关闭按钮，并在新建、激活、分屏终端以及从项目树打开终端时自动退出历史界面，避免进入历史会话后找不到返回终端的路径。([#48](https://github.com/dark-hxx/CLI-Manager/issues/48))
 - **修复无会话空态加载循环**：历史会话列表为空时不再反复自动加载；按搜索、项目和来源筛选展示明确空态提示，当前项目没有 Claude/Codex 会话时正确显示为空。([#49](https://github.com/dark-hxx/CLI-Manager/issues/49))
 - **项目右键直达会话历史**：项目右键菜单新增「会话历史」入口，打开时默认匹配当前项目路径与当前 CLI 来源；项目来源筛选下拉默认折叠分组，并支持按项目名、路径或 CLI 输入检索。([#52](https://github.com/dark-hxx/CLI-Manager/issues/52))
+- **继续历史对话**：会话详情新增「继续对话」按钮，自动识别历史会话来源与项目目录，新建内部终端执行 `claude --resume <sessionId>` 或 `codex resume <sessionId>`。([#51](https://github.com/dark-hxx/CLI-Manager/issues/51))
 
 ### 删除项目树徽章
 

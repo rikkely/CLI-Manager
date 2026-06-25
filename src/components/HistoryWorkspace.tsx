@@ -1,7 +1,8 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 import { useHistoryStore } from "../stores/historyStore";
-import type { HistoryMessage, HistorySearchHit, HistorySessionView, HistorySourceFilter } from "../lib/types";
+import { useTerminalStore } from "../stores/terminalStore";
+import type { HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, Project } from "../lib/types";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
 import { PromptLibrary } from "./prompts/PromptLibrary";
@@ -26,6 +27,57 @@ function escapeRegExp(value: string): string {
 
 function normalizeHistorySidebarWidth(width: number): number {
   return width === HISTORY_SIDEBAR_OLD_DEFAULT_WIDTH ? HISTORY_SIDEBAR_DEFAULT_WIDTH : width;
+}
+
+function normalizePathForCompare(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
+}
+
+function projectPathName(path: string): string {
+  const normalized = path.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+  return normalized.split("/").filter(Boolean).pop() ?? "";
+}
+
+function claudeProjectKeyFromPath(path: string): string {
+  return path.trim().replace(/:/g, "-").replace(/[\\/]/g, "-").replace(/-+$/g, "").toLowerCase();
+}
+
+function parseProjectEnvVars(project: Project | null): Record<string, string> | undefined {
+  if (!project) return undefined;
+  try {
+    const parsed = JSON.parse(project.env_vars || "{}");
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const entries = Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findHistoryProject(session: HistorySessionDetail, projects: Project[]): Project | null {
+  const cwd = session.cwd?.trim();
+  if (cwd) {
+    const normalizedCwd = normalizePathForCompare(cwd);
+    const cwdProject = projects.find((project) => normalizePathForCompare(project.path) === normalizedCwd);
+    if (cwdProject) return cwdProject;
+  }
+
+  const projectKey = session.project_key.trim().toLowerCase();
+  if (!projectKey) return null;
+
+  return projects.find((project) => {
+    if (session.source === "claude" && claudeProjectKeyFromPath(project.path) === projectKey) return true;
+    const pathName = projectPathName(project.path).toLowerCase();
+    return pathName === projectKey || project.name.trim().toLowerCase() === projectKey;
+  }) ?? null;
+}
+
+function resolveResumeCommand(session: HistorySessionDetail): string | null {
+  const sessionId = session.session_id.trim();
+  if (!sessionId || /\s/.test(sessionId) || /[\r\n]/.test(sessionId)) return null;
+  if (session.source === "claude") return `claude --resume ${sessionId}`;
+  if (session.source === "codex") return `codex resume ${sessionId}`;
+  return null;
 }
 
 interface HistoryWorkspaceProps {
@@ -69,6 +121,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const updateSetting = useSettingsStore((s) => s.update);
   const projects = useProjectStore((s) => s.projects);
   const groups = useProjectStore((s) => s.groups);
+  const createSession = useTerminalStore((s) => s.createSession);
 
   const globalSearchRef = useRef<HTMLInputElement | null>(null);
   const sessionSearchRef = useRef<HTMLInputElement | null>(null);
@@ -372,6 +425,37 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     }
   };
 
+  const resumeConversation = useCallback(async () => {
+    if (!activeSession) {
+      toast.error("会话详情尚未加载完成");
+      return;
+    }
+
+    const command = resolveResumeCommand(activeSession);
+    if (!command) {
+      toast.error("无法继续对话", { description: "历史会话缺少有效的 sessionId 或来源不受支持" });
+      return;
+    }
+
+    const project = findHistoryProject(activeSession, projects);
+    const cwd = activeSession.cwd?.trim() || project?.path;
+    if (!cwd) {
+      toast.error("无法继续对话", { description: "未能识别该历史会话的项目目录" });
+      return;
+    }
+
+    try {
+      const titlePrefix = activeSession.source === "claude" ? "Claude" : "Codex";
+      const title = `${titlePrefix} 继续：${activeView?.displayTitle ?? activeSession.title}`;
+      const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
+      await createSession(project?.id, cwd, title, command, parseProjectEnvVars(project), shell);
+      closeHistory();
+      toast.success("已创建继续对话终端");
+    } catch (err) {
+      toast.error("继续对话失败", { description: String(err) });
+    }
+  }, [activeSession, activeView?.displayTitle, closeHistory, createSession, projects]);
+
   const openByHit = async (hit: HistorySearchHit) => {
     try {
       await openSearchHit(hit);
@@ -507,6 +591,9 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
             onJumpNext={jumpNext}
             onOpenPrompt={() => setPromptOpen(true)}
             onOpenDiff={() => setDiffOpen(true)}
+            onResumeSession={() => {
+              void resumeConversation();
+            }}
             onJumpToMessage={(messageIndex) => {
               void jumpToMessage(messageIndex);
             }}

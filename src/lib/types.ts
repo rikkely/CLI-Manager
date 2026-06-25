@@ -195,6 +195,7 @@ export interface HistorySessionUsage {
 }
 
 export interface HistorySessionDetail extends HistorySessionSummary {
+  cwd?: string | null;
   usage?: HistorySessionUsage;
   tool_events?: HistoryToolEvent[];
   messages: HistoryMessage[];

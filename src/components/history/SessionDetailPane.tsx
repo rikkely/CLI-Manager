@@ -1,5 +1,5 @@
 ﻿import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookCopy, Copy, GitCompare, Star } from "lucide-react";
+import { BookCopy, Copy, GitCompare, Star, Terminal } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import type { HistoryMessage, HistorySessionDetail, HistorySessionView } from "../../lib/types";
@@ -47,6 +47,7 @@ interface SessionDetailPaneProps {
   onJumpNext: () => void;
   onOpenPrompt: () => void;
   onOpenDiff: () => void;
+  onResumeSession: () => void;
   onJumpToMessage: (messageIndex: number) => void;
   onToggleStar: () => void;
   onLoadMoreMessages: () => void;
@@ -91,6 +92,7 @@ export function SessionDetailPane({
   onJumpNext,
   onOpenPrompt,
   onOpenDiff,
+  onResumeSession,
   onJumpToMessage,
   onToggleStar,
   onLoadMoreMessages,
@@ -177,6 +179,16 @@ export function SessionDetailPane({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              onClick={onResumeSession}
+              disabled={loadingSessionDetail || !activeSession}
+              aria-label="继续对话"
+              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact ui-primary-action"
+              title="新建内部终端并继续该会话"
+            >
+              <Terminal size={12} />
+              继续对话
+            </button>
             <button
               onClick={onOpenPrompt}
               aria-label="打开历史 Prompt 库"

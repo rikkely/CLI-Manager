@@ -283,6 +283,7 @@ pub struct HistorySessionDetail {
     pub project_key: String,
     pub title: String,
     pub file_path: String,
+    pub cwd: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub message_count: usize,
@@ -2215,6 +2216,7 @@ fn build_session_detail(file_ref: &SessionFileRef) -> Result<HistorySessionDetai
         project_key: file_ref.project_key.clone(),
         title: computed.title,
         file_path: file_ref.path.to_string_lossy().to_string(),
+        cwd: get_or_scan_session_project(&file_ref.path).cwd,
         created_at: computed.created_at,
         updated_at: computed.updated_at,
         message_count: messages.len(),
@@ -4516,6 +4518,25 @@ mod tests {
         let computed = scan_session_computation(&file, 1, 2);
 
         assert_eq!(computed.session_id, "019ed4a1-d197-75d0-950c-28cb3bbed404");
+    }
+
+    #[test]
+    fn build_session_detail_exposes_cwd() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-session.jsonl");
+        write_text(
+            &file,
+            r#"{"type":"session_meta","payload":{"id":"session-1","cwd":"D:\\work\\CLI-Manager"}}"#,
+        );
+        let file_ref = SessionFileRef {
+            source: "codex".to_string(),
+            project_key: "CLI-Manager".to_string(),
+            path: file,
+        };
+
+        let detail = build_session_detail(&file_ref).unwrap();
+
+        assert_eq!(detail.cwd.as_deref(), Some("D:\\work\\CLI-Manager"));
     }
 
     #[test]
