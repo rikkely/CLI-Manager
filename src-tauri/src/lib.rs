@@ -315,6 +315,7 @@ pub fn run() {
             commands::fs::check_paths_exist,
             commands::fs::file_list_dir,
             commands::fs::file_search,
+            commands::fs::file_search_content,
             commands::fs::file_read_text,
             commands::fs::file_read_image,
             commands::fs::file_write_text,

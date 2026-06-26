@@ -3858,6 +3858,16 @@
   color: var(--terminal-theme-foreground, var(--on-surface));
 }
 
+.ui-file-editor-pane .ui-file-editor-search-line-highlight {
+  background: color-mix(in srgb, var(--terminal-theme-selection, var(--terminal-theme-accent, #60a5fa)) 22%, transparent);
+}
+
+.ui-file-editor-pane .ui-file-editor-search-snippet-highlight {
+  background: color-mix(in srgb, var(--terminal-theme-accent, #60a5fa) 38%, transparent);
+  color: var(--terminal-theme-foreground, #f8fafc);
+  border-radius: 2px;
+}
+
 .ui-file-editor-markdown-preview {
   background-color: var(--terminal-theme-background, var(--surface));
   color: var(--terminal-theme-foreground, var(--on-surface));

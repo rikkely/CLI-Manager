@@ -32,7 +32,45 @@ Real state files live under `src/stores/`:
 
 ## Server State
 
-(To be filled by the team)
+### Convention: Use TanStack Query for historical stats dashboard server state
+
+**What**: Historical usage analytics data fetched through Tauri commands should be loaded with TanStack Query in the dashboard component layer. Keep payload normalization and reusable fetch functions in `historyStore.ts`, but do not drive new dashboard loading states through ad-hoc `useEffect` request sequencing.
+
+**Why**: Historical stats are server state: they are keyed by source, project, time range, and custom history paths, and they need cache freshness, background fetching, error state, and manual refresh. TanStack Query owns those concerns more directly than duplicating cache maps and request sequence guards in each component.
+
+**Correct**:
+
+```tsx
+const statsQuery = useQuery({
+  queryKey: ["historyStats", sourceFilter, projectKey, startAt, endAt],
+  queryFn: () => fetchHistoryStatsPayload({ sourceFilter, projectKey, startAt, endAt }),
+  enabled: open && startAt !== null && endAt !== null,
+});
+```
+
+**Wrong**:
+
+```tsx
+useEffect(() => {
+  let cancelled = false;
+  setLoading(true);
+  void loadStats(params).finally(() => {
+    if (!cancelled) setLoading(false);
+  });
+  return () => {
+    cancelled = true;
+  };
+}, [params]);
+```
+
+**Contracts**:
+
+- Wrap the app once with `QueryClientProvider` from `src/main.tsx`; do not create per-panel clients.
+- Query keys must include every field that changes the backend response: source filter, project key, start/end timestamps, and explicit manual-refresh nonce when forcing a backend refresh.
+- Keep realtime terminal stats on the existing live session/store path unless a separate migration explicitly changes that contract.
+- Keep backend command names and response payload normalization stable; React Query is a frontend cache/fetching mechanism, not a payload schema change.
+
+**Tests**: Run `npx tsc --noEmit` and `npm run build`. Manually verify historical stats filter changes, manual refresh, empty/error states, and bucket session drilldown in the desktop app.
 
 ---
 

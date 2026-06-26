@@ -1,6 +1,13 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
+import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import type { HistoryStatsHeatmapDay } from "../../lib/types";
 import { useI18n, type AppLanguage } from "../../lib/i18n";
+import {
+  RECHARTS_BAR_CURSOR,
+  RECHARTS_TOOLTIP_ITEM_STYLE,
+  RECHARTS_TOOLTIP_LABEL_STYLE,
+  RECHARTS_TOOLTIP_WRAPPER_STYLE,
+} from "./statsPalette";
 
 interface TimelineHeatmapProps {
   days: HistoryStatsHeatmapDay[];
@@ -9,10 +16,28 @@ interface TimelineHeatmapProps {
   granularity?: "day" | "hour";
 }
 
-// 模块级 formatter 单例：原代码在 N 个 cell 上各 toLocaleDateString，每次都新建 ICU formatter。
-// 短范围（≤14 天）的日热力图只有寥寥几格，铺在宽容器里非常空旷。
-// 此时改用横向条形：每天一条，长度按最大值归一化铺满整行，颜色仍按活跃等级。
+interface HeatmapPoint {
+  x: number;
+  y: number;
+  label: string;
+  day: HistoryStatsHeatmapDay;
+}
+
 const BAR_MODE_MAX_DAYS = 14;
+
+const RECHARTS_TOOLTIP_STYLE = {
+  backgroundColor: "var(--bg-secondary)",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  boxShadow: "0 8px 28px rgba(0,0,0,0.18)",
+  color: "var(--text-primary)",
+  fontSize: 12,
+} as const;
+
+const RECHARTS_AXIS_STYLE = {
+  fill: "var(--text-muted)",
+  fontSize: 11,
+} as const;
 
 function formatDay(dayStartUtc: number, language: AppLanguage): string {
   if (!Number.isFinite(dayStartUtc) || dayStartUtc <= 0) return "-";
@@ -55,45 +80,43 @@ function TimelineHeatmapImpl({
   granularity = "day",
 }: TimelineHeatmapProps) {
   const { language, t } = useI18n();
-  const [hoverDayStart, setHoverDayStart] = useState<number | null>(null);
   const barMode = granularity === "day" && days.length > 0 && days.length <= BAR_MODE_MAX_DAYS;
-
-  const gridClass =
-    granularity === "hour"
-      ? "grid grid-cols-12 gap-1 min-w-[214px]"
-      : "grid grid-flow-col auto-cols-[14px] grid-rows-7 gap-1 min-w-max";
-
-  const cells = useMemo(() => {
-    if (days.length === 0 || barMode) {
-      return [] as Array<
-        { type: "pad" } | { type: "day"; day: HistoryStatsHeatmapDay; dayIndex: number }
-      >;
-    }
+  const activeDay = useMemo(
+    () => days.find((day) => day.day_start_utc === selectedDayStart) ?? days.find((day) => day.messages > 0 || day.sessions > 0) ?? days[days.length - 1] ?? null,
+    [days, selectedDayStart]
+  );
+  const chartData = useMemo(
+    () =>
+      days.map((day) => ({
+        ...day,
+        label: formatBucket(day.day_start_utc, granularity, language),
+      })),
+    [days, granularity, language]
+  );
+  const points = useMemo<HeatmapPoint[]>(() => {
     if (granularity === "hour") {
-      return days.map((day, dayIndex) => ({ type: "day" as const, day, dayIndex }));
+      return days.map((day, index) => ({
+        x: index % 12,
+        y: Math.floor(index / 12),
+        label: formatBucket(day.day_start_utc, granularity, language),
+        day,
+      }));
     }
+    if (days.length === 0) return [];
     const first = new Date(days[0].day_start_utc);
     const mondayBasedWeekday = (first.getDay() + 6) % 7;
-    const placeholders: Array<{ type: "pad" }> = Array.from({ length: mondayBasedWeekday }, () => ({
-      type: "pad",
-    }));
-    const dayCells = days.map((day, dayIndex) => ({ type: "day" as const, day, dayIndex }));
-    return [...placeholders, ...dayCells];
-  }, [days, granularity, barMode]);
-
-  const maxMessages = useMemo(
-    () => Math.max(1, ...days.map((day) => day.messages)),
-    [days]
-  );
-
-  const activeDay = useMemo(() => {
-    const activeKey = hoverDayStart ?? selectedDayStart;
-    if (activeKey !== null) {
-      const found = days.find((day) => day.day_start_utc === activeKey);
-      if (found) return found;
-    }
-    return days[days.length - 1] ?? null;
-  }, [days, hoverDayStart, selectedDayStart]);
+    return days.map((day, index) => {
+      const cellIndex = mondayBasedWeekday + index;
+      return {
+        x: Math.floor(cellIndex / 7),
+        y: cellIndex % 7,
+        label: formatBucket(day.day_start_utc, granularity, language),
+        day,
+      };
+    });
+  }, [days, granularity, language]);
+  const xDomainMax = Math.max(1, ...points.map((point) => point.x));
+  const yDomainMax = granularity === "hour" ? 1 : 6;
 
   if (days.length === 0) {
     return (
@@ -103,199 +126,120 @@ function TimelineHeatmapImpl({
     );
   }
 
-  const summary = (
-    <div className="mb-2 flex flex-wrap items-center justify-end gap-2">
-      <div className="text-[11px] text-text-secondary">
-        {activeDay
-          ? t("stats.summary.sessionsMessages", {
-              bucket: formatBucket(activeDay.day_start_utc, granularity, language),
-              sessions: formatCount(activeDay.sessions, language),
-              messages: formatCount(activeDay.messages, language),
-            })
-          : "-"}
-      </div>
-    </div>
-  );
-
-  const hint = (
-    <div className="mt-2 flex items-center justify-between">
-      <div className="text-[10px] text-text-muted">
-        {t("stats.heatmap.hint")}
-      </div>
-      <div className="flex items-center gap-1">
-        {[0, 1, 2, 3, 4].map((level) => (
-          <span
-            key={level}
-            className="inline-block h-[10px] w-[10px] rounded-[2px]"
-            style={{ backgroundColor: cellColor(level) }}
-            title={level === 0 ? t("stats.heatmap.noActivity") : t("stats.heatmap.level", { level })}
-          />
-        ))}
-      </div>
-    </div>
-  );
-
-  if (barMode) {
-    return (
-      <div>
-        {summary}
-        <div
-          className="flex flex-col gap-1.5 rounded border border-border bg-bg-primary p-2"
-          role="group"
-          aria-label={t("stats.heatmap.barAria", { count: days.length })}
-          onMouseLeave={() => setHoverDayStart(null)}
-        >
-          {days.map((day, dayIndex) => {
-            const selected = day.day_start_utc === selectedDayStart;
-            const hovered = day.day_start_utc === hoverDayStart;
-            const pct = Math.max(day.messages > 0 ? 4 : 0, (day.messages / maxMessages) * 100);
-            return (
-              <button
-                key={day.day_start_utc}
-                type="button"
-                onClick={() => onSelectDay(day)}
-                className="flex items-center gap-2 rounded px-1 py-0.5 text-left transition-colors"
-                style={{ backgroundColor: hovered || selected ? "var(--bg-tertiary)" : "transparent" }}
-                aria-label={t("stats.summary.sessionsMessages", {
-                  bucket: formatDay(day.day_start_utc, language),
-                  sessions: formatCount(day.sessions, language),
-                  messages: formatCount(day.messages, language),
-                })}
-                title={t("stats.summary.sessionsMessages", {
-                  bucket: formatDay(day.day_start_utc, language),
-                  sessions: formatCount(day.sessions, language),
-                  messages: formatCount(day.messages, language),
-                })}
-                data-day-index={dayIndex}
-                onMouseEnter={() => setHoverDayStart(day.day_start_utc)}
-                onFocus={() => setHoverDayStart(day.day_start_utc)}
-                onBlur={() => setHoverDayStart(null)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelectDay(day);
-                    return;
-                  }
-                  let delta = 0;
-                  if (event.key === "ArrowUp") delta = -1;
-                  if (event.key === "ArrowDown") delta = 1;
-                  if (delta === 0) return;
-                  event.preventDefault();
-                  const nextIndex = Math.max(0, Math.min(days.length - 1, dayIndex + delta));
-                  const container = event.currentTarget.parentElement;
-                  const nextButton = container?.querySelector<HTMLButtonElement>(
-                    `button[data-day-index='${nextIndex}']`
-                  );
-                  nextButton?.focus();
-                }}
-              >
-                <span className="w-12 shrink-0 text-right text-[10px] text-text-muted">
-                  {formatDay(day.day_start_utc, language)}
-                </span>
-                <span className="relative h-5 flex-1 overflow-hidden rounded bg-bg-tertiary/60">
-                  <span
-                    className="absolute inset-y-0 left-0 rounded transition-all"
-                    style={{
-                      width: `${pct}%`,
-                      backgroundColor: cellColor(Math.max(day.level, day.messages > 0 ? 1 : 0)),
-                      boxShadow: selected ? "inset 0 0 0 1px var(--accent)" : "none",
-                    }}
-                  />
-                  <span className="absolute inset-y-0 right-1.5 flex items-center text-[10px] font-medium text-text-secondary">
-                    {t("stats.unit.messages", { count: formatCount(day.messages, language) })} · {t("stats.unit.sessions", { count: formatCount(day.sessions, language) })}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        {hint}
-      </div>
-    );
-  }
-
   return (
     <div>
-      {summary}
-
-      <div
-        className="overflow-x-auto rounded border border-border bg-bg-primary p-2"
-        onMouseLeave={() => setHoverDayStart(null)}
-      >
-        <div
-          className={gridClass}
-          role="group"
-          aria-label={granularity === "hour" ? t("stats.heatmap.hourAria") : t("stats.heatmap.recentAria", { count: days.length })}
-        >
-          {cells.map((item, idx) => {
-            if (item.type === "pad") {
-              return (
-                <div
-                  key={`pad-${idx}`}
-                  className="h-[14px] w-[14px] rounded-[3px]"
-                  style={{ backgroundColor: "transparent" }}
-                />
-              );
-            }
-            const day = item.day;
-            const dayIndex = item.dayIndex;
-            const selected = day.day_start_utc === selectedDayStart;
-            const hovered = day.day_start_utc === hoverDayStart;
-            return (
-              <button
-                key={day.day_start_utc}
-                type="button"
-                onClick={() => onSelectDay(day)}
-                className="h-[14px] w-[14px] rounded-[3px] border transition-all"
-                style={{
-                  borderColor: selected ? "var(--accent)" : hovered ? "var(--border)" : "transparent",
-                  backgroundColor: cellColor(day.level),
-                  transform: hovered || selected ? "scale(1.08)" : "scale(1)",
-                  boxShadow: selected
-                    ? "0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent)"
-                    : "none",
-                }}
-                aria-label={t("stats.summary.sessionsMessages", {
-                  bucket: formatBucket(day.day_start_utc, granularity, language),
-                  sessions: formatCount(day.sessions, language),
-                  messages: formatCount(day.messages, language),
-                })}
-                title={t("stats.summary.sessionsMessages", {
-                  bucket: formatBucket(day.day_start_utc, granularity, language),
-                  sessions: formatCount(day.sessions, language),
-                  messages: formatCount(day.messages, language),
-                })}
-                data-day-index={dayIndex}
-                onMouseEnter={() => setHoverDayStart(day.day_start_utc)}
-                onFocus={() => setHoverDayStart(day.day_start_utc)}
-                onBlur={() => setHoverDayStart(null)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelectDay(day);
-                    return;
-                  }
-                  let delta = 0;
-                  if (event.key === "ArrowLeft") delta = granularity === "hour" ? -1 : -7;
-                  if (event.key === "ArrowRight") delta = granularity === "hour" ? 1 : 7;
-                  if (event.key === "ArrowUp") delta = granularity === "hour" ? -12 : -1;
-                  if (event.key === "ArrowDown") delta = granularity === "hour" ? 12 : 1;
-                  if (delta === 0) return;
-                  event.preventDefault();
-                  const nextIndex = Math.max(0, Math.min(days.length - 1, dayIndex + delta));
-                  const container = event.currentTarget.parentElement;
-                  const nextButton = container?.querySelector<HTMLButtonElement>(
-                    `button[data-day-index='${nextIndex}']`
-                  );
-                  nextButton?.focus();
-                }}
-              />
-            );
-          })}
+      <div className="mb-2 flex flex-wrap items-center justify-end gap-2">
+        <div className="text-[11px] text-text-secondary">
+          {activeDay
+            ? t("stats.summary.sessionsMessages", {
+                bucket: formatBucket(activeDay.day_start_utc, granularity, language),
+                sessions: formatCount(activeDay.sessions, language),
+                messages: formatCount(activeDay.messages, language),
+              })
+            : "-"}
         </div>
       </div>
 
-      {hint}
+      <div className="h-[240px] rounded border border-border bg-bg-primary p-2">
+        {barMode ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} layout="vertical" margin={{ top: 6, right: 20, bottom: 6, left: 0 }}>
+              <CartesianGrid stroke="var(--border)" strokeOpacity={0.42} horizontal={false} />
+              <XAxis type="number" tick={RECHARTS_AXIS_STYLE} tickFormatter={(value) => formatCount(Number(value), language)} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="label" width={72} tick={RECHARTS_AXIS_STYLE} axisLine={false} tickLine={false} />
+              <Tooltip
+                cursor={RECHARTS_BAR_CURSOR}
+                contentStyle={RECHARTS_TOOLTIP_STYLE}
+                itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
+                labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
+                wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                formatter={(value) => [t("stats.unit.messages", { count: formatCount(Number(value), language) }), t("stats.hourly.legendMessages")]}
+                labelFormatter={(label) => String(label)}
+              />
+              <Bar dataKey="messages" radius={[0, 6, 6, 0]} cursor="pointer" onClick={(entry) => {
+                const payload = (entry as { payload?: HistoryStatsHeatmapDay }).payload;
+                if (payload) onSelectDay(payload);
+              }}>
+                {chartData.map((day) => (
+                  <Cell
+                    key={day.day_start_utc}
+                    fill={cellColor(Math.max(day.level, day.messages > 0 ? 1 : 0))}
+                    stroke={day.day_start_utc === selectedDayStart ? "var(--accent)" : "transparent"}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 18, right: 18, bottom: 18, left: 18 }}>
+              <XAxis type="number" dataKey="x" domain={[-0.5, xDomainMax + 0.5]} hide />
+              <YAxis type="number" dataKey="y" domain={[-0.5, yDomainMax + 0.5]} reversed hide />
+              <ZAxis range={[140, 140]} />
+              <Tooltip
+                cursor={false}
+                contentStyle={RECHARTS_TOOLTIP_STYLE}
+                itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
+                labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
+                wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                formatter={(_, __, payload) => {
+                  const point = payload?.payload as HeatmapPoint | undefined;
+                  if (!point) return ["", ""];
+                  return [
+                    t("stats.summary.sessionsMessages", {
+                      bucket: point.label,
+                      sessions: formatCount(point.day.sessions, language),
+                      messages: formatCount(point.day.messages, language),
+                    }),
+                    "",
+                  ];
+                }}
+                labelFormatter={() => ""}
+              />
+              <Scatter
+                data={points}
+                shape={(props) => {
+                  const point = (props as { payload?: HeatmapPoint }).payload;
+                  const cx = Number((props as { cx?: number }).cx);
+                  const cy = Number((props as { cy?: number }).cy);
+                  if (!point || !Number.isFinite(cx) || !Number.isFinite(cy)) return <g />;
+                  const selected = point.day.day_start_utc === selectedDayStart;
+                  return (
+                    <rect
+                      x={cx - 8}
+                      y={cy - 8}
+                      width={16}
+                      height={16}
+                      rx={4}
+                      fill={cellColor(point.day.level)}
+                      stroke={selected ? "var(--accent)" : "var(--border)"}
+                      strokeOpacity={selected ? 1 : 0.28}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => onSelectDay(point.day)}
+                    />
+                  );
+                }}
+              />
+            </ScatterChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      <div className="mt-2 flex items-center justify-between">
+        <div className="text-[10px] text-text-muted">
+          {t("stats.heatmap.hint")}
+        </div>
+        <div className="flex items-center gap-1">
+          {[0, 1, 2, 3, 4].map((level) => (
+            <span
+              key={level}
+              className="inline-block h-[10px] w-[10px] rounded-[2px]"
+              style={{ backgroundColor: cellColor(level) }}
+              title={level === 0 ? t("stats.heatmap.noActivity") : t("stats.heatmap.level", { level })}
+            />
+          ))}
+        </div>
+      </div>
       <div className="mt-1 flex items-center justify-between text-[10px] text-text-muted">
         <span>{formatBucket(days[0]?.day_start_utc ?? 0, granularity, language)}</span>
         <span>{formatBucket(days[days.length - 1]?.day_start_utc ?? 0, granularity, language)}</span>

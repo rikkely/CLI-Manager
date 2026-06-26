@@ -109,6 +109,7 @@ interface TerminalSession {
 - Usage lines without a model (e.g. Codex `token_count` events) attribute to the most recent model seen in the session (e.g. from `turn_context.payload.model`).
 - The `<synthetic>` model (Claude error placeholder lines) must never enter model distribution or model attribution.
 - Stats aggregates must include input, output, cache read, cache creation, estimated cost, and unpriced token counts at every exposed usage level: total, project, model, source, daily series, and hourly activity.
+- History stats token/cost/model aggregates must bucket by each deduped usage event timestamp (`timestamp`, `time`, `created_at`, `createdAt`, or `message.timestamp`), not by the session file `updated_at`. If a usage event has no parseable timestamp, fall back to the session `updated_at`. Range-level `sessions` must be counted by unique session identity so multiple usage events in one session do not inflate session counts.
 - Heatmap-compatible buckets must include `sessions`, `messages`, `level`, and `session_refs`. Daily heatmap buckets use `day_start_utc`; hourly activity buckets use `hour_start_utc` plus `hour` so the frontend can render 24-hour drilldowns without guessing local bucket anchors.
 - `historyStore` must accept snake_case payload fields and legacy camelCase fallbacks when normalizing stats data. `normalizeDetail` must pass message token fields through (it previously dropped them, making per-session token panels read 0).
 - Unknown or unsupported models must not fake a price. They contribute to `unpriced_tokens` and `total_cost_usd` remains unaffected.
@@ -169,6 +170,7 @@ interface TerminalSession {
   - Case-insensitive ASCII search avoids per-message lowercasing regressions.
   - Claude streamed duplicate usage lines produce one total and one matching `token_trend` point.
   - Codex cumulative `token_count` events produce delta totals and matching `token_trend` points.
+  - History stats bucket cross-day session usage by usage event timestamp while counting the session once for range totals.
   - Tool event extraction returns bounded diagnostic rows for Claude `tool_use`, Codex `function_call`, `function_call_output`, and MCP end/error events without changing aggregate tool counts.
 - Frontend checks:
   - `npm run build` must pass after payload/type changes.
@@ -182,6 +184,23 @@ interface TerminalSession {
   - `cargo test` must pass before tagging a release that changes history stats contracts.
 
 ### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let day_start = stats_day_start_with_offset(summary.updated_at, day_offset);
+```
+
+This buckets every token in a long-running or cross-day session into the session file's final modified day.
+
+#### Correct
+
+```rust
+let occurred_at = usage_event.timestamp_ms.unwrap_or(summary.updated_at);
+let day_start = stats_day_start_with_offset(occurred_at, day_offset);
+```
+
+Use each deduped usage event timestamp for token/cost/model buckets, with `updated_at` only as a missing-timestamp fallback.
 
 #### Wrong
 

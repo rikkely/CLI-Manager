@@ -4,7 +4,7 @@ import { copyAiText } from "../../lib/aiClipboard";
 import { formatAiPathBlock, formatAiRootTree, formatAiTree, formatTerminalDragPath, TERMINAL_FILE_PATH_MIME } from "../../lib/aiPathFormatter";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { beginTerminalFileDrag, endTerminalFileDrag } from "../../lib/terminalFileDrag";
-import type { GitFileChange, ProjectFileEntry } from "../../lib/types";
+import type { GitFileChange, ProjectFileContentMatch, ProjectFileEntry, ProjectFileSearchMode } from "../../lib/types";
 import { isDefaultCollapsedDirectoryName, useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -13,7 +13,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "../ui/dialog";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../ui/context-menu";
-import { ChevronRight, Copy, File, Folder, FolderPlus, Pencil, RefreshCw, Search, Trash2, X } from "../icons";
+import { ChevronRight, Copy, File, FileCode, Folder, FolderPlus, Pencil, RefreshCw, Search, Trash2, X } from "../icons";
 
 type InputAction =
   | { kind: "create-file"; parentPath: string }
@@ -53,6 +53,11 @@ const GIT_STATUS_LABELS: Record<GitFileChange["status"], TranslationKey> = {
   U: "files.status.untracked",
   "??": "files.status.untracked",
 };
+
+const SEARCH_MODES: Array<{ value: ProjectFileSearchMode; labelKey: TranslationKey }> = [
+  { value: "files", labelKey: "files.search.modeFiles" },
+  { value: "content", labelKey: "files.search.modeCode" },
+];
 
 function makeGitDisplayStatus(change: GitFileChange, t: Translate): FileDisplayStatus {
   const config = STATUS_CONFIG[change.status] ?? STATUS_CONFIG.M;
@@ -588,16 +593,21 @@ export function FileExplorerSidebar() {
   const { t } = useI18n();
   const project = useFileExplorerStore((s) => s.project);
   const tree = useFileExplorerStore((s) => s.tree);
+  const searchMode = useFileExplorerStore((s) => s.searchMode);
   const searchQuery = useFileExplorerStore((s) => s.searchQuery);
   const searchResults = useFileExplorerStore((s) => s.searchResults);
+  const contentSearchResults = useFileExplorerStore((s) => s.contentSearchResults);
+  const searchLoading = useFileExplorerStore((s) => s.searchLoading);
   const activeFile = useFileExplorerStore((s) => s.activeFile);
   const openFiles = useFileExplorerStore((s) => s.openFiles);
   const gitChanges = useFileExplorerStore((s) => s.gitChanges);
   const clipboard = useFileExplorerStore((s) => s.clipboard);
   const closeProject = useFileExplorerStore((s) => s.closeProject);
   const refresh = useFileExplorerStore((s) => s.refresh);
+  const setSearchMode = useFileExplorerStore((s) => s.setSearchMode);
   const setSearchQuery = useFileExplorerStore((s) => s.setSearchQuery);
   const openFile = useFileExplorerStore((s) => s.openFile);
+  const openFileAtSearchMatch = useFileExplorerStore((s) => s.openFileAtSearchMatch);
   const openFileEditorPane = useTerminalStore((s) => s.openFileEditorPane);
   const createEntry = useFileExplorerStore((s) => s.createEntry);
   const renameEntry = useFileExplorerStore((s) => s.renameEntry);
@@ -616,7 +626,8 @@ export function FileExplorerSidebar() {
     setExpandedAutoCollapseGroups(new Set());
   }, [project?.id]);
 
-  const visibleRows = searchQuery.trim() ? searchResults : tree;
+  const hasSearchQuery = Boolean(searchQuery.trim());
+  const visibleRows = hasSearchQuery && searchMode === "files" ? searchResults : tree;
   const gitChangeByPath = useMemo(() => new Map(gitChanges.map((change) => [change.path, change])), [gitChanges]);
   const dirtyFilePaths = useMemo(
     () => new Set(openFiles.filter((file) => file.content !== file.savedContent).map((file) => file.path)),
@@ -854,6 +865,38 @@ export function FileExplorerSidebar() {
     if (project) openFileEditorPane(project);
   };
 
+  const renderContentSearchRow = useCallback((match: ProjectFileContentMatch) => {
+    return (
+      <button
+        key={`${match.path}:${match.lineNumber}`}
+        type="button"
+        className="ui-file-tree-row flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[12px]"
+        data-selected={activeFile?.path === match.path ? "true" : "false"}
+        onClick={() => {
+          void openFileAtSearchMatch(match);
+          if (project) openFileEditorPane(project);
+        }}
+        title={`${match.path}:${match.lineNumber}`}
+      >
+        <FileCode size={15} className="mt-0.5 shrink-0 text-text-muted" />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="truncate text-on-surface">{match.path}</span>
+            <span className="shrink-0 text-[10px] text-text-muted">{t("files.search.line", { line: match.lineNumber })}</span>
+          </span>
+          {match.before.map((line, index) => (
+            <span key={`before-${index}`} className="block truncate font-mono text-[11px] text-text-muted">{line}</span>
+          ))}
+          <span className="block truncate font-mono text-[11px] text-on-surface">{match.lineText}</span>
+          {match.after.map((line, index) => (
+            <span key={`after-${index}`} className="block truncate font-mono text-[11px] text-text-muted">{line}</span>
+          ))}
+        </span>
+      </button>
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFile?.path, openFileAtSearchMatch, openFileEditorPane, project, t]);
+
   const renderSearchRow = useCallback((entry: ProjectFileEntry) => {
     if (!project) return null;
     const displayStatus = getDisplayStatus(entry);
@@ -932,36 +975,48 @@ export function FileExplorerSidebar() {
     void copyAiText(formatAiRootTree(project, tree), t("files.toast.aiTreeCopied"));
   }, [project, t, tree]);
 
-  const renderRows = useMemo(() => (
-    visibleRows.length > 0 ? (
-      searchQuery.trim() ? (
-        visibleRows.map((entry) => renderSearchRow(entry))
-      ) : (
-        <FileTreeRows
-          entries={visibleRows}
-          parentPath=""
-          depth={0}
-          getDisplayStatus={getDisplayStatus}
-          onOpenFile={requestOpenFile}
-          onInput={openInput}
-          onConfirm={setConfirmAction}
-          renamingPath={renamingAction?.path ?? null}
-          onRenameSubmit={(action, value) => void submitRename(action, value)}
-          onRenameCancel={cancelRename}
-          onFileKeyDown={handleFileKeyDown}
-          onFileDragStart={handleFileDragStart}
-          onFileDragEnd={handleFileDragEnd}
-          onFileDragOver={handleFileDragOver}
-          onFileDrop={handleFileDrop}
-          autoCollapseGroups={autoCollapseGroups}
-          renderAutoCollapsedGroup
-        />
-      )
+  const renderRows = useMemo(() => {
+    if (hasSearchQuery && searchLoading) {
+      return <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.searching")}</div>;
+    }
+
+    if (hasSearchQuery && searchMode === "content") {
+      return contentSearchResults.length > 0
+        ? contentSearchResults.map((match) => renderContentSearchRow(match))
+        : <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.emptySearch")}</div>;
+    }
+
+    if (hasSearchQuery) {
+      return visibleRows.length > 0
+        ? visibleRows.map((entry) => renderSearchRow(entry))
+        : <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.emptySearch")}</div>;
+    }
+
+    return visibleRows.length > 0 ? (
+      <FileTreeRows
+        entries={visibleRows}
+        parentPath=""
+        depth={0}
+        getDisplayStatus={getDisplayStatus}
+        onOpenFile={requestOpenFile}
+        onInput={openInput}
+        onConfirm={setConfirmAction}
+        renamingPath={renamingAction?.path ?? null}
+        onRenameSubmit={(action, value) => void submitRename(action, value)}
+        onRenameCancel={cancelRename}
+        onFileKeyDown={handleFileKeyDown}
+        onFileDragStart={handleFileDragStart}
+        onFileDragEnd={handleFileDragEnd}
+        onFileDragOver={handleFileDragOver}
+        onFileDrop={handleFileDrop}
+        autoCollapseGroups={autoCollapseGroups}
+        renderAutoCollapsedGroup
+      />
     ) : (
       <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.empty")}</div>
-    )
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [searchQuery, visibleRows, renderSearchRow, getDisplayStatus, autoCollapseGroups, handleFileKeyDown, handleFileDragStart, handleFileDragEnd, renamingAction?.path, submitRename, cancelRename, t]);
+  }, [hasSearchQuery, searchLoading, searchMode, contentSearchResults, renderContentSearchRow, visibleRows, renderSearchRow, getDisplayStatus, autoCollapseGroups, handleFileKeyDown, handleFileDragStart, handleFileDragEnd, renamingAction?.path, submitRename, cancelRename, t]);
 
   if (!project) return null;
 
@@ -986,9 +1041,29 @@ export function FileExplorerSidebar() {
           <input
             className="min-w-0 flex-1 bg-transparent py-1.5 text-xs text-on-surface outline-none"
             value={searchQuery}
-            placeholder={t("files.searchPlaceholder")}
+            aria-label={searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder")}
+            placeholder={searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder")}
             onChange={(event) => void setSearchQuery(event.currentTarget.value)}
           />
+        </div>
+        <div className="mt-1 grid grid-cols-2 rounded-md border border-border bg-surface-container-lowest p-0.5">
+          {SEARCH_MODES.map((mode) => {
+            const active = searchMode === mode.value;
+            return (
+              <button
+                key={mode.value}
+                type="button"
+                className={[
+                  "rounded px-2 py-1 text-[11px] transition-colors",
+                  active ? "bg-surface-container text-on-surface" : "text-text-muted hover:text-on-surface",
+                ].join(" ")}
+                aria-pressed={active}
+                onClick={() => setSearchMode(mode.value)}
+              >
+                {t(mode.labelKey)}
+              </button>
+            );
+          })}
         </div>
         {clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
       </div>

@@ -102,6 +102,17 @@ export interface ProjectFileEntry {
   children?: ProjectFileEntry[];
 }
 
+export type ProjectFileSearchMode = "files" | "content";
+
+export interface ProjectFileContentMatch {
+  path: string;
+  name: string;
+  lineNumber: number;
+  lineText: string;
+  before: string[];
+  after: string[];
+}
+
 export interface ProjectTextFilePayload {
   content: string;
   sizeBytes: number;

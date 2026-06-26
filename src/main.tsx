@@ -1,7 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { initLogging } from "./lib/logger";
+import { queryClient } from "./lib/queryClient";
 
 void initLogging();
 
@@ -12,6 +14,8 @@ window.addEventListener("contextmenu", (e) => {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
   </React.StrictMode>,
 );

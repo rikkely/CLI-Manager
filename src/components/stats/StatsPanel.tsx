@@ -1,6 +1,22 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { EChartsOption } from "echarts";
+import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3, Coins, Database, Folder, Layers, LineChart, RefreshCw, X } from "lucide-react";
+import {
+  Area,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
+  Legend,
+  Line,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -14,13 +30,23 @@ import type {
   HistoryStatsProjectItem,
   HistoryStatsSourceItem,
 } from "../../lib/types";
-import { useHistoryStore } from "../../stores/historyStore";
-import { EChart } from "./EChart";
+import { fetchHistoryStatsPayload, fetchHistoryStatsProjectOptions, useHistoryStore } from "../../stores/historyStore";
 import { TimelineHeatmap } from "./TimelineHeatmap";
 import { StatsHourlyActivityChart } from "./StatsHourlyActivityChart";
 import { Skeleton } from "../ui/Skeleton";
 import { Portal } from "../ui/Portal";
-import { ACCENT, CHART_TOOLTIP, PEAK, SERIES_COLORS } from "./statsPalette";
+import {
+  ACCENT,
+  COST_FILL,
+  HISTORY_SERIES_COLORS,
+  HISTORY_TREND_COLORS,
+  PEAK,
+  RECHARTS_AXIS_CURSOR,
+  RECHARTS_BAR_CURSOR,
+  RECHARTS_TOOLTIP_ITEM_STYLE,
+  RECHARTS_TOOLTIP_LABEL_STYLE,
+  RECHARTS_TOOLTIP_WRAPPER_STYLE,
+} from "./statsPalette";
 import { useI18n, type AppLanguage, type TranslationKey } from "../../lib/i18n";
 
 interface StatsPanelProps {
@@ -260,6 +286,20 @@ function axisBucketLabel(bucketStartUtc: number, granularity: StatsBucketGranula
   return granularity === "hour" ? axisHourLabel(bucketStartUtc) : axisDayLabel(bucketStartUtc);
 }
 
+const RECHARTS_TOOLTIP_STYLE = {
+  backgroundColor: "var(--bg-secondary)",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  boxShadow: "0 8px 28px rgba(0,0,0,0.18)",
+  color: "var(--text-primary)",
+  fontSize: 12,
+} as const;
+
+const RECHARTS_AXIS_STYLE = {
+  fill: "var(--text-muted)",
+  fontSize: 11,
+} as const;
+
 function hourlyBucketStart(item: HistoryStatsHourlyActivityItem, dayStartAt: number | null): number {
   if (Number.isFinite(item.hour_start_utc) && item.hour_start_utc > 0) return item.hour_start_utc;
   if (dayStartAt !== null && Number.isFinite(dayStartAt)) return dayStartAt + item.hour * HOUR_MS;
@@ -288,32 +328,6 @@ function hourlyToHeatmapDay(item: HistoryStatsHourlyActivityItem, dayStartAt: nu
     level: item.level,
     session_refs: item.session_refs,
   };
-}
-
-function tooltipRows(value: unknown): Record<string, unknown>[] {
-  return (Array.isArray(value) ? value : [value]).filter(
-    (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object"
-  );
-}
-
-function tooltipIndex(value: Record<string, unknown> | undefined): number {
-  const dataIndex = value?.dataIndex;
-  return typeof dataIndex === "number" && Number.isFinite(dataIndex) ? dataIndex : 0;
-}
-
-function tooltipNumber(value: Record<string, unknown> | undefined, key: string): number {
-  const result = value?.[key];
-  return typeof result === "number" && Number.isFinite(result) ? result : 0;
-}
-
-function niceAxisMax(value: number): number | undefined {
-  if (!Number.isFinite(value) || value <= 0) return undefined;
-  const base = 10 ** Math.floor(Math.log10(value));
-  for (const factor of [1, 2, 5, 10]) {
-    const candidate = base * factor;
-    if (candidate >= value) return candidate;
-  }
-  return base * 10;
 }
 
 function StatsSkeleton() {
@@ -440,43 +454,57 @@ function KpiStrip({ stats }: { stats: HistoryStatsPayload }) {
 
 function TokenCompositionStrip({ stats }: { stats: HistoryStatsPayload }) {
   const { language, t } = useI18n();
-  const parts = [
-    { key: "input", label: t("termStats.input"), value: stats.total_input_tokens, color: SERIES_COLORS.input },
-    { key: "output", label: t("termStats.output"), value: stats.total_output_tokens, color: SERIES_COLORS.output },
-    { key: "cacheCreation", label: t("termStats.cacheWrite"), value: stats.total_cache_creation_tokens, color: SERIES_COLORS.cacheCreation },
-    { key: "cacheRead", label: t("termStats.cacheHit"), value: stats.total_cache_read_tokens, color: SERIES_COLORS.cacheRead },
-  ];
-  const total = Math.max(1, parts.reduce((sum, item) => sum + item.value, 0));
+  const parts = useMemo(() => [
+    { key: "input", label: t("termStats.input"), value: stats.total_input_tokens, color: HISTORY_SERIES_COLORS.input },
+    { key: "output", label: t("termStats.output"), value: stats.total_output_tokens, color: HISTORY_SERIES_COLORS.output },
+    { key: "cacheCreation", label: t("termStats.cacheWrite"), value: stats.total_cache_creation_tokens, color: HISTORY_SERIES_COLORS.cacheCreation },
+    { key: "cacheRead", label: t("termStats.cacheHit"), value: stats.total_cache_read_tokens, color: HISTORY_SERIES_COLORS.cacheRead },
+  ], [stats.total_cache_creation_tokens, stats.total_cache_read_tokens, stats.total_input_tokens, stats.total_output_tokens, t]);
+  const total = parts.reduce((sum, item) => sum + Math.max(0, item.value), 0);
+  const chartData = parts.filter((item) => item.value > 0);
 
   return (
     <section className="rounded-2xl border border-border/60 bg-bg-secondary px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="min-w-[126px]">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <div className="min-w-[150px]">
           <div className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-text-primary">
             <Layers size={13} className="text-accent" />
             {t("stats.tokenComposition")}
           </div>
           <div className="mt-0.5 text-[11px] text-text-muted">{t("stats.tokenCompositionHint")}</div>
         </div>
-        <div className="min-w-[220px] flex-1">
-          <div className="flex h-2.5 overflow-hidden rounded-full bg-bg-tertiary">
-            {parts.map((item) => (
-              <div
-                key={item.key}
-                className="h-full"
-                style={{ width: `${(item.value / total) * 100}%`, backgroundColor: item.color }}
-                title={`${item.label} ${formatCount(item.value, language)}`}
-              />
-            ))}
-          </div>
+        <div className="h-[150px] min-w-[180px] flex-1">
+          {chartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={chartData} dataKey="value" nameKey="label" innerRadius={38} outerRadius={58} paddingAngle={2}>
+                  {chartData.map((item) => (
+                    <Cell key={item.key} fill={item.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={RECHARTS_TOOLTIP_STYLE}
+                  itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
+                  labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
+                  wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                  formatter={(value, name) => [`${formatCount(Number(value), language)} Token`, String(name)]}
+                />
+                <Legend iconType="circle" wrapperStyle={{ color: "var(--text-secondary)", fontSize: 11 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyBlock text={t("stats.trend.empty")} />
+          )}
         </div>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-text-secondary">
+        <div className="grid min-w-[260px] grid-cols-1 gap-1.5 text-[11px] text-text-secondary sm:grid-cols-2 lg:grid-cols-1">
           {parts.map((item) => (
-            <div key={item.key} className="inline-flex items-center gap-1.5">
+            <div key={item.key} className="flex items-center justify-between gap-3 rounded-lg bg-bg-primary px-2 py-1.5">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
               <span>{item.label}</span>
+              </span>
               <span className="font-semibold text-text-primary">{formatCompactCount(item.value, language)}</span>
-              <span className="text-text-muted">{formatPercent((item.value / total) * 100)}</span>
+              <span className="text-text-muted">{formatPercent(total > 0 ? (item.value / total) * 100 : 0)}</span>
             </div>
           ))}
         </div>
@@ -520,6 +548,17 @@ function DailyUsageTrendChart({
   granularity: StatsBucketGranularity;
 }) {
   const { language, t } = useI18n();
+  const data = useMemo(
+    () =>
+      items.map((item) => ({
+        ...item,
+        bucketLabel: axisBucketLabel(item.day_start_utc, granularity),
+        bucketTitle: formatBucketLabel(item.day_start_utc, granularity, language),
+        totalTokens: totalTokensOf(item),
+        costValue: Number(item.total_cost_usd.toFixed(4)),
+      })),
+    [granularity, items, language]
+  );
   const peak = useMemo(() => {
     const found = items.reduce<HistoryStatsDailySeriesItem | null>((current, item) => {
       if (!current) return item;
@@ -529,118 +568,6 @@ function DailyUsageTrendChart({
   }, [items]);
 
   const hasData = items.some((item) => totalTokensOf(item) > 0 || item.total_cost_usd > 0);
-  const option = useMemo<EChartsOption>(() => {
-    const tokenAxisMax = niceAxisMax(
-      Math.max(
-        0,
-        ...items.flatMap((item) => [
-          totalTokensOf(item),
-          item.input_tokens,
-          item.output_tokens,
-          item.cache_creation_tokens,
-          item.cache_read_tokens,
-        ])
-      )
-    );
-    const costAxisMax = niceAxisMax(Math.max(0, ...items.map((item) => item.total_cost_usd)));
-    const denseLabels = items.length > 18;
-    return {
-      backgroundColor: "transparent",
-      animationDuration: 650,
-      // 固定主折线配色：主题语义色在部分主题里 accent≈success 会撞色（总Token 与输入同色），故总/输入/输出写死区分。
-      color: ["#4F9DF7", "#46C06A", "#F0617A", SERIES_COLORS.cacheCreation, SERIES_COLORS.cacheRead],
-      tooltip: {
-        trigger: "axis",
-        confine: true,
-        ...CHART_TOOLTIP,
-        formatter: (params: unknown) => {
-          const rows = tooltipRows(params);
-          const day = items[tooltipIndex(rows[0])];
-          if (!day) return "";
-          const bucketLabel = formatBucketLabel(day.day_start_utc, granularity, language);
-          const lineRows = rows
-            .map((row) => {
-              const name = typeof row.seriesName === "string" ? row.seriesName : "";
-              const marker = typeof row.marker === "string" ? row.marker : "";
-              const value = tooltipNumber(row, "value");
-              const display = name === t("stats.trend.cost") ? formatCost(value) : `${formatCount(value, language)} Token`;
-              return `<div style="display:flex;align-items:center;justify-content:space-between;gap:18px;line-height:22px;"><span>${marker}${name}</span><strong>${display}</strong></div>`;
-            })
-            .join("");
-          return `<div style="min-width:210px;"><strong>${bucketLabel}</strong>${lineRows}<div style="margin-top:6px;color:var(--text-muted);">${t("stats.trend.unpricedTooltip", { value: formatCount(day.unpriced_tokens, language) })}</div></div>`;
-        },
-      },
-      legend: {
-        top: 0,
-        right: 6,
-        itemWidth: 10,
-        itemHeight: 6,
-        textStyle: { color: "var(--text-secondary)", fontSize: 11 },
-      },
-      grid: { left: 48, right: 56, top: 42, bottom: denseLabels ? 46 : 34 },
-      xAxis: {
-        type: "category",
-        boundaryGap: false,
-        data: items.map((item) => axisBucketLabel(item.day_start_utc, granularity)),
-        axisLine: { lineStyle: { color: "var(--border)" } },
-        axisTick: { show: false },
-        axisLabel: {
-          interval: denseLabels ? Math.ceil(items.length / 8) : 0,
-          rotate: denseLabels ? 28 : 0,
-          color: "var(--text-muted)",
-          hideOverlap: true,
-        },
-      },
-      yAxis: [
-        {
-          type: "value",
-          name: "Token",
-          max: tokenAxisMax,
-          nameTextStyle: { color: "var(--text-muted)", fontSize: 10 },
-          splitLine: { lineStyle: { color: "var(--border)", opacity: 0.42 } },
-          axisLabel: { color: "var(--text-muted)", formatter: (value: number) => formatCompactCount(value, language) },
-        },
-        {
-          type: "value",
-          name: "USD",
-          max: costAxisMax,
-          nameTextStyle: { color: "var(--text-muted)", fontSize: 10 },
-          splitLine: { show: false },
-          axisLabel: { color: "var(--text-muted)", formatter: (value: number) => (value <= 0 ? "$0" : `$${value < 10 ? value.toFixed(1) : Math.round(value)}`) },
-        },
-      ],
-      series: [
-        {
-          name: t("stats.trend.totalToken"),
-          type: "line",
-          smooth: true,
-          symbol: "circle",
-          symbolSize: 5,
-          emphasis: { disabled: true },
-          lineStyle: { width: 3 },
-          areaStyle: { color: "rgba(79,157,247,0.14)" },
-          data: items.map((item) =>
-            peak?.day_start_utc === item.day_start_utc
-              ? { value: totalTokensOf(item), symbolSize: 12, itemStyle: { color: "#F5C84B", borderColor: "var(--bg-secondary)", borderWidth: 2 } }
-              : totalTokensOf(item)
-          ),
-        },
-        { name: t("termStats.input"), type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.input_tokens) },
-        { name: t("termStats.output"), type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.output_tokens) },
-        { name: t("termStats.cacheWrite"), type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.cache_creation_tokens) },
-        { name: t("termStats.cacheHit"), type: "line", smooth: true, symbol: "none", emphasis: { disabled: true }, lineStyle: { width: 1.8 }, data: items.map((item) => item.cache_read_tokens) },
-        {
-          name: t("stats.trend.cost"),
-          type: "bar",
-          yAxisIndex: 1,
-          barMaxWidth: 12,
-          emphasis: { disabled: true },
-          itemStyle: { color: "rgba(148,163,184,0.32)", borderRadius: [5, 5, 0, 0] },
-          data: items.map((item) => Number(item.total_cost_usd.toFixed(4))),
-        },
-      ],
-    };
-  }, [items, peak, granularity, language, t]);
 
   return (
     <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4 lg:p-5">
@@ -663,7 +590,41 @@ function DailyUsageTrendChart({
             : t("stats.trend.noPeak")}
         </div>
       </div>
-      {hasData ? <EChart option={option} className="h-[380px] w-full" /> : <EmptyBlock text={t("stats.trend.empty")} />}
+      {hasData ? (
+        <div className="h-[380px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 12, right: 10, bottom: 8, left: 0 }}>
+              <CartesianGrid stroke="var(--border)" strokeOpacity={0.42} vertical={false} />
+              <XAxis dataKey="bucketLabel" tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={{ stroke: "var(--border)" }} minTickGap={18} />
+              <YAxis yAxisId="tokens" tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactCount(Number(value), language)} allowDecimals={false} />
+              <YAxis yAxisId="cost" orientation="right" tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={false} tickFormatter={(value) => formatCost(Number(value))} />
+              <Tooltip
+                cursor={RECHARTS_AXIS_CURSOR}
+                contentStyle={RECHARTS_TOOLTIP_STYLE}
+                itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
+                labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
+                wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                labelFormatter={(_, payload) => payload?.[0]?.payload?.bucketTitle ?? ""}
+                formatter={(value, name) => [
+                  String(name) === t("stats.trend.cost")
+                    ? formatCost(Number(value))
+                    : `${formatCount(Number(value), language)} Token`,
+                  String(name),
+                ]}
+              />
+              <Legend wrapperStyle={{ color: "var(--text-secondary)", fontSize: 11 }} />
+              <Bar yAxisId="cost" dataKey="costValue" name={t("stats.trend.cost")} fill={COST_FILL} maxBarSize={12} radius={[5, 5, 0, 0]} />
+              <Area yAxisId="tokens" type="monotone" dataKey="totalTokens" name={t("stats.trend.totalToken")} stroke={HISTORY_TREND_COLORS.total} fill={HISTORY_TREND_COLORS.total} fillOpacity={0.14} strokeWidth={3} dot={{ r: 2.5 }} activeDot={{ r: 5, fill: PEAK }} />
+              <Line yAxisId="tokens" type="monotone" dataKey="input_tokens" name={t("termStats.input")} stroke={HISTORY_TREND_COLORS.input} strokeWidth={1.8} dot={false} />
+              <Line yAxisId="tokens" type="monotone" dataKey="output_tokens" name={t("termStats.output")} stroke={HISTORY_TREND_COLORS.output} strokeWidth={1.8} dot={false} />
+              <Line yAxisId="tokens" type="monotone" dataKey="cache_creation_tokens" name={t("termStats.cacheWrite")} stroke={HISTORY_TREND_COLORS.cacheCreation} strokeWidth={1.8} dot={false} />
+              <Line yAxisId="tokens" type="monotone" dataKey="cache_read_tokens" name={t("termStats.cacheHit")} stroke={HISTORY_TREND_COLORS.cacheRead} strokeWidth={1.8} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <EmptyBlock text={t("stats.trend.empty")} />
+      )}
     </section>
   );
 }
@@ -678,71 +639,57 @@ function ModelRankingChart({ items }: { items: HistoryStatsModelItem[] }) {
     () =>
       items
         .filter((item) => totalTokensOf(item) > 0)
-        .slice(0, 8)
-        .reverse(),
+        .slice(0, 8),
     [items]
   );
-  const option = useMemo<EChartsOption>(() => {
-    const tokenAxisMax = niceAxisMax(Math.max(0, ...models.map(totalTokensOf)));
-    return {
-      backgroundColor: "transparent",
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "shadow" },
-        confine: true,
-        ...CHART_TOOLTIP,
-        formatter: (params: unknown) => {
-          const row = tooltipRows(params)[0];
-          const model = models[tooltipIndex(row)];
-          if (!model) return "";
-          return `<div style="min-width:220px;"><strong>${model.model}</strong><div style="margin-top:6px;">${t("stats.modelRanking.tooltip", {
-            tokens: formatCount(totalTokensOf(model), language),
-            cost: formatCost(model.total_cost_usd),
-            cache: formatCount(model.cache_creation_tokens + model.cache_read_tokens, language),
-          })}</div></div>`;
-        },
-      },
-      grid: { left: 112, right: 54, top: 14, bottom: 24 },
-      xAxis: {
-        type: "value",
-        max: tokenAxisMax,
-        splitLine: { lineStyle: { color: "var(--border)", opacity: 0.42 } },
-        axisLabel: { color: "var(--text-muted)", formatter: (value: number) => formatCompactCount(value, language) },
-      },
-      yAxis: {
-        type: "category",
-        data: models.map((item) => item.model),
-        axisTick: { show: false },
-        axisLine: { show: false },
-        axisLabel: { color: "var(--text-secondary)", width: 104, overflow: "truncate", formatter: (value: string) => value.replace(/^claude-/, "") },
-      },
-      series: [
-        {
-          name: "Token",
-          type: "bar",
-          barWidth: 14,
-          itemStyle: { color: ACCENT, borderRadius: [0, 7, 7, 0] },
-          label: {
-            show: true,
-            position: "right",
-            color: "var(--text-muted)",
-            fontSize: 10,
-            formatter: (params: unknown) => formatCompactCount(tooltipNumber(params as Record<string, unknown>, "value"), language),
-          },
-          data: models.map((item, index) => ({
-            value: totalTokensOf(item),
-            itemStyle: { color: index === models.length - 1 ? PEAK : ACCENT },
-          })),
-        },
-      ],
-    };
-  }, [models, language, t]);
+  const data = useMemo(
+    () =>
+      models.map((model, index) => ({
+        ...model,
+        shortName: model.model.replace(/^claude-/, ""),
+        tokens: totalTokensOf(model),
+        fill: index === 0 ? PEAK : ACCENT,
+      })),
+    [models]
+  );
 
   return (
     <section className="flex h-[320px] flex-col rounded-2xl border border-border/60 bg-bg-secondary p-4">
       <SectionHeading icon={BarChart3} title={t("stats.modelRanking")} hint="Top models by Token" />
       <div className="min-h-0 flex-1">
-        {models.length === 0 ? <EmptyBlock text={t("stats.modelRanking.empty")} /> : <EChart option={option} className="h-full w-full" />}
+        {models.length === 0 ? (
+          <EmptyBlock text={t("stats.modelRanking.empty")} />
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} layout="vertical" margin={{ top: 4, right: 36, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="var(--border)" strokeOpacity={0.42} horizontal={false} />
+              <XAxis type="number" tick={RECHARTS_AXIS_STYLE} tickFormatter={(value) => formatCompactCount(Number(value), language)} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="shortName" width={112} tick={RECHARTS_AXIS_STYLE} axisLine={false} tickLine={false} />
+              <Tooltip
+                cursor={RECHARTS_BAR_CURSOR}
+                contentStyle={RECHARTS_TOOLTIP_STYLE}
+                itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
+                labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
+                wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                formatter={(value, _, payload) => {
+                  const model = payload?.payload as HistoryStatsModelItem | undefined;
+                  return [
+                    model
+                      ? `${formatCount(totalTokensOf(model), language)} Token · ${formatCost(model.total_cost_usd)} · ${t("termStats.cacheHit")}/${t("termStats.cacheWrite")} ${formatCount(model.cache_creation_tokens + model.cache_read_tokens, language)}`
+                      : `${formatCount(Number(value), language)} Token`,
+                    "Token",
+                  ];
+                }}
+                labelFormatter={(_, payload) => payload?.[0]?.payload?.model ?? ""}
+              />
+              <Bar dataKey="tokens" name="Token" radius={[0, 7, 7, 0]}>
+                {data.map((item) => (
+                  <Cell key={item.model} fill={item.fill} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </section>
   );
@@ -755,8 +702,15 @@ function ProjectRanking({ items, selectedProjectKey, onSelectProject, onClearPro
   onClearProject: () => void;
 }) {
   const { language, t } = useI18n();
-  const topItems = items.slice(0, 8);
-  const maxTokens = Math.max(1, ...topItems.map(totalTokensOf));
+  const topItems = useMemo(
+    () =>
+      items.slice(0, 8).map((item) => ({
+        ...item,
+        tokens: totalTokensOf(item),
+        selected: item.project_key === selectedProjectKey,
+      })),
+    [items, selectedProjectKey]
+  );
   return (
     <section className="flex h-[320px] flex-col rounded-2xl border border-border/60 bg-bg-secondary p-4">
       <SectionHeading
@@ -770,40 +724,40 @@ function ProjectRanking({ items, selectedProjectKey, onSelectProject, onClearPro
           ) : undefined
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto ui-thin-scroll pr-1">
+      <div className="min-h-0 flex-1">
         {topItems.length === 0 ? (
           <EmptyBlock text={t("stats.projectRanking.empty")} />
         ) : (
-          <div className="space-y-2">
-            {topItems.map((item) => {
-              const selected = item.project_key === selectedProjectKey;
-              const totalTokens = totalTokensOf(item);
-              return (
-                <button
-                  key={item.project_key}
-                  type="button"
-                  onClick={() => onSelectProject(item.project_key)}
-                  className="ui-list-row w-full rounded-lg bg-bg-primary px-3 py-2 text-left"
-                  aria-pressed={selected}
-                  title={t("stats.projectRanking.filterTitle", { project: item.project_key })}
-                >
-                  <div className="flex items-center justify-between gap-3 text-[12px]">
-                    <span className="truncate font-medium text-text-primary">{item.project_key}</span>
-                    <span className="shrink-0 text-text-muted">{formatCompactCount(totalTokens, language)} Token · {formatCost(item.total_cost_usd)}</span>
-                  </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg-tertiary">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${Math.max(4, (totalTokens / maxTokens) * 100)}%`,
-                        backgroundColor: selected ? PEAK : ACCENT,
-                      }}
-                    />
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={topItems} layout="vertical" margin={{ top: 4, right: 36, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="var(--border)" strokeOpacity={0.42} horizontal={false} />
+              <XAxis type="number" tick={RECHARTS_AXIS_STYLE} tickFormatter={(value) => formatCompactCount(Number(value), language)} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="project_key" width={112} tick={RECHARTS_AXIS_STYLE} axisLine={false} tickLine={false} />
+              <Tooltip
+                cursor={RECHARTS_BAR_CURSOR}
+                contentStyle={RECHARTS_TOOLTIP_STYLE}
+                itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
+                labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
+                wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                formatter={(value) => [`${formatCount(Number(value), language)} Token`, "Token"]}
+                labelFormatter={(label) => String(label)}
+              />
+              <Bar
+                dataKey="tokens"
+                name="Token"
+                radius={[0, 7, 7, 0]}
+                cursor="pointer"
+                onClick={(entry) => {
+                  const payload = (entry as { payload?: HistoryStatsProjectItem }).payload;
+                  if (payload?.project_key) onSelectProject(payload.project_key);
+                }}
+              >
+                {topItems.map((item) => (
+                  <Cell key={item.project_key} fill={item.selected ? PEAK : ACCENT} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
         )}
       </div>
     </section>
@@ -812,37 +766,43 @@ function ProjectRanking({ items, selectedProjectKey, onSelectProject, onClearPro
 
 function SourceBreakdown({ items }: { items: HistoryStatsSourceItem[] }) {
   const { language, t } = useI18n();
-  const maxTokens = Math.max(1, ...items.map(totalTokensOf));
+  const data = useMemo(
+    () =>
+      items.map((item) => ({
+        ...item,
+        input: item.input_tokens,
+        output: item.output_tokens,
+        cache: item.cache_creation_tokens + item.cache_read_tokens,
+      })),
+    [items]
+  );
   return (
     <section className="flex h-[320px] flex-col rounded-2xl border border-border/60 bg-bg-secondary p-4">
       <SectionHeading icon={Database} title={t("stats.sourceBreakdown")} hint="Claude / Codex" />
-      <div className="min-h-0 flex-1 overflow-y-auto ui-thin-scroll pr-1">
+      <div className="min-h-0 flex-1">
         {items.length === 0 ? (
           <EmptyBlock text={t("stats.sourceBreakdown.empty")} />
         ) : (
-          <div className="space-y-2">
-            {items.map((item) => {
-              const totalTokens = totalTokensOf(item);
-              return (
-                <div key={item.source} className="rounded-lg bg-bg-primary px-3 py-2">
-                  <div className="flex items-center justify-between gap-3 text-[12px]">
-                    <span className="font-medium text-text-primary">{item.source}</span>
-                    <span className="text-text-muted">{formatCompactCount(totalTokens, language)} Token · {formatCost(item.total_cost_usd)}</span>
-                  </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg-tertiary">
-                    <div className="h-full rounded-full" style={{ width: `${Math.max(4, (totalTokens / maxTokens) * 100)}%`, backgroundColor: ACCENT }} />
-                  </div>
-                  <div className="mt-1 text-[10px] text-text-muted">
-                    {t("stats.sourceBreakdown.detail", {
-                      input: formatCompactCount(item.input_tokens, language),
-                      output: formatCompactCount(item.output_tokens, language),
-                      cache: formatCompactCount(item.cache_creation_tokens + item.cache_read_tokens, language),
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+              <CartesianGrid stroke="var(--border)" strokeOpacity={0.42} vertical={false} />
+              <XAxis dataKey="source" tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={{ stroke: "var(--border)" }} />
+              <YAxis tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactCount(Number(value), language)} />
+              <Tooltip
+                cursor={RECHARTS_BAR_CURSOR}
+                contentStyle={RECHARTS_TOOLTIP_STYLE}
+                itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
+                labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
+                wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                formatter={(value, name) => [`${formatCount(Number(value), language)} Token`, String(name)]}
+                labelFormatter={(label) => String(label)}
+              />
+              <Legend wrapperStyle={{ color: "var(--text-secondary)", fontSize: 11 }} />
+              <Bar dataKey="input" stackId="tokens" name={t("termStats.input")} fill={HISTORY_SERIES_COLORS.input} radius={[0, 0, 4, 4]} />
+              <Bar dataKey="output" stackId="tokens" name={t("termStats.output")} fill={HISTORY_SERIES_COLORS.output} />
+              <Bar dataKey="cache" stackId="tokens" name={`${t("termStats.cacheHit")} / ${t("termStats.cacheWrite")}`} fill={HISTORY_SERIES_COLORS.cacheRead} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         )}
       </div>
     </section>
@@ -851,23 +811,12 @@ function SourceBreakdown({ items }: { items: HistoryStatsSourceItem[] }) {
 
 export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
   const { language, t } = useI18n();
-  const loadingStats = useHistoryStore((s) => s.loadingStats);
-  const loadingStatsProjectOptions = useHistoryStore((s) => s.loadingStatsProjectOptions);
-  const stats = useHistoryStore((s) => s.stats);
-  const statsError = useHistoryStore((s) => s.statsError);
-  const statsProjectOptionsError = useHistoryStore((s) => s.statsProjectOptionsError);
-  const statsUpdatedAt = useHistoryStore((s) => s.statsUpdatedAt);
   const sourceFilter = useHistoryStore((s) => s.sourceFilter);
-  const projectOptions = useHistoryStore((s) => s.statsProjectOptions);
-  const loadStatsProjectOptions = useHistoryStore((s) => s.loadStatsProjectOptions);
-  const loadStats = useHistoryStore((s) => s.loadStats);
 
   const [projectKey, setProjectKey] = useState("");
   const [projectSelectionTouched, setProjectSelectionTouched] = useState(false);
-  const [projectOptionsReady, setProjectOptionsReady] = useState(false);
-  const [projectSelectionReady, setProjectSelectionReady] = useState(false);
   const [timeWindow, setTimeWindow] = useState<StatsTimeWindowState>(() => getDefaultStatsTimeWindow());
-  const [requestedStatsQueryKey, setRequestedStatsQueryKey] = useState<string | null>(null);
+  const [manualRefresh, setManualRefresh] = useState<{ key: string; nonce: number } | null>(null);
   const [selectedDayStart, setSelectedDayStart] = useState<number | null>(null);
   const [dayVisibleCount, setDayVisibleCount] = useState(DAY_SESSION_PAGE_SIZE);
   const resolvedTimeWindow = useMemo(() => resolveStatsTimeWindow(timeWindow), [timeWindow]);
@@ -883,25 +832,41 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
   }, [dateRange.endDate, dateRange.startDate, t]);
 
   const dateRangeLabel = dateBounds.error ? t("stats.rangeInactive") : statsTimeWindowLabel(resolvedTimeWindow, dateRange, t);
-  const statsQueryKey = useMemo(
+  const statsBaseQueryKey = useMemo(
     () => `${sourceFilter}|${projectKey || ALL_PROJECTS_VALUE}|${dateBounds.startAt ?? "invalid"}|${dateBounds.endAt ?? "invalid"}`,
     [dateBounds.endAt, dateBounds.startAt, projectKey, sourceFilter]
   );
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setProjectOptionsReady(false);
-    setProjectSelectionReady(false);
-    void loadStatsProjectOptions()
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setProjectOptionsReady(true);
+  const effectiveRefreshNonce = manualRefresh?.key === statsBaseQueryKey ? manualRefresh.nonce : 0;
+  const projectOptionsQuery = useQuery({
+    queryKey: ["historyStatsProjectOptions", sourceFilter],
+    queryFn: () => fetchHistoryStatsProjectOptions(sourceFilter),
+    enabled: open,
+  });
+  const projectOptions = projectOptionsQuery.data ?? [];
+  const projectOptionsReady = open && !projectOptionsQuery.isPending;
+  const projectSelectionReady = projectOptionsReady;
+  const statsQuery = useQuery({
+    queryKey: ["historyStats", sourceFilter, projectKey || null, dateBounds.startAt, dateBounds.endAt, effectiveRefreshNonce],
+    queryFn: () => {
+      if (dateBounds.startAt === null || dateBounds.endAt === null) {
+        throw new Error(dateBounds.error ?? "Invalid stats range");
+      }
+      return fetchHistoryStatsPayload({
+        sourceFilter,
+        projectKey: projectKey || null,
+        rangeDays: null,
+        startAt: dateBounds.startAt,
+        endAt: dateBounds.endAt,
+        force: effectiveRefreshNonce > 0,
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, sourceFilter, loadStatsProjectOptions]);
+    },
+    enabled: open && projectSelectionReady && dateBounds.error === null && dateBounds.startAt !== null && dateBounds.endAt !== null,
+  });
+  const stats = statsQuery.data ?? null;
+  const loadingStats = statsQuery.isFetching;
+  const statsError = statsQuery.error ? String(statsQuery.error) : null;
+  const statsProjectOptionsError = projectOptionsQuery.error ? String(projectOptionsQuery.error) : null;
+  const statsUpdatedAt = statsQuery.dataUpdatedAt || null;
 
   useEffect(() => {
     if (!open) return;
@@ -923,7 +888,6 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
       if (projectOptions.includes(prev)) return prev;
       return "";
     });
-    setProjectSelectionReady(true);
   }, [open, projectOptions, projectOptionsReady, projectSelectionTouched]);
 
   useEffect(() => {
@@ -933,22 +897,12 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
   }, [open, sourceFilter, projectKey, dateRange.startDate, dateRange.endDate]);
 
   useEffect(() => {
-    if (!open || !projectSelectionReady || dateBounds.error || dateBounds.startAt === null || dateBounds.endAt === null) {
-      setRequestedStatsQueryKey(null);
-      return;
-    }
-    const request = loadStats({ projectKey: projectKey || null, startAt: dateBounds.startAt, endAt: dateBounds.endAt });
-    setRequestedStatsQueryKey(statsQueryKey);
-    void request.catch(() => undefined);
-  }, [open, projectSelectionReady, projectKey, sourceFilter, dateBounds, statsQueryKey, loadStats]);
-
-  useEffect(() => {
     setDayVisibleCount(DAY_SESSION_PAGE_SIZE);
   }, [selectedDayStart]);
 
   const sourceLabel = sourceFilter === "all" ? t("common.allSources") : sourceFilter;
   const projectLabel = projectKey || t("common.allProjects");
-  const waitingForStatsQuery = dateBounds.error === null && (!projectSelectionReady || requestedStatsQueryKey !== statsQueryKey);
+  const waitingForStatsQuery = dateBounds.error === null && (!projectSelectionReady || statsQuery.isPending);
   const statsGranularity: StatsBucketGranularity = resolvedTimeWindow.mode === "day" ? "hour" : "day";
   const trendItems = useMemo(() => {
     if (!stats) return [];
@@ -994,9 +948,7 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
 
   const refreshStats = () => {
     if (!projectSelectionReady || dateBounds.error || dateBounds.startAt === null || dateBounds.endAt === null) return;
-    const request = loadStats({ projectKey: projectKey || null, startAt: dateBounds.startAt, endAt: dateBounds.endAt, force: true });
-    setRequestedStatsQueryKey(statsQueryKey);
-    void request.catch(() => undefined);
+    setManualRefresh({ key: statsBaseQueryKey, nonce: Date.now() });
   };
   const controlClass = "h-8 rounded-md border border-border bg-bg-secondary px-2 text-xs text-text-primary";
   const timeInputClass = `${controlClass} min-w-[132px]`;
@@ -1036,7 +988,7 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
                 setProjectSelectionTouched(true);
                 setProjectKey(next === ALL_PROJECTS_VALUE ? "" : next);
               }}
-              disabled={!projectOptionsReady && loadingStatsProjectOptions}
+              disabled={!projectOptionsReady && projectOptionsQuery.isFetching}
               className="h-8 w-auto min-w-[124px] shrink-0 text-xs"
               aria-label={t("stats.projectFilter")}
             >

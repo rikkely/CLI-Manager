@@ -4,12 +4,15 @@ import { toast } from "sonner";
 import type {
   GitFileChange,
   Project,
+  ProjectFileContentMatch,
   ProjectFileEntry,
   ProjectFilePreviewKind,
+  ProjectFileSearchMode,
   ProjectImageFilePayload,
   ProjectTextFilePayload,
 } from "../lib/types";
 import { logError } from "../lib/logger";
+import { translateCurrent } from "../lib/i18n";
 
 type ClipboardMode = "copy" | "move";
 type FileEntryKind = "file" | "directory";
@@ -30,16 +33,26 @@ interface ActiveProjectFile {
   sizeBytes: number;
 }
 
+interface FileSearchNavigationTarget {
+  path: string;
+  lineNumber: number;
+  lineText: string;
+}
+
 interface FileExplorerStore {
   project: Project | null;
   tree: ProjectFileEntry[];
+  searchMode: ProjectFileSearchMode;
   searchQuery: string;
   searchResults: ProjectFileEntry[];
+  contentSearchResults: ProjectFileContentMatch[];
+  searchLoading: boolean;
   expandedPaths: Set<string>;
   loading: boolean;
   openFiles: ActiveProjectFile[];
   activeFilePath: string | null;
   activeFile: ActiveProjectFile | null;
+  searchNavigationTarget: FileSearchNavigationTarget | null;
   gitChanges: GitFileChange[];
   clipboard: FileClipboard | null;
   openProject: (project: Project) => Promise<void>;
@@ -50,8 +63,11 @@ interface FileExplorerStore {
   toggleDir: (path: string) => Promise<void>;
   expandCompactDirChain: (path: string) => Promise<void>;
   collapseDir: (path: string) => void;
+  setSearchMode: (mode: ProjectFileSearchMode) => void;
   setSearchQuery: (query: string) => Promise<void>;
   openFile: (entry: ProjectFileEntry) => Promise<void>;
+  openFileAtSearchMatch: (match: ProjectFileContentMatch) => Promise<void>;
+  clearSearchNavigationTarget: () => void;
   setActiveFilePath: (path: string) => void;
   closeFile: (path: string) => void;
   setActiveContent: (content: string) => void;
@@ -222,6 +238,10 @@ const DEFAULT_COLLAPSED_DIRECTORY_NAME_SET = new Set(
   DEFAULT_COLLAPSED_DIRECTORY_NAMES.map((name) => name.toLowerCase())
 );
 
+const SEARCH_DEBOUNCE_MS = 220;
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let searchRequestSeq = 0;
+
 export function isDefaultCollapsedDirectoryName(name: string): boolean {
   return DEFAULT_COLLAPSED_DIRECTORY_NAME_SET.has(name.toLowerCase());
 }
@@ -350,13 +370,17 @@ function selectFallbackFile(files: ActiveProjectFile[], closedPath: string): Act
 export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
   project: null,
   tree: [],
+  searchMode: "files",
   searchQuery: "",
   searchResults: [],
+  contentSearchResults: [],
+  searchLoading: false,
   expandedPaths: new Set([""]),
   loading: false,
   openFiles: [],
   activeFilePath: null,
   activeFile: null,
+  searchNavigationTarget: null,
   gitChanges: [],
   clipboard: null,
 
@@ -366,12 +390,16 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     set({
       project,
       loading: true,
+      searchMode: "files",
       searchQuery: "",
       searchResults: [],
+      contentSearchResults: [],
+      searchLoading: false,
       expandedPaths: keepCurrentProject ? pruneDefaultCollapsedPaths(get().expandedPaths) : new Set([""]),
       openFiles: keepCurrentProject ? get().openFiles : [],
       activeFilePath: keepCurrentProject ? get().activeFilePath : null,
       activeFile: keepCurrentProject ? get().activeFile : null,
+      searchNavigationTarget: keepCurrentProject ? get().searchNavigationTarget : null,
       gitChanges: keepCurrentProject ? get().gitChanges : [],
       clipboard: keepCurrentProject ? get().clipboard : null,
     });
@@ -392,12 +420,16 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     set({
       project: null,
       tree: [],
+      searchMode: "files",
       searchQuery: "",
       searchResults: [],
+      contentSearchResults: [],
+      searchLoading: false,
       expandedPaths: new Set([""]),
       openFiles: [],
       activeFilePath: null,
       activeFile: null,
+      searchNavigationTarget: null,
       gitChanges: [],
       clipboard: null,
     });
@@ -471,23 +503,87 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     set((state) => ({ expandedPaths: collapsePath(state.expandedPaths, path) }));
   },
 
+  setSearchMode: (mode) => {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    searchRequestSeq += 1;
+    set({
+      searchMode: mode,
+      searchResults: [],
+      contentSearchResults: [],
+      searchLoading: false,
+    });
+    const query = get().searchQuery;
+    if (query.trim()) void get().setSearchQuery(query);
+  },
+
   setSearchQuery: async (query) => {
     const project = get().project;
-    set({ searchQuery: query });
+    const mode = get().searchMode;
+    const requestSeq = searchRequestSeq + 1;
+    searchRequestSeq = requestSeq;
+
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+
     if (!project || !query.trim()) {
-      set({ searchResults: [] });
+      set({
+        searchQuery: query,
+        searchResults: [],
+        contentSearchResults: [],
+        searchLoading: false,
+      });
       return;
     }
-    try {
-      const results = await invoke<ProjectFileEntry[]>("file_search", {
-        rootPath: project.path,
-        query,
-      });
-      set({ searchResults: results.map(normalizeEntry) });
-    } catch (err) {
-      logError("File search failed", err);
-      toast.error("文件搜索失败", { description: String(err) });
-    }
+
+    set({
+      searchQuery: query,
+      searchLoading: true,
+      ...(mode === "files" ? { contentSearchResults: [] } : { searchResults: [] }),
+    });
+
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null;
+      void (async () => {
+        const isLatest = () => (
+          requestSeq === searchRequestSeq
+          && get().project?.id === project.id
+          && get().searchMode === mode
+          && get().searchQuery === query
+        );
+
+        try {
+          if (mode === "files") {
+            const results = await invoke<ProjectFileEntry[]>("file_search", {
+              rootPath: project.path,
+              query,
+            });
+            if (!isLatest()) return;
+            set({ searchResults: results.map(normalizeEntry), searchLoading: false });
+            return;
+          }
+
+          const results = await invoke<ProjectFileContentMatch[]>("file_search_content", {
+            rootPath: project.path,
+            query,
+          });
+          if (!isLatest()) return;
+          set({ contentSearchResults: results, searchLoading: false });
+        } catch (err) {
+          if (!isLatest()) return;
+          logError(mode === "files" ? "File search failed" : "File content search failed", err);
+          set({ searchLoading: false });
+          toast.error(
+            translateCurrent(mode === "files" ? "files.toast.searchFailed" : "files.toast.contentSearchFailed"),
+            { description: String(err) }
+          );
+        }
+      })();
+    }, SEARCH_DEBOUNCE_MS);
   },
 
   openFile: async (entry) => {
@@ -562,6 +658,26 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       });
       toast.warning("无法预览此文件", { description: message });
     }
+  },
+
+  openFileAtSearchMatch: async (match) => {
+    await get().openFile({
+      name: match.name,
+      path: match.path,
+      kind: "file",
+      sizeBytes: 0,
+    });
+    set({
+      searchNavigationTarget: {
+        path: match.path,
+        lineNumber: match.lineNumber,
+        lineText: match.lineText,
+      },
+    });
+  },
+
+  clearSearchNavigationTarget: () => {
+    set({ searchNavigationTarget: null });
   },
 
   setActiveFilePath: (path) => {

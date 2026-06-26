@@ -9,6 +9,39 @@ use serde::Serialize;
 
 const TEXT_FILE_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const IMAGE_FILE_MAX_BYTES: u64 = 10 * 1024 * 1024;
+const FILE_SEARCH_MAX_RESULTS: usize = 1000;
+const CONTENT_SEARCH_MAX_RESULTS: usize = 200;
+const CONTENT_SEARCH_MAX_FILE_BYTES: u64 = 1024 * 1024;
+const CONTENT_SEARCH_CONTEXT_LINES: usize = 1;
+const CONTENT_SEARCH_MAX_LINE_CHARS: usize = 300;
+const SEARCH_SKIPPED_DIRECTORY_NAMES: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    ".trellis",
+    ".idea",
+    ".vscode",
+    ".cache",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    "node_modules",
+    "bower_components",
+    "dist",
+    "build",
+    "out",
+    "target",
+    "coverage",
+    "vendor",
+    ".venv",
+    "venv",
+    "__pycache__",
+];
+const CONTENT_SEARCH_SKIPPED_EXTENSIONS: &[&str] = &[
+    "7z", "bmp", "class", "dll", "dmg", "exe", "gif", "gz", "ico", "jar", "jpeg", "jpg", "lockb",
+    "mov", "mp3", "mp4", "pdf", "png", "pyc", "rar", "so", "tar", "wasm", "webp", "zip",
+];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +66,17 @@ pub struct ImageFilePayload {
     pub data_base64: String,
     pub mime_type: String,
     pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentSearchMatch {
+    pub path: String,
+    pub name: String,
+    pub line_number: usize,
+    pub line_text: String,
+    pub before: Vec<String>,
+    pub after: Vec<String>,
 }
 
 #[tauri::command]
@@ -94,6 +138,28 @@ pub async fn file_search(root_path: String, query: String) -> Result<Vec<FileEnt
         collect_search_matches(&root, &root, &needle, &mut entries)?;
         entries.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
         Ok(entries)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn file_search_content(root_path: String, query: String) -> Result<Vec<ContentSearchMatch>, String> {
+    tokio::task::spawn_blocking(move || {
+        let root = canonical_root(&root_path)?;
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut matches = Vec::new();
+        collect_content_matches(&root, &root, &needle, &mut matches)?;
+        matches.sort_by(|a, b| {
+            a.path
+                .to_lowercase()
+                .cmp(&b.path.to_lowercase())
+                .then_with(|| a.line_number.cmp(&b.line_number))
+        });
+        Ok(matches)
     })
     .await
     .map_err(|err| err.to_string())?
@@ -438,25 +504,67 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn search_relative_from_root(root: &Path, path: &Path) -> Result<String, String> {
+    path.strip_prefix(root)
+        .map_err(|err| format!("strip_prefix_failed: {err}"))
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+}
+
+fn should_skip_search_dir(name: &str) -> bool {
+    SEARCH_SKIPPED_DIRECTORY_NAMES
+        .iter()
+        .any(|skipped| skipped.eq_ignore_ascii_case(name))
+}
+
+fn should_skip_content_file(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    CONTENT_SEARCH_SKIPPED_EXTENSIONS
+        .iter()
+        .any(|skipped| skipped.eq_ignore_ascii_case(ext))
+}
+
+fn text_matches(value: &str, needle: &str) -> bool {
+    value.to_lowercase().contains(needle)
+}
+
+fn truncate_search_line(line: &str) -> String {
+    let mut chars = line.chars();
+    let truncated: String = chars.by_ref().take(CONTENT_SEARCH_MAX_LINE_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
 fn collect_search_matches(
     root: &Path,
     dir: &Path,
     needle: &str,
     out: &mut Vec<FileEntry>,
 ) -> Result<(), String> {
-    if out.len() >= 5000 {
+    if out.len() >= FILE_SEARCH_MAX_RESULTS {
         return Ok(());
     }
     for item in fs::read_dir(dir).map_err(|err| format!("read_dir_failed: {err}"))? {
         let entry = item.map_err(|err| format!("read_dir_entry_failed: {err}"))?;
         let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("file_type_failed: {err}"))?;
         let metadata = entry.metadata().map_err(|err| format!("metadata_failed: {err}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.to_lowercase().contains(needle) {
+        if file_type.is_dir() && should_skip_search_dir(&name) {
+            continue;
+        }
+        let rel = search_relative_from_root(root, &path)?;
+        if text_matches(&name, needle) || text_matches(&rel, needle) {
             out.push(FileEntry {
                 name: name.clone(),
-                path: relative_from_root(root, &path)?,
-                kind: if metadata.is_dir() { "directory" } else { "file" }.into(),
+                path: rel,
+                kind: if file_type.is_dir() { "directory" } else { "file" }.into(),
                 size_bytes: metadata.len(),
                 modified_ms: metadata
                     .modified()
@@ -464,10 +572,97 @@ fn collect_search_matches(
                     .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                     .map(|duration| duration.as_millis() as u64),
             });
+            if out.len() >= FILE_SEARCH_MAX_RESULTS {
+                return Ok(());
+            }
         }
-        if metadata.is_dir() {
+        if file_type.is_dir() {
             collect_search_matches(root, &path, needle, out)?;
         }
+    }
+    Ok(())
+}
+
+fn collect_content_matches(
+    root: &Path,
+    dir: &Path,
+    needle: &str,
+    out: &mut Vec<ContentSearchMatch>,
+) -> Result<(), String> {
+    if out.len() >= CONTENT_SEARCH_MAX_RESULTS {
+        return Ok(());
+    }
+    for item in fs::read_dir(dir).map_err(|err| format!("read_dir_failed: {err}"))? {
+        let entry = item.map_err(|err| format!("read_dir_entry_failed: {err}"))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("file_type_failed: {err}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if file_type.is_dir() {
+            if !should_skip_search_dir(&name) {
+                collect_content_matches(root, &path, needle, out)?;
+            }
+            if out.len() >= CONTENT_SEARCH_MAX_RESULTS {
+                return Ok(());
+            }
+            continue;
+        }
+        if !file_type.is_file() || should_skip_content_file(&path) {
+            continue;
+        }
+        let metadata = entry.metadata().map_err(|err| format!("metadata_failed: {err}"))?;
+        if metadata.len() > CONTENT_SEARCH_MAX_FILE_BYTES {
+            continue;
+        }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let Ok(content) = String::from_utf8(bytes) else {
+            continue;
+        };
+        collect_content_matches_in_file(root, &path, &name, &content, needle, out)?;
+        if out.len() >= CONTENT_SEARCH_MAX_RESULTS {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn collect_content_matches_in_file(
+    root: &Path,
+    path: &Path,
+    name: &str,
+    content: &str,
+    needle: &str,
+    out: &mut Vec<ContentSearchMatch>,
+) -> Result<(), String> {
+    let lines: Vec<&str> = content.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if out.len() >= CONTENT_SEARCH_MAX_RESULTS {
+            return Ok(());
+        }
+        if !text_matches(line, needle) {
+            continue;
+        }
+        let before_start = index.saturating_sub(CONTENT_SEARCH_CONTEXT_LINES);
+        let after_end = usize::min(lines.len(), index + CONTENT_SEARCH_CONTEXT_LINES + 1);
+        out.push(ContentSearchMatch {
+            path: search_relative_from_root(root, path)?,
+            name: name.to_string(),
+            line_number: index + 1,
+            line_text: truncate_search_line(line),
+            before: lines[before_start..index]
+                .iter()
+                .map(|line| truncate_search_line(line))
+                .collect(),
+            after: lines[index + 1..after_end]
+                .iter()
+                .map(|line| truncate_search_line(line))
+                .collect(),
+        });
+        return Ok(());
     }
     Ok(())
 }
@@ -532,5 +727,64 @@ mod tests {
         move_path(&root, &target, &moved, false).unwrap();
         assert!(!root.join("two.txt").exists());
         assert_eq!(fs::read_to_string(root.join("three.txt")).unwrap(), "one");
+    }
+
+    #[test]
+    fn file_search_skips_heavy_directories() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join("src").join("needle.ts"), "ok").unwrap();
+        fs::write(root.join(".git").join("needle.txt"), "skip").unwrap();
+        let root = root.canonicalize().unwrap();
+
+        let mut entries = Vec::new();
+        collect_search_matches(&root, &root, "needle", &mut entries).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "src/needle.ts");
+    }
+
+    #[test]
+    fn content_search_returns_context_and_skips_heavy_directories() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(
+            root.join("src").join("main.ts"),
+            "first line\nconst target = true;\nthird line\nsecond target\n",
+        )
+        .unwrap();
+        fs::write(root.join("node_modules").join("ignored.ts"), "target").unwrap();
+        let root = root.canonicalize().unwrap();
+
+        let mut matches = Vec::new();
+        collect_content_matches(&root, &root, "target", &mut matches).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "src/main.ts");
+        assert_eq!(matches[0].line_number, 2);
+        assert_eq!(matches[0].line_text, "const target = true;");
+        assert_eq!(matches[0].before, vec!["first line"]);
+        assert_eq!(matches[0].after, vec!["third line"]);
+    }
+
+    #[test]
+    fn content_search_returns_one_match_per_file() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src").join("main.ts"), "target one\ntarget two\n").unwrap();
+        fs::write(root.join("src").join("other.ts"), "target three\n").unwrap();
+        let root = root.canonicalize().unwrap();
+
+        let mut matches = Vec::new();
+        collect_content_matches(&root, &root, "target", &mut matches).unwrap();
+
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().any(|item| item.path == "src/main.ts" && item.line_number == 1));
+        assert!(matches.iter().any(|item| item.path == "src/other.ts" && item.line_number == 1));
     }
 }

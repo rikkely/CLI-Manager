@@ -537,6 +537,41 @@ export interface TodayProjectStats {
   totalCostUsd: number;
 }
 
+export interface FetchHistoryStatsOptions {
+  sourceFilter: HistorySourceFilter;
+  projectKey?: string | null;
+  rangeDays?: number | null;
+  startAt?: number | null;
+  endAt?: number | null;
+  force?: boolean;
+}
+
+export async function fetchHistoryStatsProjectOptions(sourceFilter: HistorySourceFilter): Promise<string[]> {
+  const raw = await invoke<unknown>("history_list_stats_projects", {
+    source: normalizeSourceFilter(sourceFilter),
+    ...getHistoryPathArgs(),
+  });
+  return normalizeStatsProjectOptions(raw);
+}
+
+export async function fetchHistoryStatsPayload(options: FetchHistoryStatsOptions): Promise<HistoryStatsPayload> {
+  const projectKey = options.projectKey?.trim() || null;
+  const startAt = typeof options.startAt === "number" && Number.isFinite(options.startAt) ? options.startAt : null;
+  const endAt = typeof options.endAt === "number" && Number.isFinite(options.endAt) ? options.endAt : null;
+  const rangeDays = options.rangeDays ?? 30;
+  const force = options.force ?? false;
+  const raw = await invoke<unknown>("history_get_stats", {
+    source: normalizeSourceFilter(options.sourceFilter),
+    ...getHistoryPathArgs(),
+    projectKey,
+    rangeDays,
+    startAt,
+    endAt,
+    force,
+  });
+  return normalizeStats(raw);
+}
+
 // 供终端统计面板使用：按项目路径取最近一次 CLI 会话详情，不改动历史工作区的选中状态。
 // source 非空时只匹配对应 CLI（claude/codex），供按终端工具区分的场景使用。
 // 传入 prev（上次结果的 file_path/updated_at）时，若最近会话未变化则返回 "unchanged"，
@@ -1124,7 +1159,6 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   loadStatsProjectOptions: async (options) => {
     const force = options?.force ?? false;
     const sourceFilter = get().sourceFilter;
-    const historyPathArgs = getHistoryPathArgs();
     const historyPathKey = getHistoryPathCacheKey();
     const cacheKey = makeStatsProjectOptionsCacheKey(sourceFilter, historyPathKey);
     const now = Date.now();
@@ -1140,12 +1174,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
     set({ loadingStatsProjectOptions: true, statsProjectOptionsError: null });
     try {
-      const source = normalizeSourceFilter(sourceFilter);
-      const raw = await invoke<unknown>("history_list_stats_projects", {
-        source,
-        ...historyPathArgs,
-      });
-      const projectOptions = normalizeStatsProjectOptions(raw);
+      const projectOptions = await fetchHistoryStatsProjectOptions(sourceFilter);
       statsProjectOptionsCacheSet(cacheKey, {
         options: projectOptions,
         cachedAt: Date.now(),
@@ -1170,7 +1199,6 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const endAt = typeof options?.endAt === "number" && Number.isFinite(options.endAt) ? options.endAt : null;
     const force = options?.force ?? false;
     const sourceFilter = get().sourceFilter;
-    const historyPathArgs = getHistoryPathArgs();
     const historyPathKey = getHistoryPathCacheKey();
     const timeKey = makeStatsTimeKey(rangeDays, startAt, endAt);
     const cacheKey = makeStatsCacheKey(sourceFilter, projectKey, timeKey, historyPathKey);
@@ -1235,17 +1263,14 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       statsCacheKey: cacheKey,
     });
     try {
-      const source = normalizeSourceFilter(sourceFilter);
-      const statsRaw = await invoke<unknown>("history_get_stats", {
-        source,
-        ...historyPathArgs,
+      const payload = await fetchHistoryStatsPayload({
+        sourceFilter,
         projectKey,
         rangeDays,
         startAt,
         endAt,
         force,
       });
-      const payload = normalizeStats(statsRaw);
       const cachedAt = Date.now();
       statsCacheSet(cacheKey, {
         payload,

@@ -1,5 +1,5 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { eventToCombo } from "../../hooks/useKeyboardShortcuts";
 import { copyAiText } from "../../lib/aiClipboard";
 import { formatAiAnchor, formatAiContextBlock, type AiTextSelection } from "../../lib/aiPathFormatter";
@@ -29,6 +29,45 @@ type PendingAction =
 
 type MonacoEditor = Parameters<OnMount>[0];
 
+function clearSearchDecorations(editor: MonacoEditor, decorationIdsRef: MutableRefObject<string[]>): void {
+  if (decorationIdsRef.current.length === 0) return;
+  decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, []);
+}
+
+function findLineTextColumn(line: string, lineText: string): { start: number; end: number } {
+  const needle = lineText.trim();
+  if (!needle) return { start: 1, end: Math.max(line.length + 1, 1) };
+  const index = line.indexOf(needle);
+  if (index === -1) return { start: 1, end: Math.max(line.length + 1, 1) };
+  return { start: index + 1, end: index + needle.length + 1 };
+}
+
+function findSearchColumn(line: string, searchQuery: string, fallbackLineText: string): { start: number; end: number } {
+  const needle = searchQuery.trim();
+  if (!needle) return findLineTextColumn(line, fallbackLineText);
+  const index = line.toLowerCase().indexOf(needle.toLowerCase());
+  if (index === -1) return findLineTextColumn(line, fallbackLineText);
+  return { start: index + 1, end: index + needle.length + 1 };
+}
+
+function openFindWidget(editor: MonacoEditor, searchQuery: string): void {
+  const query = searchQuery.trim();
+  const findWithArgs = editor.getAction("editor.actions.findWithArgs");
+  if (query && findWithArgs?.isSupported()) {
+    void findWithArgs.run({
+      searchString: query,
+      isRegex: false,
+      matchWholeWord: false,
+      isCaseSensitive: false,
+      findInSelection: false,
+    }).catch(() => {
+      void editor.getAction("actions.find")?.run();
+    });
+    return;
+  }
+  void editor.getAction("actions.find")?.run();
+}
+
 function isDarkHexColor(color: string): boolean {
   const raw = color.trim().replace(/^#/, "");
   const hex = raw.length === 3
@@ -45,13 +84,18 @@ function isDarkHexColor(color: string): boolean {
 export function FileEditorPane({ session, isActive, terminalThemeBackground, onClose }: FileEditorPaneProps) {
   const { t } = useI18n();
   const editorRef = useRef<MonacoEditor | null>(null);
+  const searchDecorationIdsRef = useRef<string[]>([]);
+  const [editorReadyNonce, setEditorReadyNonce] = useState(0);
   const copyAiShortcut = useSettingsStore((s) => s.keyboardShortcuts.copyAi);
   const project = useFileExplorerStore((s) => s.project);
   const openProject = useFileExplorerStore((s) => s.openProject);
   const openFiles = useFileExplorerStore((s) => s.openFiles);
   const activeFilePath = useFileExplorerStore((s) => s.activeFilePath);
   const activeFile = useFileExplorerStore((s) => s.activeFile);
+  const searchQuery = useFileExplorerStore((s) => s.searchQuery);
+  const searchNavigationTarget = useFileExplorerStore((s) => s.searchNavigationTarget);
   const setActiveFilePath = useFileExplorerStore((s) => s.setActiveFilePath);
+  const clearSearchNavigationTarget = useFileExplorerStore((s) => s.clearSearchNavigationTarget);
   const closeFile = useFileExplorerStore((s) => s.closeFile);
   const setActiveContent = useFileExplorerStore((s) => s.setActiveContent);
   const saveFile = useFileExplorerStore((s) => s.saveFile);
@@ -71,6 +115,7 @@ export function FileEditorPane({ session, isActive, terminalThemeBackground, onC
 
   const handleEditorMount = useCallback<OnMount>((editor) => {
     editorRef.current = editor;
+    setEditorReadyNonce((value) => value + 1);
   }, []);
 
   useEffect(() => {
@@ -82,6 +127,65 @@ export function FileEditorPane({ session, isActive, terminalThemeBackground, onC
   useEffect(() => {
     setPreviewMode("source");
   }, [visibleFile?.path]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    clearSearchDecorations(editor, searchDecorationIdsRef);
+  }, [visibleFile?.path]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !visibleFile || !searchNavigationTarget) return;
+    if (visibleFile.path !== searchNavigationTarget.path) return;
+    if (visibleFile.previewKind !== "text" && visibleFile.previewKind !== "markdown") return;
+    if (visibleFile.previewKind === "markdown" && previewMode !== "source") {
+      setPreviewMode("source");
+      return;
+    }
+
+    const model = editor.getModel();
+    const lineNumber = Math.min(Math.max(searchNavigationTarget.lineNumber, 1), model?.getLineCount() ?? 1);
+    const line = model?.getLineContent(lineNumber) ?? "";
+    const column = findSearchColumn(line, searchQuery, searchNavigationTarget.lineText);
+
+    clearSearchDecorations(editor, searchDecorationIdsRef);
+    searchDecorationIdsRef.current = editor.deltaDecorations([], [
+      {
+        range: {
+          startLineNumber: lineNumber,
+          startColumn: 1,
+          endLineNumber: lineNumber,
+          endColumn: Math.max(line.length + 1, 1),
+        },
+        options: {
+          isWholeLine: true,
+          className: "ui-file-editor-search-line-highlight",
+        },
+      },
+      {
+        range: {
+          startLineNumber: lineNumber,
+          startColumn: column.start,
+          endLineNumber: lineNumber,
+          endColumn: column.end,
+        },
+        options: {
+          inlineClassName: "ui-file-editor-search-snippet-highlight",
+        },
+      },
+    ]);
+    editor.setSelection({
+      startLineNumber: lineNumber,
+      startColumn: column.start,
+      endLineNumber: lineNumber,
+      endColumn: column.end,
+    });
+    editor.revealLineInCenter(lineNumber);
+    editor.focus();
+    openFindWidget(editor, searchQuery);
+    clearSearchNavigationTarget();
+  }, [clearSearchNavigationTarget, editorReadyNonce, previewMode, searchNavigationTarget, searchQuery, visibleFile]);
 
   const save = useCallback(async () => {
     if (!visibleFile || visibleFile.previewKind === "image") return;
