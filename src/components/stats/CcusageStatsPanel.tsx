@@ -11,9 +11,10 @@ import { useI18n, type TranslationKey } from "../../lib/i18n";
 import type { CcusageSource } from "../../lib/types";
 import { useCcusageStore } from "../../stores/ccusageStore";
 import { EChart } from "./EChart";
+import { StatsDatePicker } from "./StatsDatePicker";
 import {
   CHART_TOOLTIP,
-  COST_FILL,
+  COST_COLOR,
   ECHARTS_AXIS_LINE,
   ECHARTS_AXIS_SHADOW,
   PEAK,
@@ -1127,52 +1128,52 @@ function TimeWindowSelector({
         )}
 
         {timeWindow.mode === "month" && (
-          <input
-            type="month"
+          <StatsDatePicker
+            mode="month"
             value={resolved.month}
             min={first.slice(0, 7)}
             max={latest.slice(0, 7)}
-            onChange={(e) => onChange({ ...timeWindow, month: e.target.value })}
+            onChange={(value) => onChange({ ...timeWindow, month: value })}
             className={inputClass}
-            aria-label={t("ccusage.month")}
+            ariaLabel={t("ccusage.month")}
             disabled={disabled}
           />
         )}
 
         {timeWindow.mode === "day" && (
-          <input
-            type="date"
+          <StatsDatePicker
+            mode="date"
             value={resolved.day}
             min={first}
             max={latest}
-            onChange={(e) => onChange({ ...timeWindow, day: e.target.value })}
+            onChange={(value) => onChange({ ...timeWindow, day: value })}
             className={inputClass}
-            aria-label={t("ccusage.date")}
+            ariaLabel={t("ccusage.date")}
             disabled={disabled}
           />
         )}
 
         {timeWindow.mode === "custom" && (
           <>
-            <input
-              type="date"
+            <StatsDatePicker
+              mode="date"
               value={resolved.customStart}
               min={first}
               max={latest}
-              onChange={(e) => onChange({ ...timeWindow, customStart: e.target.value })}
+              onChange={(value) => onChange({ ...timeWindow, customStart: value })}
               className={inputClass}
-              aria-label={t("ccusage.customStart")}
+              ariaLabel={t("ccusage.customStart")}
               disabled={disabled}
             />
             <span className="text-[11px] text-text-muted">{t("common.to")}</span>
-            <input
-              type="date"
+            <StatsDatePicker
+              mode="date"
               value={resolved.customEnd}
               min={first}
               max={latest}
-              onChange={(e) => onChange({ ...timeWindow, customEnd: e.target.value })}
+              onChange={(value) => onChange({ ...timeWindow, customEnd: value })}
               className={inputClass}
-              aria-label={t("ccusage.customEnd")}
+              ariaLabel={t("ccusage.customEnd")}
               disabled={disabled}
             />
           </>
@@ -1221,6 +1222,7 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
         USAGE_SERIES_COLORS.output,
         USAGE_SERIES_COLORS.cacheCreation,
         USAGE_SERIES_COLORS.cacheRead,
+        COST_COLOR,
       ],
       tooltip: {
         trigger: "axis",
@@ -1235,12 +1237,13 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
             .map((row) => {
               const name = tooltipString(row, "seriesName");
               const marker = tooltipString(row, "marker");
+              const color = tooltipString(row, "color") || "var(--text-primary)";
               const value = tooltipNumber(row, "value");
               const display = name === costLabel ? formatCost(value) : `${formatCount(value)} Token`;
-              return `<div style="display:flex;align-items:center;justify-content:space-between;gap:18px;line-height:22px;color:var(--text-secondary);"><span style="display:inline-flex;align-items:center;gap:6px;text-align:left;">${marker}<span style="color:var(--text-primary);">${name}</span></span><strong style="min-width:88px;text-align:right;color:var(--text-primary);">${display}</strong></div>`;
+              return `<div style="display:flex;align-items:center;justify-content:space-between;gap:22px;line-height:24px;color:var(--text-secondary);"><span style="display:inline-flex;align-items:center;gap:7px;text-align:left;min-width:0;">${marker}<span style="color:${color};font-weight:600;">${name}</span></span><strong style="min-width:104px;text-align:right;color:${color};font-weight:700;">${display}</strong></div>`;
             })
             .join("");
-          return `<div style="min-width:190px;color:var(--text-primary);"><div style="font-weight:700;margin-bottom:6px;color:var(--text-primary);">${day.date}${peak?.date === day.date ? ` · ${peakLabel}` : ""}</div>${seriesRows}<div style="margin-top:6px;color:var(--text-muted);">${text("模型", "Models")}：${day.models.length || "-"}</div></div>`;
+          return `<div style="min-width:270px;color:var(--text-primary);"><div style="font-weight:700;margin-bottom:8px;color:var(--text-primary);">${day.date}${peak?.date === day.date ? ` · ${peakLabel}` : ""}</div>${seriesRows}<div style="margin-top:8px;color:var(--text-muted);">${text("模型", "Models")}：${day.models.length || "-"}</div></div>`;
         },
       },
       legend: {
@@ -1357,10 +1360,13 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
         },
         {
           name: costLabel,
-          type: "bar",
+          type: "line",
+          smooth: true,
           yAxisIndex: 1,
-          barMaxWidth: 12,
-          itemStyle: { color: COST_FILL, borderRadius: [5, 5, 0, 0] },
+          symbol: "none",
+          itemStyle: { color: COST_COLOR },
+          lineStyle: { width: 2.2, color: COST_COLOR },
+          emphasis: { focus: "series" },
           data: items.map((item) => Number(item.totalCost.toFixed(2))),
         },
       ],

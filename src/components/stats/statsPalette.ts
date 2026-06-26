@@ -32,8 +32,8 @@ export const HISTORY_TREND_COLORS = USAGE_TREND_COLORS;
 export const ACCENT = "var(--accent)";
 export const PEAK = "var(--warning)";
 
-// 费用等辅助量：弱化的暖色，避免与主趋势抢视觉。
-export const COST_FILL = "color-mix(in srgb, var(--warning) 32%, transparent)";
+// 费用等辅助量：保留暖色识别度，避免浅色主题下透明混色看成灰色。
+export const COST_COLOR = "#f59e0b";
 
 export const RECHARTS_AXIS_CURSOR = {
   stroke: "color-mix(in srgb, var(--accent) 36%, transparent)",

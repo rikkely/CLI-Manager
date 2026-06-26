@@ -16,6 +16,9 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  type TooltipContentProps,
+  type TooltipPayloadEntry,
+  type TooltipValueType,
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -33,11 +36,12 @@ import type {
 import { fetchHistoryStatsPayload, fetchHistoryStatsProjectOptions, useHistoryStore } from "../../stores/historyStore";
 import { TimelineHeatmap } from "./TimelineHeatmap";
 import { StatsHourlyActivityChart } from "./StatsHourlyActivityChart";
+import { StatsDatePicker } from "./StatsDatePicker";
 import { Skeleton } from "../ui/Skeleton";
 import { Portal } from "../ui/Portal";
 import {
   ACCENT,
-  COST_FILL,
+  COST_COLOR,
   HISTORY_SERIES_COLORS,
   HISTORY_TREND_COLORS,
   PEAK,
@@ -299,6 +303,58 @@ const RECHARTS_AXIS_STYLE = {
   fill: "var(--text-muted)",
   fontSize: 11,
 } as const;
+
+type RechartsTooltipName = string | number;
+type TrendTooltipEntry = TooltipPayloadEntry<TooltipValueType, RechartsTooltipName>;
+
+function tooltipNumberValue(value: TooltipValueType | undefined): number {
+  if (Array.isArray(value)) return Number(value[0] ?? 0);
+  return Number(value ?? 0);
+}
+
+function tooltipEntryColor(entry: TrendTooltipEntry): string {
+  return entry.color ?? entry.stroke ?? entry.fill ?? "var(--text-muted)";
+}
+
+function DailyUsageTrendTooltip({
+  active,
+  payload,
+  label,
+  language,
+  costLabel,
+}: Pick<TooltipContentProps<TooltipValueType, RechartsTooltipName>, "active" | "payload" | "label"> & {
+  language: AppLanguage;
+  costLabel: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const rows = payload as readonly TrendTooltipEntry[];
+  const bucketTitle = String(rows[0]?.payload?.bucketTitle ?? label ?? "");
+
+  return (
+    <div style={{ ...RECHARTS_TOOLTIP_STYLE, minWidth: 278, padding: "10px 12px" }}>
+      <div style={RECHARTS_TOOLTIP_LABEL_STYLE}>{bucketTitle}</div>
+      <div className="mt-2 space-y-2">
+        {rows.map((entry) => {
+          const name = String(entry.name ?? "");
+          const color = tooltipEntryColor(entry);
+          const value = tooltipNumberValue(entry.value);
+          const display = name === costLabel ? formatCost(value) : `${formatCount(value, language)} Token`;
+          return (
+            <div key={`${String(entry.dataKey ?? name)}-${name}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-6">
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                <span className="truncate font-medium" style={{ color }}>
+                  {name}
+                </span>
+              </span>
+              <span className="shrink-0 text-right font-semibold" style={{ color }}>{display}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function hourlyBucketStart(item: HistoryStatsHourlyActivityItem, dayStartAt: number | null): number {
   if (Number.isFinite(item.hour_start_utc) && item.hour_start_utc > 0) return item.hour_start_utc;
@@ -568,6 +624,7 @@ function DailyUsageTrendChart({
   }, [items]);
 
   const hasData = items.some((item) => totalTokensOf(item) > 0 || item.total_cost_usd > 0);
+  const costLabel = t("stats.trend.cost");
 
   return (
     <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4 lg:p-5">
@@ -600,25 +657,16 @@ function DailyUsageTrendChart({
               <YAxis yAxisId="cost" orientation="right" tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={false} tickFormatter={(value) => formatCost(Number(value))} />
               <Tooltip
                 cursor={RECHARTS_AXIS_CURSOR}
-                contentStyle={RECHARTS_TOOLTIP_STYLE}
-                itemStyle={RECHARTS_TOOLTIP_ITEM_STYLE}
-                labelStyle={RECHARTS_TOOLTIP_LABEL_STYLE}
                 wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
-                labelFormatter={(_, payload) => payload?.[0]?.payload?.bucketTitle ?? ""}
-                formatter={(value, name) => [
-                  String(name) === t("stats.trend.cost")
-                    ? formatCost(Number(value))
-                    : `${formatCount(Number(value), language)} Token`,
-                  String(name),
-                ]}
+                content={(props) => <DailyUsageTrendTooltip {...props} language={language} costLabel={costLabel} />}
               />
               <Legend wrapperStyle={{ color: "var(--text-secondary)", fontSize: 11 }} />
-              <Bar yAxisId="cost" dataKey="costValue" name={t("stats.trend.cost")} fill={COST_FILL} maxBarSize={12} radius={[5, 5, 0, 0]} />
               <Area yAxisId="tokens" type="monotone" dataKey="totalTokens" name={t("stats.trend.totalToken")} stroke={HISTORY_TREND_COLORS.total} fill={HISTORY_TREND_COLORS.total} fillOpacity={0.14} strokeWidth={3} dot={{ r: 2.5 }} activeDot={{ r: 5, fill: PEAK }} />
               <Line yAxisId="tokens" type="monotone" dataKey="input_tokens" name={t("termStats.input")} stroke={HISTORY_TREND_COLORS.input} strokeWidth={1.8} dot={false} />
-              <Line yAxisId="tokens" type="monotone" dataKey="output_tokens" name={t("termStats.output")} stroke={HISTORY_TREND_COLORS.output} strokeWidth={1.8} dot={false} />
-              <Line yAxisId="tokens" type="monotone" dataKey="cache_creation_tokens" name={t("termStats.cacheWrite")} stroke={HISTORY_TREND_COLORS.cacheCreation} strokeWidth={1.8} dot={false} />
-              <Line yAxisId="tokens" type="monotone" dataKey="cache_read_tokens" name={t("termStats.cacheHit")} stroke={HISTORY_TREND_COLORS.cacheRead} strokeWidth={1.8} dot={false} />
+              <Line yAxisId="tokens" type="monotone" dataKey="output_tokens" name={t("termStats.output")} stroke={HISTORY_TREND_COLORS.output} strokeWidth={1.8} strokeDasharray="6 4" dot={false} />
+              <Line yAxisId="tokens" type="monotone" dataKey="cache_creation_tokens" name={t("termStats.cacheWrite")} stroke={HISTORY_TREND_COLORS.cacheCreation} strokeWidth={1.8} strokeDasharray="3 3" dot={false} />
+              <Line yAxisId="tokens" type="monotone" dataKey="cache_read_tokens" name={t("termStats.cacheHit")} stroke={HISTORY_TREND_COLORS.cacheRead} strokeWidth={1.8} strokeDasharray="8 3 2 3" dot={false} />
+              <Line yAxisId="cost" type="monotone" dataKey="costValue" name={costLabel} stroke={COST_COLOR} strokeWidth={2.2} dot={false} activeDot={{ r: 4, fill: COST_COLOR }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -1012,12 +1060,12 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
             </Select>
 
             {timeWindow.mode === "day" && (
-              <input
-                type="date"
+              <StatsDatePicker
+                mode="date"
                 value={resolvedTimeWindow.day}
-                onChange={(e) => setTimeWindow((prev) => ({ ...prev, day: e.target.value }))}
+                onChange={(value) => setTimeWindow((prev) => ({ ...prev, day: value }))}
                 className={timeInputClass}
-                aria-label={t("stats.date")}
+                ariaLabel={t("stats.date")}
               />
             )}
 
@@ -1026,12 +1074,12 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
             )}
 
             {timeWindow.mode === "month" && (
-              <input
-                type="month"
+              <StatsDatePicker
+                mode="month"
                 value={resolvedTimeWindow.month}
-                onChange={(e) => setTimeWindow((prev) => ({ ...prev, month: e.target.value }))}
+                onChange={(value) => setTimeWindow((prev) => ({ ...prev, month: value }))}
                 className={timeInputClass}
-                aria-label={t("stats.month")}
+                ariaLabel={t("stats.month")}
               />
             )}
 
@@ -1049,20 +1097,20 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
 
             {timeWindow.mode === "custom" && (
               <>
-                <input
-                  type="date"
+                <StatsDatePicker
+                  mode="date"
                   value={resolvedTimeWindow.customStart}
-                  onChange={(e) => setTimeWindow((prev) => ({ ...prev, customStart: e.target.value }))}
+                  onChange={(value) => setTimeWindow((prev) => ({ ...prev, customStart: value }))}
                   className={timeInputClass}
-                  aria-label={t("stats.customStart")}
+                  ariaLabel={t("stats.customStart")}
                 />
                 <span className="text-[11px] text-text-muted">{t("common.to")}</span>
-                <input
-                  type="date"
+                <StatsDatePicker
+                  mode="date"
                   value={resolvedTimeWindow.customEnd}
-                  onChange={(e) => setTimeWindow((prev) => ({ ...prev, customEnd: e.target.value }))}
+                  onChange={(value) => setTimeWindow((prev) => ({ ...prev, customEnd: value }))}
                   className={timeInputClass}
-                  aria-label={t("stats.customEnd")}
+                  ariaLabel={t("stats.customEnd")}
                 />
               </>
             )}
