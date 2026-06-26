@@ -33,7 +33,7 @@ Concrete contracts for Claude/Codex hook integration.
   - Explicit native POSIX transcript paths such as `/Users/...` or `/home/...` must be tailed as native paths when `wslDistroName` is missing. Do not infer a default WSL distro for explicit `/...` paths.
   - `AgentToolStart` should create/update a `pending` pane only; it must not subscribe to the parent transcript.
   - `AgentToolStop` may upgrade the matching pending pane to `child-jsonl` when it has an independent `agentTranscriptPath` or enough `cwd/sessionId/agentId` data to derive `subagents/agent-<agentId>.jsonl`.
-- `SubagentStop` may also carry the first independent child transcript path, especially for Codex. When a matching pane already exists, the frontend must call `openSubagentTranscript(payload)` and await subscription/initial backfill before `finishSubagentTranscript(payload)`.
+- `SubagentStop` may also carry the first independent child transcript path. When a matching pane already exists, the frontend must call `openSubagentTranscript(payload)` and await subscription/initial backfill before `finishSubagentTranscript(payload)`, regardless of CLI source.
 - Subscribe response fields:
   - `path`: resolved child JSONL path actually tailed by the backend.
   - `initialContent`: existing complete JSONL lines already present before tail startup. The frontend must append this immediately; the backend tail starts after the consumed offset to avoid duplicate output.
@@ -54,6 +54,7 @@ Concrete contracts for Claude/Codex hook integration.
 
 - Good: Codex `SubagentStart` includes `transcript_path`; frontend subscribes directly to that path.
 - Good: Codex `SubagentStart` only has the parent `transcriptPath`, then `SubagentStop` includes `agentTranscriptPath`; frontend upgrades the existing pane, appends subscribe `initialContent`, then marks it ended.
+- Good: Claude `SubagentStart` misses an independent child path, then `SubagentStop` provides `agentTranscriptPath`; frontend upgrades the existing pane before finish instead of ending in degraded state.
 - Base: Claude `SubagentStart` includes `agent_transcript_path`; frontend uses it unchanged.
 - Good: `SubagentStop` includes `agent_id`; frontend marks the pane ended and closes it after the grace delay.
 - Bad: `SubagentStop` calls `finishSubagentTranscript` before awaiting the late child transcript subscription; the pane can close with empty output.
