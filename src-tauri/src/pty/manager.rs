@@ -83,7 +83,12 @@ impl PtyManager {
             }
             "wsl" if cfg!(target_os = "windows") => Ok(("wsl.exe".to_string(), Vec::new())),
             "gitbash" if cfg!(target_os = "windows") => resolve_git_bash_exe()
-                .map(|path| (path.to_string_lossy().into_owned(), Self::git_bash_login_args()))
+                .map(|path| {
+                    (
+                        path.to_string_lossy().into_owned(),
+                        Self::git_bash_login_args(),
+                    )
+                })
                 .ok_or_else(|| GIT_BASH_NOT_FOUND_MESSAGE.to_string()),
             // Unix shells (macOS, Linux)
             "zsh" => Ok(("zsh".to_string(), Vec::new())),
@@ -257,6 +262,32 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             "PROMPT".to_string(),
             format!("$E]133;D$E\\$E]133;A$E\\{base}$E]133;B$E\\"),
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn kill_process_tree(pid: u32) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let pid_arg = pid.to_string();
+        let output = Command::new("taskkill")
+            .args(["/PID", pid_arg.as_str(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("taskkill start failed for pid {pid}: {e}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        Err(format!(
+            "taskkill failed for pid {pid}: status={}, detail={}",
+            output.status, detail
+        ))
     }
 
     fn build_shell_args(
@@ -605,7 +636,19 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             // reader thread to observe EOF and exit promptly.
             let reader_handle = {
                 let mut session = session_arc.lock().unwrap();
-                let _ = session.child.lock().unwrap().kill();
+                let mut child = session.child.lock().unwrap();
+                let pid = child.process_id();
+                #[cfg(target_os = "windows")]
+                if let Some(pid) = pid {
+                    if let Err(err) = Self::kill_process_tree(pid) {
+                        warn!(
+                            "pty process tree kill failed, fallback to child kill: id={}, pid={}, error={}",
+                            session_id, pid, err
+                        );
+                    }
+                }
+                let _ = child.kill();
+                drop(child);
                 session.reader_handle.take()
             };
             drop(session_arc);
@@ -617,6 +660,14 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             debug!("pty close requested for missing session: id={}", session_id);
         }
         self.statuses.lock().unwrap().remove(session_id);
+        Ok(())
+    }
+
+    pub fn close_all(&self) -> Result<(), String> {
+        let session_ids: Vec<String> = self.sessions.read().unwrap().keys().cloned().collect();
+        for session_id in session_ids {
+            self.close(&session_id)?;
+        }
         Ok(())
     }
 

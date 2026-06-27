@@ -93,6 +93,15 @@ pub async fn pty_close(
 }
 
 #[tauri::command]
+pub async fn pty_close_all(pty_manager: tauri::State<'_, PtyManager>) -> Result<(), String> {
+    debug!("pty_close_all requested");
+    pty_manager.close_all().map_err(|err| {
+        error!("pty_close_all failed: error={}", err);
+        err
+    })
+}
+
+#[tauri::command]
 pub async fn pty_status(
     pty_manager: tauri::State<'_, PtyManager>,
 ) -> Result<HashMap<String, PtyProcessStatus>, String> {

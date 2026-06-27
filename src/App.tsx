@@ -638,6 +638,11 @@ function App() {
   const runExitCleanup = useCallback(async (source: string) => {
     try {
       await runCloseAutoSync();
+      try {
+        await invoke("pty_close_all");
+      } catch (err) {
+        logWarn("Failed to close PTY sessions before exit", err);
+      }
       await useSessionStore.getState().clear();
     } finally {
       await exitApp(source);

@@ -306,3 +306,74 @@ Ok((git_bash_path, Vec::new()))
 // Plain Git Bash sessions run the normal interactive login initialization.
 Ok((git_bash_path, vec!["--login".to_string(), "-i".to_string()]))
 ```
+
+## Scenario: PTY process tree cleanup
+
+### 1. Scope / Trigger
+
+- Trigger: terminal tab close, split-pane removal, and full app exit must clean up processes created by CLI-Manager PTY sessions.
+- This is a cross-layer contract because React initiates close/exit, Tauri commands cross the WebView boundary, and Rust owns the process handles.
+
+### 2. Signatures
+
+```rust
+pub async fn pty_close(
+    pty_manager: tauri::State<'_, PtyManager>,
+    session_id: String,
+) -> Result<(), String>
+
+pub async fn pty_close_all(
+    pty_manager: tauri::State<'_, PtyManager>,
+) -> Result<(), String>
+
+pub fn close(&self, session_id: &str) -> Result<(), String>
+pub fn close_all(&self) -> Result<(), String>
+```
+
+### 3. Contracts
+
+- `pty_close` remains the per-session close command used by tab close and split cleanup.
+- `pty_close_all` closes every session currently tracked by `PtyManager`; app exit must call it before clearing persisted session state and destroying the window.
+- Windows cleanup must target the PTY root PID returned by `portable_pty::Child::process_id()` and terminate that process tree.
+- Windows cleanup must not scan by process name (`codex.exe`, `bash.exe`, etc.); only the owned PTY process tree is eligible.
+- Non-Windows cleanup keeps the existing direct child kill behavior unless a platform-specific process-tree mechanism is explicitly added later.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| `pty_close` receives an unknown `session_id` | Treat as a no-op and return `Ok(())`. |
+| Windows child PID is available | Run process-tree termination for that PID, then still call child kill as a fallback. |
+| Windows process-tree termination fails | Log a warning and fall back to `portable_pty::Child::kill()`; do not block tab close. |
+| Windows child PID is missing | Skip tree termination and use direct child kill. |
+| `pty_close_all` runs while sessions are active | Snapshot session ids first, then close each session through the same `close()` path. |
+| App exit cleanup fails to close PTYs | Log the error and continue the exit path so the app does not hang. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: closing a Codex terminal launched through Git Bash removes the shell and its `codex.exe` descendants.
+- Base: closing an already-exited session is harmless; stale status entries are removed.
+- Bad: killing all system processes named `codex.exe` or `bash.exe` may terminate work started outside CLI-Manager and is forbidden.
+
+### 6. Tests Required
+
+- Rust checks: `cd src-tauri && cargo check` and `cd src-tauri && cargo test`.
+- Frontend checks: `npx tsc --noEmit` or `npm run build` when the exit path changes.
+- Manual Windows verification: open a Git Bash/Codex terminal, close its tab, and confirm the associated process tree no longer remains in Task Manager.
+- Manual Windows verification: exit the app with active PTY sessions and confirm owned PTY child processes are gone.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// Process-name cleanup can kill unrelated user work.
+taskkill /IM codex.exe /F
+```
+
+#### Correct
+
+```rust
+// Cleanup is scoped to the PTY root process owned by this session.
+taskkill /PID <pty-root-pid> /T /F
+```
