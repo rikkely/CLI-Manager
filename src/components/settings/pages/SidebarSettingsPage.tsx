@@ -1,4 +1,5 @@
 import {
+  ActionIcon,
   Badge,
   Box,
   Button,
@@ -8,8 +9,14 @@ import {
   Stack,
   Switch,
   Text,
+  Tooltip,
   UnstyledButton,
 } from "@mantine/core";
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { ArrowDown, ArrowUp, GripVertical } from "lucide-react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   TERMINAL_STATS_CARD_KEYS,
   useSettingsStore,
@@ -86,6 +93,57 @@ const STATS_CARD_OPTIONS: { key: TerminalStatsCardKey; labelKey: TranslationKey 
   { key: "todayUsage", labelKey: "termStats.todayUsage" },
 ];
 
+const STATS_CARD_OPTION_MAP = new Map<TerminalStatsCardKey, (typeof STATS_CARD_OPTIONS)[number]>(
+  STATS_CARD_OPTIONS.map((option) => [option.key, option])
+);
+
+function SortableStatsCardRow({
+  id,
+  dragLabel,
+  title,
+  actions,
+}: {
+  id: TerminalStatsCardKey;
+  dragLabel: string;
+  title: ReactNode;
+  actions: ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.55 : 1,
+    position: "relative",
+    zIndex: isDragging ? 1 : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+        <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+            <Tooltip label={dragLabel} withArrow>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="sm"
+                aria-label={dragLabel}
+                style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
+                {...attributes}
+                {...listeners}
+              >
+                <GripVertical size={14} />
+              </ActionIcon>
+            </Tooltip>
+            {title}
+          </Group>
+          {actions}
+        </Group>
+      </Card>
+    </div>
+  );
+}
+
 export function SidebarSettingsPage() {
   const { t } = useI18n();
   const viewMode = useSettingsStore((s) => s.viewMode);
@@ -93,13 +151,43 @@ export function SidebarSettingsPage() {
   const terminalSidePanelMerged = useSettingsStore((s) => s.terminalSidePanelMerged);
   const terminalSidePanelSkin = useSettingsStore((s) => s.terminalSidePanelSkin);
   const terminalStatsCardVisibility = useSettingsStore((s) => s.terminalStatsCardVisibility);
+  const terminalStatsCardOrder = useSettingsStore((s) => s.terminalStatsCardOrder);
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const update = useSettingsStore((s) => s.update);
 
   const visibleCardCount = TERMINAL_STATS_CARD_KEYS.filter((key) => terminalStatsCardVisibility[key]).length;
+  const orderedStatsCardOptions = terminalStatsCardOrder
+    .map((key) => STATS_CARD_OPTION_MAP.get(key))
+    .filter((option): option is (typeof STATS_CARD_OPTIONS)[number] => Boolean(option));
+  const statsCardSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const updateStatsCardVisibility = (key: TerminalStatsCardKey, checked: boolean) => {
     void update("terminalStatsCardVisibility", { ...terminalStatsCardVisibility, [key]: checked });
+  };
+
+  const handleStatsCardDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = terminalStatsCardOrder.indexOf(String(active.id) as TerminalStatsCardKey);
+    const newIndex = terminalStatsCardOrder.indexOf(String(over.id) as TerminalStatsCardKey);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    void update("terminalStatsCardOrder", arrayMove(terminalStatsCardOrder, oldIndex, newIndex));
+  };
+
+  const moveStatsCard = (key: TerminalStatsCardKey, offset: -1 | 1) => {
+    const index = terminalStatsCardOrder.indexOf(key);
+    const targetIndex = index + offset;
+    if (index < 0 || targetIndex < 0 || targetIndex >= terminalStatsCardOrder.length) return;
+
+    const nextOrder = [...terminalStatsCardOrder];
+    [nextOrder[index], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[index]];
+    void update("terminalStatsCardOrder", nextOrder);
+  };
+
+  const resetStatsCardOrder = () => {
+    void update("terminalStatsCardOrder", [...TERMINAL_STATS_CARD_KEYS]);
   };
 
   return (
@@ -281,28 +369,81 @@ export function SidebarSettingsPage() {
               })}
             </Badge>
           </Group>
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
-            {STATS_CARD_OPTIONS.map((option) => (
-              <Card key={option.key} className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-                <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-                  <Text size="xs" c="var(--on-surface-variant)">
-                    {t(option.labelKey)}
-                  </Text>
-                  <Switch
-                    color="cliPrimary"
-                    checked={terminalStatsCardVisibility[option.key]}
-                    onChange={(event) => updateStatsCardVisibility(option.key, event.currentTarget.checked)}
-                    aria-label={
-                      terminalStatsCardVisibility[option.key]
-                        ? t("settings.sidebar.hideStatsCard", { item: t(option.labelKey) })
-                        : t("settings.sidebar.showStatsCard", { item: t(option.labelKey) })
-                    }
-                  />
-                </Group>
-              </Card>
-            ))}
-          </SimpleGrid>
+          <DndContext
+            sensors={statsCardSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleStatsCardDragEnd}
+          >
+            <SortableContext items={orderedStatsCardOptions.map((option) => option.key)} strategy={verticalListSortingStrategy}>
+              <Stack gap="xs">
+                {orderedStatsCardOptions.map((option, index) => {
+                  const label = t(option.labelKey);
+                  const isFirst = index === 0;
+                  const isLast = index === orderedStatsCardOptions.length - 1;
+                  return (
+                    <SortableStatsCardRow
+                      key={option.key}
+                      id={option.key}
+                      dragLabel={t("settings.sidebar.dragStatsCard", { item: label })}
+                      title={
+                        <Text size="xs" c="var(--on-surface-variant)" style={{ minWidth: 0 }}>
+                          {label}
+                        </Text>
+                      }
+                      actions={
+                        <Group gap="xs" wrap="nowrap">
+                          <Group gap={4} wrap="nowrap">
+                            <Tooltip label={t("settings.sidebar.moveStatsCardUp", { item: label })} withArrow>
+                              <ActionIcon
+                                variant="subtle"
+                                color="cliPrimary"
+                                size="sm"
+                                disabled={isFirst}
+                                onClick={() => moveStatsCard(option.key, -1)}
+                                aria-label={t("settings.sidebar.moveStatsCardUp", { item: label })}
+                              >
+                                <ArrowUp size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label={t("settings.sidebar.moveStatsCardDown", { item: label })} withArrow>
+                              <ActionIcon
+                                variant="subtle"
+                                color="cliPrimary"
+                                size="sm"
+                                disabled={isLast}
+                                onClick={() => moveStatsCard(option.key, 1)}
+                                aria-label={t("settings.sidebar.moveStatsCardDown", { item: label })}
+                              >
+                                <ArrowDown size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </Group>
+                          <Switch
+                            color="cliPrimary"
+                            checked={terminalStatsCardVisibility[option.key]}
+                            onChange={(event) => updateStatsCardVisibility(option.key, event.currentTarget.checked)}
+                            aria-label={
+                              terminalStatsCardVisibility[option.key]
+                                ? t("settings.sidebar.hideStatsCard", { item: label })
+                                : t("settings.sidebar.showStatsCard", { item: label })
+                            }
+                          />
+                        </Group>
+                      }
+                    />
+                  );
+                })}
+              </Stack>
+            </SortableContext>
+          </DndContext>
           <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={resetStatsCardOrder}
+            >
+              {t("settings.sidebar.resetStatsCardOrder")}
+            </Button>
             <Button
               variant="subtle"
               size="xs"

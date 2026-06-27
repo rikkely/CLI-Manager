@@ -109,6 +109,7 @@ export interface SidebarToolbarVisibilitySettings {
 }
 
 export type TerminalStatsCardVisibilitySettings = Record<TerminalStatsCardKey, boolean>;
+export type TerminalStatsCardOrderSettings = TerminalStatsCardKey[];
 
 export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "session",
@@ -206,6 +207,7 @@ interface Settings {
   terminalSidePanelMerged: boolean;
   terminalSidePanelSkin: TerminalSidePanelSkin;
   terminalStatsCardVisibility: TerminalStatsCardVisibilitySettings;
+  terminalStatsCardOrder: TerminalStatsCardOrderSettings;
   shellRuntimeMonitoringEnabled: boolean;
   ccusageAnalyticsEnabled: boolean;
   terminalBackground: TerminalBackgroundSettings;
@@ -298,6 +300,7 @@ const DEFAULTS: Settings = {
     latestChanges: true,
     todayUsage: true,
   },
+  terminalStatsCardOrder: [...TERMINAL_STATS_CARD_KEYS],
   shellRuntimeMonitoringEnabled: false,
   ccusageAnalyticsEnabled: false,
   terminalBackground: {
@@ -503,6 +506,29 @@ export function migrateTerminalStatsCardVisibility(value: unknown): TerminalStat
   }, { ...defaults });
 }
 
+export function migrateTerminalStatsCardOrder(value: unknown): TerminalStatsCardOrderSettings {
+  const defaults = DEFAULTS.terminalStatsCardOrder;
+  if (!Array.isArray(value)) return [...defaults];
+
+  const validKeys = new Set<TerminalStatsCardKey>(TERMINAL_STATS_CARD_KEYS);
+  const seen = new Set<TerminalStatsCardKey>();
+  const ordered: TerminalStatsCardKey[] = [];
+
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const key = item as TerminalStatsCardKey;
+    if (!validKeys.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(key);
+  }
+
+  for (const key of defaults) {
+    if (!seen.has(key)) ordered.push(key);
+  }
+
+  return ordered;
+}
+
 function migrateUnsplitBehavior(value: unknown): UnsplitBehavior {
   return value === "close" || value === "merge" ? value : DEFAULTS.unsplitBehavior;
 }
@@ -676,6 +702,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         : DEFAULTS.terminalSidePanelMerged;
     entries.terminalSidePanelSkin = migrateTerminalSidePanelSkin(entries.terminalSidePanelSkin);
     entries.terminalStatsCardVisibility = migrateTerminalStatsCardVisibility(entries.terminalStatsCardVisibility);
+    entries.terminalStatsCardOrder = migrateTerminalStatsCardOrder(entries.terminalStatsCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
 
     // 默认 Shell：非 Windows 上迁移旧 Windows-only 默认值，避免 macOS/Linux 继续显示或启动 powershell.exe。
