@@ -176,6 +176,7 @@ interface Settings {
   hookPopupNotificationsEnabled: boolean;
   hookPopupAutoCloseEnabled: boolean;
   hookPopupAutoCloseSeconds: number;
+  hookSubagentSplitViewEnabled: boolean;
   systemNotificationsEnabled: boolean;
   systemNotificationEvents: Record<HookEventType, boolean>;
   claudeHookConfigDir: string | null;
@@ -264,6 +265,7 @@ const DEFAULTS: Settings = {
   hookPopupNotificationsEnabled: true,
   hookPopupAutoCloseEnabled: true,
   hookPopupAutoCloseSeconds: 60,
+  hookSubagentSplitViewEnabled: true,
   systemNotificationsEnabled: true,
   systemNotificationEvents: {
     SessionStart: false,
@@ -622,6 +624,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       3600,
       DEFAULTS.hookPopupAutoCloseSeconds
     );
+    entries.hookSubagentSplitViewEnabled =
+      typeof entries.hookSubagentSplitViewEnabled === "boolean"
+        ? entries.hookSubagentSplitViewEnabled
+        : DEFAULTS.hookSubagentSplitViewEnabled;
     entries.systemNotificationsEnabled =
       typeof entries.systemNotificationsEnabled === "boolean"
         ? entries.systemNotificationsEnabled

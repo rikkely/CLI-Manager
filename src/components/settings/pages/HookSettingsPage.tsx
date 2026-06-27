@@ -443,6 +443,7 @@ export function HookSettingsPage() {
   const hookPopupNotificationsEnabled = useSettingsStore((s) => s.hookPopupNotificationsEnabled);
   const hookPopupAutoCloseEnabled = useSettingsStore((s) => s.hookPopupAutoCloseEnabled);
   const hookPopupAutoCloseSeconds = useSettingsStore((s) => s.hookPopupAutoCloseSeconds);
+  const hookSubagentSplitViewEnabled = useSettingsStore((s) => s.hookSubagentSplitViewEnabled);
   const systemNotificationsEnabled = useSettingsStore((s) => s.systemNotificationsEnabled);
   const systemNotificationEvents = useSettingsStore((s) => s.systemNotificationEvents);
   const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
@@ -751,6 +752,12 @@ export function HookSettingsPage() {
             description={text("开启后 Hook 通知会在指定时间后自动消失。", "When enabled, Hook notifications disappear after the configured delay.")}
             checked={hookPopupAutoCloseEnabled}
             onCheckedChange={(checked) => void updateSetting("hookPopupAutoCloseEnabled", checked)}
+          />
+          <SettingsSwitchRow
+            title={t("settings.hooks.subagentSplit.title")}
+            description={t("settings.hooks.subagentSplit.description")}
+            checked={hookSubagentSplitViewEnabled}
+            onCheckedChange={(checked) => void updateSetting("hookSubagentSplitViewEnabled", checked)}
           />
           <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
             <Group justify="space-between" align="center" gap="md">

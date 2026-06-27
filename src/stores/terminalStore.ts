@@ -1384,6 +1384,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const previousSource = get().subagentTranscripts[pseudoId]?.source;
     const source = mergeSubagentSource(previousSource, resolvedSource);
     const shouldSubscribe = shouldSubscribeSubagentSource(previousSource, source);
+    const splitViewEnabled = useSettingsStore.getState().hookSubagentSplitViewEnabled;
 
     logInfo("[subagent_transcript] source resolved", {
       event: payload.event,
@@ -1536,6 +1537,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }));
       if (shouldSubscribe) await subscribeChild();
       else if (!(await subscribeDerivedChild()) && source.kind !== "child-jsonl") await subscribeChild();
+      return;
+    }
+
+    if (!splitViewEnabled) {
+      logInfo("[subagent_transcript] split view disabled, skipping new pane", {
+        event: payload.event,
+        parentTabId,
+        agentId,
+        toolUseId,
+      });
       return;
     }
 
