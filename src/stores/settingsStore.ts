@@ -30,6 +30,17 @@ export type TerminalThemeMode = "follow-app" | "independent";
 export type SidebarDensity = "compact" | "comfortable";
 export type ViewMode = "standard" | "compact";
 export type CloseBehavior = "ask" | "minimize" | "exit";
+type LastSettingsTab =
+  | "general"
+  | "sidebar"
+  | "terminal-theme"
+  | "shortcuts"
+  | "templates"
+  | "providers"
+  | "model-pricing"
+  | "sync"
+  | "hooks"
+  | "about";
 export type TerminalSidePanelSkin = "terminal" | "classic-terminal" | "warm-paper" | "sunrise" | "linen" | "latte";
 export type TerminalStatsCardKey =
   | "session"
@@ -173,6 +184,7 @@ interface Settings {
   uiFontFamily: string;
   uiFontSize: number;
   uiTextColor: string;
+  lastSettingsTab: LastSettingsTab;
   defaultShell: string;
   sidebarWidth: number;
   historySidebarWidth: number;
@@ -245,6 +257,7 @@ const DEFAULTS: Settings = {
     "\"Segoe UI Variable\", \"Segoe UI\", -apple-system, BlinkMacSystemFont, \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
   uiFontSize: UI_FONT_SIZE_DEFAULT,
   uiTextColor: "",
+  lastSettingsTab: "general",
   defaultShell: "powershell.exe",
   sidebarWidth: 248,
   historySidebarWidth: 276,
@@ -337,6 +350,19 @@ const LEGACY_TERMINAL_THEME_MAP: Partial<Record<string, string>> = {
   cryptoWalletDark: "investmentPlatformDark",
 };
 
+const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
+  "general",
+  "sidebar",
+  "terminal-theme",
+  "shortcuts",
+  "templates",
+  "providers",
+  "model-pricing",
+  "sync",
+  "hooks",
+  "about",
+];
+
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 function getSystemTheme(): "dark" | "light" {
@@ -383,6 +409,12 @@ function migrateSystemNotificationEvents(value: unknown): Record<HookEventType, 
     }
   }
   return result;
+}
+
+function migrateLastSettingsTab(value: unknown): LastSettingsTab {
+  return typeof value === "string" && LAST_SETTINGS_TABS.includes(value as LastSettingsTab)
+    ? (value as LastSettingsTab)
+    : DEFAULTS.lastSettingsTab;
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -570,6 +602,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
     const theme = (entries.theme as ThemeMode) ?? DEFAULTS.theme;
     entries.language = migrateLanguagePreference(entries.language);
+    entries.lastSettingsTab = migrateLastSettingsTab(entries.lastSettingsTab);
     const debugMode = (entries.debugMode as boolean) ?? DEFAULTS.debugMode;
     const storedTerminalThemeMode = entries.terminalThemeMode as TerminalThemeMode | undefined;
     const resolvedTheme = resolveTheme(theme);

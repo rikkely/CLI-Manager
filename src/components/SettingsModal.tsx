@@ -109,9 +109,10 @@ interface Props {
   open: boolean;
   onClose: () => void;
   initialTab?: SettingsTab;
+  onActiveTabChange?: (tab: SettingsTab) => void;
 }
 
-export function SettingsModal({ open, onClose, initialTab }: Props) {
+export function SettingsModal({ open, onClose, initialTab, onActiveTabChange }: Props) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
   const [searchValue, setSearchValue] = useState("");
   const [mounted, setMounted] = useState(open);
@@ -135,7 +136,13 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
       setClosing(false);
     }, 180);
     return () => clearTimeout(timer);
-  }, [open, mounted]);
+  }, [open, mounted, initialTab]);
+
+  const handleTabChange = (tab: SettingsTab) => {
+    if (tab === activeTab) return;
+    setActiveTab(tab);
+    onActiveTabChange?.(tab);
+  };
 
   useEffect(() => {
     setSearchValue("");
@@ -192,7 +199,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
           <SettingsLayout
             tabs={tabs}
             activeTab={activeTab}
-            onTabChange={setActiveTab}
+            onTabChange={handleTabChange}
             title={t(activeConfig.title)}
             description={t(activeConfig.description)}
             searchValue={searchValue}

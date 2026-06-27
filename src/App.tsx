@@ -335,6 +335,7 @@ function App() {
   const viewMode = useSettingsStore((s) => s.viewMode);
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
+  const lastSettingsTab = useSettingsStore((s) => s.lastSettingsTab);
   const updateSetting = useSettingsStore((s) => s.update);
   const openHistory = useHistoryStore((s) => s.openHistory);
   const openHistorySession = useHistoryStore((s) => s.openSession);
@@ -349,10 +350,20 @@ function App() {
   const closeBehaviorRef = useRef(closeBehavior);
 
   const handleOpenSettings = useCallback((tab?: SettingsTab) => {
-    setSettingsInitialTab(tab ?? "general");
+    const nextTab = tab ?? lastSettingsTab;
+    setSettingsInitialTab(nextTab);
+    if (tab && tab !== useSettingsStore.getState().lastSettingsTab) {
+      void updateSetting("lastSettingsTab", tab);
+    }
     setSettingsOpen(true);
     setSettingsEverOpened(true);
-  }, []);
+  }, [lastSettingsTab, updateSetting]);
+
+  const handleSettingsTabChange = useCallback((tab: SettingsTab) => {
+    if (tab !== useSettingsStore.getState().lastSettingsTab) {
+      void updateSetting("lastSettingsTab", tab);
+    }
+  }, [updateSetting]);
 
   useEffect(() => {
     closeBehaviorRef.current = closeBehavior;
@@ -825,7 +836,12 @@ function App() {
       <CommandPalette />
       <Suspense fallback={null}>
         {settingsEverOpened && (
-          <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />
+          <SettingsModal
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+            initialTab={settingsInitialTab}
+            onActiveTabChange={handleSettingsTabChange}
+          />
         )}
         {statsOpen &&
           (ccusageAnalyticsEnabled ? (
