@@ -2705,6 +2705,7 @@
   content: "";
   position: absolute;
   inset: 0;
+  display: none;
   pointer-events: none;
   border-radius: inherit;
   opacity: 0;
