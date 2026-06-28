@@ -110,7 +110,9 @@ if (source.kind === "child-jsonl") {
 - Hook event union for system notifications: `SessionStart | UserPromptSubmit | Notification | Stop | StopFailure | PermissionRequest`.
 - Backend command: `is_wsl() -> bool`.
 - Backend command: `send_notification_via_windows(title: String, body: String) -> Result<(), String>`.
-- Non-WSL frontend notifier: `sendNotification({ title, body })` from `@tauri-apps/plugin-notification`.
+- Backend command: `send_interactive_system_notification(title: String, body: String, tabId: String, actionLabel: String) -> Result<(), String>`.
+- Backend-to-frontend activation event: `system-notification-action` with `{ tabId }`.
+- Non-WSL frontend notifier: `send_interactive_system_notification({ title, body, tabId, actionLabel })`.
 
 ### 3. Contracts
 
@@ -119,10 +121,10 @@ if (source.kind === "child-jsonl") {
 - Project name priority: `tabTitle` -> basename of `payload.cwd` -> `"未知项目"`.
 - Title format: `CLI-Manager`; the OS notification should be attributed to the app rather than the CLI process.
 - Body format: emoji + `Claude Code`/`Codex CLI` + project/event phrase, optionally appending `payload.message`.
-- WSL fallback path: frontend first tries the Tauri notification plugin; only if that send path throws and `is_wsl` is true may it call `send_notification_via_windows`.
+- WSL fallback path: frontend first tries the interactive native notification command; only if that send path throws and `is_wsl` is true may it call `send_notification_via_windows`.
 - Backend guard: `send_notification_via_windows` must reject non-WSL calls so Windows native app instances cannot accidentally show a `Windows PowerShell` source/icon.
-- Non-WSL path: frontend checks/requests notification permission before `sendNotification`; Windows native app instances must not route through PowerShell because that makes the toast appear as `Windows PowerShell`.
-- Click behavior: do not implement deep links or tab jumps; rely on OS window foregrounding plus existing tab status indicators.
+- Non-WSL path: frontend checks/requests notification permission before `send_interactive_system_notification`; Windows native app instances must not route through PowerShell because that makes the toast appear as `Windows PowerShell`.
+- Click behavior: native interactive notifications emit `system-notification-action`; the frontend shows/focuses the app and activates the owning terminal `tabId`. If the tab no longer exists, the app is focused and the user sees a target-closed toast.
 
 ### 4. Validation & Error Matrix
 
@@ -137,16 +139,18 @@ if (source.kind === "child-jsonl") {
 ### 5. Good/Base/Bad Cases
 
 - Good: `Stop` for a tab titled `CLI-Manager` sends title `CLI-Manager` with body like `✅ Claude Code 在 CLI-Manager 的任务已完成` and still updates the tab status.
-- Good: WSL `PermissionRequest` sends through `send_notification_via_windows` without asking Tauri notification permission, and the Toast XML includes `来自 CLI-Manager` attribution.
+- Good: WSL fallback `PermissionRequest` sends through `send_notification_via_windows` without asking Tauri notification permission, and the Toast XML includes `来自 CLI-Manager` attribution.
+- Good: native Windows/macOS/Linux `PermissionRequest` emits `system-notification-action` after notification click and activates the matching terminal tab.
 - Base: `SessionStart` updates session binding but sends no system notification under default settings.
 - Bad: system notification failure prevents `showClaudeHookToast` or `handleCliHookEvent` from running; notification errors must stay isolated.
 - Bad: Windows native app instances route through PowerShell and show source `Windows PowerShell`; they must use the Tauri notification plugin path.
-- Bad: using a deep link or notification action to jump tabs; desktop click callbacks are not reliable enough for this feature.
+- Bad: notification click activation bypasses the shared frontend target activation helper and diverges from app toast behavior.
 
 ### 6. Tests Required
 
 - TypeScript type-check must pass after changes to `HookEventType`, settings migration, or notification event filtering.
-- Rust compile check must pass after changes to `is_wsl` or `send_notification_via_windows` signatures.
+- Rust compile check must pass after changes to `is_wsl`, `send_notification_via_windows`, or interactive notification command signatures.
+- Manual activation test point: clicking a native notification focuses the app and activates the matching tab; if the tab is closed, it focuses the app and shows the target-closed toast.
 - Manual Windows/macOS/Linux smoke test: enabled event produces an OS notification with expected title/body.
 - Manual WSL smoke test: enabled event produces a Windows Toast through `powershell.exe`.
 - Settings UI test point: toggling one event preserves the other `systemNotificationEvents` values.

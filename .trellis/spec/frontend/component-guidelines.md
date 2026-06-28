@@ -588,6 +588,8 @@ terminal.options.theme = isTransparent ? applyTransparency(theme) : theme;
 
 **Reference**: `src/components/XTermTerminal.tsx` — sets `allowTransparency: true` unconditionally; the hot-update `useEffect` only swaps `terminal.options.theme` via `applyTransparency` helper in `src/lib/terminalThemes.ts`.
 
+**Contrast contract**: Transparent terminal background compositing must be theme-brightness aware. Dark terminal themes may use black alpha for the xterm cell background and image overlay, but light terminal themes must use white alpha so muted ANSI text stays readable. Light terminal themes should avoid WebGL because its glyph rendering and alpha compositing can make glyph edges look soft on bright surfaces even without a background image. Do not increase xterm `fontWeight` as a contrast fix; it can change cell metrics and make glyphs collide in light themes. Keep xterm's measured font and rendered font aligned: if global UI font CSS touches `.xterm`, route it through `--terminal-font-family` from `XTermTerminal` instead of `revert` or a hard-coded stack. Keep the decision centralized in `src/lib/terminalThemes.ts` helpers such as `isLightTerminalTheme`, `applyTransparency`, `getTerminalBackgroundOverlayColor`, and `getTerminalMinimumContrastRatio`; do not hardcode `rgba(0,0,0,...)` in `XTermTerminal` or terminal background CSS.
+
 **Prevention checklist when wiring a new xterm appearance feature**:
 
 - [ ] Does the feature need a non-opaque background, an alternate cursor blink, or any other "must-set-at-construction" xterm option?
@@ -718,7 +720,7 @@ const writeTerminalChunk = (chunk: string) => {
 
 ### Common Mistake: Rewriting ANSI when the bug is already in xterm buffer attrs
 
-**Symptom**: A TUI row, such as the Codex composer in Git Bash on a light terminal theme, keeps a stale dark background even after filtering likely SGR background sequences from the raw PTY stream.
+**Symptom**: A TUI row, such as the Claude/Codex composer on a light terminal theme, keeps a stale dark background even after filtering likely SGR background sequences from the raw PTY stream.
 
 **Cause**: The raw stream is only one input to xterm. After xterm parses control sequences, the visible state is stored on buffer cells. If the app repaints the composer or uses a sequence form the filter did not cover, pre-parse ANSI rewriting becomes guesswork and misses the actual rendered cell attributes.
 
@@ -731,17 +733,18 @@ terminal.write(chunk, () => {
 });
 ```
 
-When using xterm internals, keep the hack small and version-scoped. xterm 6 exposes a read-only public `IBufferLine`, but the runtime `BufferLineApiView` keeps the mutable line on `_line`. Clear only the background color bits (`0x03ffffff`) so text, inverse caret, underline, and other flags survive:
+When using xterm internals, keep the hack small and version-scoped. xterm 6 exposes a read-only public `IBufferLine`, but the runtime `BufferLineApiView` keeps the mutable line on `_line`. Clear only the visual field styling on light themes: explicit background color bits (`0x03ffffff`) and, only when inverse spans a wide part of the prompt row, the inverse flag (`0x04000000`). Do not clear isolated inverse cells; those may be the TUI caret.
 
 ```tsx
 const mutableLine = (line as IBufferLine & { _line?: MutableLine })._line;
 mutableLine.loadCell(x, cell);
 cell.bg &= ~0x03ffffff;
+if (lineHasWideInverse) cell.fg &= ~0x04000000;
 mutableLine.setCell(x, cell);
 terminal.refresh(row, row);
 ```
 
-**Prevention**: Do not keep broadening ANSI filters after the first miss. If the defect is a visual xterm cell state, inspect or correct `terminal.buffer.active` after the write callback. Gate the fix narrowly by shell/tool/theme and prompt signature.
+**Prevention**: Do not keep broadening ANSI filters after the first miss. If the defect is a visual xterm cell state, inspect or correct `terminal.buffer.active` after the write callback. Gate the fix narrowly by theme brightness and prompt signature, not only by shell/tool name; Claude and Codex can emit similar composer styling through different shells. Codex may put the dark field on the row immediately before the visible `›` prompt, so include a small prelude range when normalizing prompt rows. Submitted prompt rows can move to the upper visible viewport after output arrives, so scan the whole visible viewport, not only the bottom prompt area. Tab restore and resize can trigger an xterm repaint after React visibility effects; coalesce a post-`onRender` normalization with `requestAnimationFrame` so restored tabs do not redraw stale composer backgrounds.
 
 ### Convention: xterm Windows PTY and paste handling
 

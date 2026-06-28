@@ -1,14 +1,14 @@
 {
   "name": "cli-manager",
   "private": true,
-  "version": "1.2.1",
+  "version": "1.2.2",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "node ./scripts/dev-server.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "node ./scripts/tauri-cli.mjs"
   },
   "dependencies": {
     "@baybreezy/file-extension-icon": "^0.0.5",

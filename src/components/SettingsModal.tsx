@@ -112,6 +112,10 @@ interface Props {
   onActiveTabChange?: (tab: SettingsTab) => void;
 }
 
+function isLikelyMacOs() {
+  return typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+}
+
 export function SettingsModal({ open, onClose, initialTab, onActiveTabChange }: Props) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
   const [searchValue, setSearchValue] = useState("");
@@ -180,7 +184,7 @@ export function SettingsModal({ open, onClose, initialTab, onActiveTabChange }: 
   return (
     <AppMantineThemeProvider>
       <div
-        className={`fixed inset-x-0 bottom-0 top-[26px] z-50 ${
+        className={`fixed inset-x-0 bottom-0 ${isLikelyMacOs() ? "top-0" : "top-[26px]"} z-50 ${
           closing ? "animate-fade-out" : "animate-fade-in"
         }`}
         style={{ fontFamily: uiFontFamily }}

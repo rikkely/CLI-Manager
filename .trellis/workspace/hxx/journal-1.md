@@ -645,3 +645,69 @@ Add project-level Codex provider switching with generated profiles, cleanup, sid
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: 系统通知点击跳转终端
+
+**Date**: 2026-06-28
+**Task**: 系统通知点击跳转终端
+**Branch**: `master`
+
+### Summary
+
+实现 Claude/Codex Hook 系统通知点击唤起并定位终端，补充开发版单实例兼容和 V1.2.2 changelog。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `79e15d8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 21: 修复浅色终端背景与 TUI 输入区显示
+
+**Date**: 2026-06-28
+**Task**: 修复浅色终端背景与 TUI 输入区显示
+**Branch**: `master`
+
+### Summary
+
+修复 issue #64：浅色终端背景图/默认浅色背景下 Claude 和 Codex 输出发灰、JetBrains Mono 字体重叠，以及 TUI 输入区黑底在 tab 切换后复现的问题；同步 CHANGELOG V1.2.2 和前端 xterm 规约。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c02b4da` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

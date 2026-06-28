@@ -1,7 +1,20 @@
+use log::warn;
+use notify_rust::NotificationResponse;
+use serde::Serialize;
 use std::{env, fs, process::Stdio};
+use tauri::{AppHandle, Emitter};
 
 const MAX_NOTIFICATION_TITLE_CHARS: usize = 200;
 const MAX_NOTIFICATION_BODY_CHARS: usize = 1000;
+const MAX_NOTIFICATION_ACTION_LABEL_CHARS: usize = 80;
+const MAX_NOTIFICATION_TAB_ID_CHARS: usize = 200;
+const SYSTEM_NOTIFICATION_ACTION_EVENT: &str = "system-notification-action";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemNotificationActionPayload {
+    tab_id: String,
+}
 
 /// 检测当前是否运行在 WSL 环境中。
 ///
@@ -71,6 +84,81 @@ pub async fn send_notification_via_windows(title: String, body: String) -> Resul
     spawn_powershell_notification(&script)
 }
 
+#[tauri::command]
+pub async fn send_interactive_system_notification(
+    app: AppHandle,
+    title: String,
+    body: String,
+    tab_id: String,
+    action_label: String,
+) -> Result<(), String> {
+    validate_notification_title(&title)?;
+    validate_notification_body(&body)?;
+    validate_notification_text(
+        &tab_id,
+        MAX_NOTIFICATION_TAB_ID_CHARS,
+        "notification_tab_id",
+    )?;
+    if tab_id.trim().is_empty() {
+        return Err("notification_tab_id_empty".into());
+    }
+    validate_notification_text(
+        &action_label,
+        MAX_NOTIFICATION_ACTION_LABEL_CHARS,
+        "notification_action_label",
+    )?;
+    if action_label.trim().is_empty() {
+        return Err("notification_action_label_empty".into());
+    }
+
+    let app_id = app.config().identifier.clone();
+    let mut notification = notify_rust::Notification::new();
+    notification
+        .summary(&title)
+        .body(&body)
+        .appname("CLI-Manager")
+        .auto_icon()
+        .action("default", &action_label);
+
+    #[cfg(target_os = "windows")]
+    if should_use_registered_windows_app_id() {
+        notification.app_id(&app_id);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = notify_rust::set_application(if tauri::is_dev() {
+            "com.apple.Terminal"
+        } else {
+            app_id.as_str()
+        });
+    }
+
+    let handle = notification
+        .show()
+        .map_err(|err| format!("notification_show_failed: {}", err))?;
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(err) = handle.wait_for_response(|response: &NotificationResponse| {
+            if matches!(
+                response,
+                NotificationResponse::Default | NotificationResponse::Action(_)
+            ) {
+                let payload = SystemNotificationActionPayload {
+                    tab_id: tab_id.clone(),
+                };
+                if let Err(err) = app_handle.emit(SYSTEM_NOTIFICATION_ACTION_EVENT, payload) {
+                    warn!("system notification action emit failed: {}", err);
+                }
+            }
+        }) {
+            warn!("system notification response wait failed: {}", err);
+        }
+    });
+
+    Ok(())
+}
+
 #[cfg(windows)]
 fn spawn_powershell_notification(script: &str) -> Result<(), String> {
     crate::shell_resolver::silent_command("powershell.exe")
@@ -84,6 +172,21 @@ fn spawn_powershell_notification(script: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Failed to spawn powershell.exe: {}", e))
+}
+
+#[cfg(target_os = "windows")]
+fn should_use_registered_windows_app_id() -> bool {
+    use std::path::MAIN_SEPARATOR as SEP;
+
+    let Ok(exe) = tauri::utils::platform::current_exe() else {
+        return false;
+    };
+    let Some(exe_dir) = exe.parent() else {
+        return false;
+    };
+    let curr_dir = exe_dir.display().to_string();
+    !(curr_dir.ends_with(format!("{SEP}target{SEP}debug").as_str())
+        || curr_dir.ends_with(format!("{SEP}target{SEP}release").as_str()))
 }
 
 #[cfg(not(windows))]

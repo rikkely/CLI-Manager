@@ -14,7 +14,7 @@ use log::LevelFilter;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, Runtime,
+    AppHandle, Emitter, Manager, RunEvent, Runtime,
 };
 use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind, TimezoneStrategy};
 use tauri_plugin_sql::{Builder as SqlBuilder, Migration, MigrationKind};
@@ -25,6 +25,12 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+#[tauri::command]
+fn app_show_main_window(app: AppHandle) -> Result<(), String> {
+    show_main_window(&app);
+    Ok(())
 }
 
 fn migrations() -> Vec<Migration> {
@@ -403,7 +409,20 @@ pub fn run() {
             commands::model_pricing::model_prices_sync,
             commands::system_notification::is_wsl,
             commands::system_notification::send_notification_via_windows,
+            commands::system_notification::send_interactive_system_notification,
+            app_show_main_window,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event {
+                if !has_visible_windows {
+                    show_main_window(app);
+                }
+            }
+        });
 }

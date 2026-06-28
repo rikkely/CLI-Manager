@@ -13,7 +13,14 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useShallow } from "zustand/shallow";
-import { applyTransparency, getTerminalTheme, getTerminalBackground } from "../lib/terminalThemes";
+import {
+  applyTransparency,
+  getTerminalBackground,
+  getTerminalBackgroundOverlayColor,
+  getTerminalMinimumContrastRatio,
+  getTerminalTheme,
+  isLightTerminalTheme,
+} from "../lib/terminalThemes";
 import { backgroundAssetUrl } from "../lib/assetUrl";
 import { TERMINAL_FILE_PATH_MIME } from "../lib/aiPathFormatter";
 import { endTerminalFileDrag, getTerminalFileDragText } from "../lib/terminalFileDrag";
@@ -61,9 +68,10 @@ const INTEGRATION_OSC_PREFIXES = ["\x1b]133;", "\x1b]633;", LEGACY_RUNTIME_OSC_P
 const OSC_CARRY_BUFFER_MAX = 8192;
 const OSC_PREFIX = "\x1b]";
 const XTERM_BG_COLOR_MASK = 0x03ffffff;
-const CODEX_COMPOSER_SCAN_ROWS = 8;
-const CODEX_COMPOSER_CONTINUATION_ROWS = 4;
-const CODEX_PROMPT_PATTERN = /^[\u203a\u276f\u00bb\u2023>]\s?/u;
+const XTERM_INVERSE_FLAG = 0x04000000;
+const TUI_COMPOSER_PRELUDE_ROWS = 1;
+const TUI_COMPOSER_CONTINUATION_ROWS = 4;
+const TUI_COMPOSER_PROMPT_PATTERN = /^[\u203a\u276f\u00bb\u2023>]\s?/u;
 
 type SpecialColorQueryId = 10 | 11;
 
@@ -102,6 +110,7 @@ const findOscTerminator = (text: string, from: number): OscTerminator => {
 };
 
 type MutableXtermCell = IBufferCell & {
+  fg: number;
   bg: number;
 };
 
@@ -267,6 +276,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  const webglAddonRef = useRef<WebglAddon | null>(null);
   const inputBuffer = useRef("");
   const fitRafRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
@@ -278,6 +288,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const activeWriteQueueRef = useRef<string[]>([]);
   const activeWriteRafRef = useRef<number | null>(null);
   const cursorShowTimerRef = useRef<number | null>(null);
+  const tuiComposerNormalizeRafRef = useRef<number | null>(null);
   const runtimeOscBufferRef = useRef("");
   const specialOscBufferRef = useRef("");
   const terminalBackgroundIsLightRef = useRef(false);
@@ -357,6 +368,32 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const isTransparentRef = useRef(isTransparent);
   isTransparentRef.current = isTransparent;
 
+  const syncWebglRenderer = (terminal: Terminal, theme: ReturnType<typeof getTerminalTheme>) => {
+    const shouldUseWebgl = !isLightTerminalTheme(theme);
+    if (!shouldUseWebgl) {
+      if (!webglAddonRef.current) return false;
+      webglAddonRef.current?.dispose();
+      webglAddonRef.current = null;
+      return true;
+    }
+    if (webglAddonRef.current) return false;
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        addon.dispose();
+        if (webglAddonRef.current === addon) {
+          webglAddonRef.current = null;
+        }
+      });
+      terminal.loadAddon(addon);
+      webglAddonRef.current = addon;
+      return true;
+    } catch {
+      // WebGL not supported, fall back to xterm's default renderer.
+      return false;
+    }
+  };
+
   const fitWhenStable = (force = false) => {
     const container = containerRef.current;
     const fitAddon = fitAddonRef.current;
@@ -416,13 +453,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     return titleTool === "codex" || /(?:^|\s)codex(?:\s|$)/.test(startupCmd);
   };
 
-  const shouldNormalizeCodexComposerBackground = () => {
-    if (!terminalBackgroundIsLightRef.current || !isCodexSession()) return false;
-    const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
-    const sessionShell = normalizeShellKey(session?.shell);
-    if (sessionShell) return sessionShell === "gitbash";
-    return normalizeShellKey(useSettingsStore.getState().defaultShell) === "gitbash";
-  };
+  const shouldNormalizeTuiComposerBackground = () => terminalBackgroundIsLightRef.current;
 
   // 私有 OSC 777：session=<id>;event=<name>[;exit=<code>]
   const handleLegacyRuntimeOsc = (body: string) => {
@@ -570,8 +601,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     return output;
   };
 
-  const normalizeCodexComposerBackground = (terminal: Terminal) => {
-    if (!shouldNormalizeCodexComposerBackground()) return;
+  const normalizeTuiComposerBackground = (terminal: Terminal) => {
+    if (!shouldNormalizeTuiComposerBackground()) return;
     const buffer = terminal.buffer.active;
     const probeCell = buffer.getNullCell() as MutableXtermCell;
 
@@ -579,58 +610,88 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const normalizePromptText = (line: IBufferLine) => (
       line.translateToString(true).trimStart().replace(TUI_BORDER_PREFIX_PATTERN, "")
     );
-    const isCodexPromptLine = (line: IBufferLine) => CODEX_PROMPT_PATTERN.test(normalizePromptText(line));
-    const hasExplicitBackground = (line: IBufferLine) => {
+    const isTuiPromptLine = (line: IBufferLine) => TUI_COMPOSER_PROMPT_PATTERN.test(normalizePromptText(line));
+    const getLineBackgroundState = (line: IBufferLine) => {
       const limit = Math.min(terminal.cols, line.length);
+      let hasExplicitBackground = false;
+      let inverseCells = 0;
       for (let x = 0; x < limit; x += 1) {
         const cell = line.getCell(x, probeCell);
-        if (cell && cell.getBgColorMode() !== 0) return true;
+        if (!cell) continue;
+        if (cell.getBgColorMode() !== 0) hasExplicitBackground = true;
+        if (cell.isInverse() !== 0) inverseCells += 1;
       }
-      return false;
+      return {
+        hasExplicitBackground,
+        hasWideInverse: inverseCells >= Math.max(4, Math.floor(terminal.cols * 0.25)),
+      };
     };
-    const clearLineBackground = (line: IBufferLine) => {
+    const clearLineBackground = (line: IBufferLine, clearWideInverse: boolean) => {
       const mutableLine = (line as XtermBufferLineApiView)._line;
       if (!mutableLine) return false;
       const limit = Math.min(terminal.cols, mutableLine.length);
       let changed = false;
       for (let x = 0; x < limit; x += 1) {
         mutableLine.loadCell(x, probeCell);
-        // Keep text flags such as inverse caret; drop only explicit bg color.
+        // Drop only visual field styling; keep text colors and other flags.
         const nextBg = probeCell.bg & ~XTERM_BG_COLOR_MASK;
-        if (nextBg === probeCell.bg) continue;
+        const nextFg = clearWideInverse ? probeCell.fg & ~XTERM_INVERSE_FLAG : probeCell.fg;
+        if (nextBg === probeCell.bg && nextFg === probeCell.fg) continue;
         probeCell.bg = nextBg;
+        probeCell.fg = nextFg;
         mutableLine.setCell(x, probeCell);
         changed = true;
       }
       return changed;
     };
 
-    const minRow = Math.max(0, terminal.rows - CODEX_COMPOSER_SCAN_ROWS);
-    let promptRow: number | null = null;
-    for (let row = terminal.rows - 1; row >= minRow; row -= 1) {
-      const line = getViewportLine(row);
-      if (line && isCodexPromptLine(line)) {
-        promptRow = row;
-        break;
-      }
-    }
-    if (promptRow === null) return;
-
+    const minRow = 0;
     let firstChangedRow = terminal.rows;
     let lastChangedRow = -1;
-    const maxRow = Math.min(terminal.rows - 1, promptRow + CODEX_COMPOSER_CONTINUATION_ROWS);
-    for (let row = promptRow; row <= maxRow; row += 1) {
-      const line = getViewportLine(row);
-      if (!line) break;
-      if (row > promptRow && !line.isWrapped && !hasExplicitBackground(line)) break;
-      if (!clearLineBackground(line)) continue;
-      firstChangedRow = Math.min(firstChangedRow, row);
-      lastChangedRow = Math.max(lastChangedRow, row);
+    for (let promptRow = terminal.rows - 1; promptRow >= minRow; promptRow -= 1) {
+      const promptLine = getViewportLine(promptRow);
+      if (!promptLine || !isTuiPromptLine(promptLine)) continue;
+
+      const startRow = Math.max(minRow, promptRow - TUI_COMPOSER_PRELUDE_ROWS);
+      const maxRow = Math.min(terminal.rows - 1, promptRow + TUI_COMPOSER_CONTINUATION_ROWS);
+      for (let row = startRow; row <= maxRow; row += 1) {
+        const line = getViewportLine(row);
+        if (!line) break;
+        const backgroundState = getLineBackgroundState(line);
+        if (row < promptRow) {
+          if (!backgroundState.hasExplicitBackground && !backgroundState.hasWideInverse) continue;
+          if (!clearLineBackground(line, backgroundState.hasWideInverse)) continue;
+          firstChangedRow = Math.min(firstChangedRow, row);
+          lastChangedRow = Math.max(lastChangedRow, row);
+          continue;
+        }
+        if (
+          row > promptRow
+          && !line.isWrapped
+          && !backgroundState.hasExplicitBackground
+          && !backgroundState.hasWideInverse
+        ) {
+          break;
+        }
+        if (!backgroundState.hasExplicitBackground && !backgroundState.hasWideInverse) continue;
+        if (!clearLineBackground(line, backgroundState.hasWideInverse)) continue;
+        firstChangedRow = Math.min(firstChangedRow, row);
+        lastChangedRow = Math.max(lastChangedRow, row);
+      }
     }
 
     if (lastChangedRow >= firstChangedRow) {
       terminal.refresh(firstChangedRow, lastChangedRow);
     }
+  };
+
+  const scheduleTuiComposerBackgroundNormalization = (terminal: Terminal | null = terminalRef.current) => {
+    if (!terminal || tuiComposerNormalizeRafRef.current !== null) return;
+    tuiComposerNormalizeRafRef.current = window.requestAnimationFrame(() => {
+      tuiComposerNormalizeRafRef.current = null;
+      if (terminalRef.current !== terminal) return;
+      normalizeTuiComposerBackground(terminal);
+    });
   };
 
   const processCursorVisibility = (text: string) => {
@@ -663,7 +724,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const writeTerminalChunk = (chunk: string) => {
       terminal.write(chunk, () => {
         if (terminalRef.current !== terminal) return;
-        normalizeCodexComposerBackground(terminal);
+        normalizeTuiComposerBackground(terminal);
+        scheduleTuiComposerBackgroundNormalization(terminal);
       });
     };
 
@@ -705,17 +767,30 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const terminal = terminalRef.current;
     if (!terminal) return;
     const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    const minimumContrastRatio = getTerminalMinimumContrastRatio(baseTheme);
     terminal.options.theme = isTransparent ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme;
+    if (terminal.options.minimumContrastRatio !== minimumContrastRatio) {
+      terminal.options.minimumContrastRatio = minimumContrastRatio;
+    }
+    const weightChanged = terminal.options.fontWeight !== "normal" || terminal.options.fontWeightBold !== "bold";
+    if (weightChanged) {
+      terminal.options.fontWeight = "normal";
+      terminal.options.fontWeightBold = "bold";
+    }
+    const rendererChanged = syncWebglRenderer(terminal, baseTheme);
     const sizeChanged = terminal.options.fontSize !== fontSize || terminal.options.fontFamily !== fontFamily;
-    if (sizeChanged) {
+    if (sizeChanged || weightChanged) {
       terminal.options.fontSize = fontSize;
       terminal.options.fontFamily = fontFamily;
+    }
+    if (sizeChanged || weightChanged || rendererChanged) {
       scheduleFit(true);
     }
     if (terminal.options.scrollback !== terminalScrollbackRows) {
       terminal.options.scrollback = terminalScrollbackRows;
     }
-    normalizeCodexComposerBackground(terminal);
+    normalizeTuiComposerBackground(terminal);
+    scheduleTuiComposerBackgroundNormalization(terminal);
   }, [fontSize, fontFamily, terminalScrollbackRows, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken]);
 
   // Visibility drives live rendering. A pane tab is "visible" when it is the
@@ -737,7 +812,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     // Wait one frame to ensure display:block has taken effect and layout is stable.
     scheduleFit(true);
     if (terminalRef.current) {
-      normalizeCodexComposerBackground(terminalRef.current);
+      normalizeTuiComposerBackground(terminalRef.current);
+      scheduleTuiComposerBackgroundNormalization(terminalRef.current);
     }
   }, [isVisible]);
 
@@ -767,10 +843,13 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       cursorWidth: 1,
       fontSize,
       fontFamily,
+      fontWeight: "normal",
+      fontWeightBold: "bold",
       scrollback: terminalScrollbackRows,
       scrollOnEraseInDisplay: true,
       allowProposedApi: true,
       windowsPty: { backend: "conpty" },
+      minimumContrastRatio: getTerminalMinimumContrastRatio(baseTheme),
       // Always true — research confirms WebglAddon stays compatible and the
       // perf cost is acceptable. xterm cannot toggle this after construction,
       // so we pay it unconditionally to avoid having to recreate the terminal
@@ -812,17 +891,20 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     });
 
     let webglAddon: WebglAddon | null = null;
-    try {
-      webglAddon = new WebglAddon();
+    if (!isLightTerminalTheme(baseTheme)) {
+      try {
+        webglAddon = new WebglAddon();
       // GPU 上下文丢失（驱动崩溃 / GPU 进程重启 / 长会话）后 WebGL 渲染会僵死。
       // 注册 contextLoss 回调，丢失时 dispose 让 xterm 自动回落到 Canvas 渲染器。
-      webglAddon.onContextLoss(() => {
-        webglAddon?.dispose();
-        webglAddon = null;
-      });
-      terminal.loadAddon(webglAddon);
-    } catch {
-      // WebGL not supported, fall back to canvas
+        webglAddon.onContextLoss(() => {
+          webglAddon?.dispose();
+          webglAddon = null;
+        });
+        terminal.loadAddon(webglAddon);
+        webglAddonRef.current = webglAddon;
+      } catch {
+        // WebGL not supported, fall back to canvas
+      }
     }
 
     terminalRef.current = terminal;
@@ -1437,6 +1519,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       scheduleHelperTextareaAnchorPin();
     });
     const renderDisposable = terminal.onRender(() => {
+      scheduleTuiComposerBackgroundNormalization(terminal);
       if (!isComposingRef.current) return;
       scheduleCompositionScrollRestore();
       scheduleCompositionAnchorFix();
@@ -1550,6 +1633,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         cancelAnimationFrame(activeWriteRafRef.current);
         activeWriteRafRef.current = null;
       }
+      if (tuiComposerNormalizeRafRef.current !== null) {
+        cancelAnimationFrame(tuiComposerNormalizeRafRef.current);
+        tuiComposerNormalizeRafRef.current = null;
+      }
       pendingChunks = [];
       activeWriteQueueRef.current = [];
       inactiveBufferRef.current = [];
@@ -1557,7 +1644,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       unlisten?.();
       searchResultDisposable.dispose();
       cursorStyleDisposable.dispose();
-      webglAddon?.dispose();
+      webglAddonRef.current?.dispose();
+      webglAddonRef.current = null;
+      webglAddon = null;
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -1567,6 +1656,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   const terminalTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
   const backgroundColor = getTerminalBackground(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+  const backgroundOverlayColor = getTerminalBackgroundOverlayColor(terminalTheme);
   const showBackgroundImage = isTransparent && assetUrl !== null;
   terminalBackgroundIsLightRef.current = isLightHexColor(backgroundColor);
   terminalColorRepliesRef.current = {
@@ -1732,12 +1822,14 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   // cover the pseudo-element image layer and break the transparency model.
   const wrapperStyle: CSSProperties = showBackgroundImage
     ? ({
+        "--terminal-font-family": fontFamily,
         "--terminal-bg-image": `url("${assetUrl}")`,
         "--terminal-bg-opacity": (background.opacity / 100).toString(),
         "--terminal-bg-blur": `${background.blur}px`,
         "--terminal-bg-darken": (background.overlayDarken / 100).toString(),
+        "--terminal-bg-overlay-color": backgroundOverlayColor,
       } as CSSProperties)
-    : { backgroundColor };
+    : ({ "--terminal-font-family": fontFamily, backgroundColor } as CSSProperties);
 
   return (
     <div

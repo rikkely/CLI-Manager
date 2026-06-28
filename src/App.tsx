@@ -49,6 +49,7 @@ const COMPACT_WINDOW_WIDTH = 350;
 const WINDOW_MIN_HEIGHT = 600;
 const IN_TAURI = isTauri();
 const CLAUDE_HOOK_TOAST_PREFIX = "claude-hook-notification";
+const SYSTEM_NOTIFICATION_ACTION_EVENT = "system-notification-action";
 let claudeHookToastSequence = 0;
 type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
 
@@ -66,6 +67,10 @@ interface SubagentTranscriptAppendPayload {
   key: string;
   content: string;
   reset: boolean;
+}
+
+interface SystemNotificationActionPayload {
+  tabId: string;
 }
 
 async function hasInstalledCliHook(): Promise<boolean> {
@@ -186,18 +191,42 @@ function getSystemNotificationBody(payload: CliHookPayload, projectName: string)
   }
 }
 
-async function sendSystemNotification(payload: CliHookPayload, tabTitle?: string | null): Promise<void> {
+async function focusMainWindow(): Promise<void> {
+  if (!IN_TAURI) return;
+  try {
+    await invoke("app_show_main_window");
+  } catch (err) {
+    logWarn("Failed to show main window", err);
+  }
+}
+
+async function activateHookNotificationTarget(tabId: string): Promise<void> {
+  await focusMainWindow();
+
+  const terminalStore = useTerminalStore.getState();
+  if (!terminalStore.sessions.some((session) => session.id === tabId)) {
+    toast.warning(translateCurrent("notifications.system.targetClosed"));
+    return;
+  }
+
+  useHistoryStore.getState().closeHistory();
+  terminalStore.setActive(tabId);
+}
+
+async function sendSystemNotification(payload: CliHookPayload, tabId: string | null, tabTitle?: string | null): Promise<void> {
   try {
     const settings = useSettingsStore.getState();
     if (!settings.systemNotificationsEnabled) return;
     if (!isSystemNotificationEvent(payload.event)) return;
     if (!settings.systemNotificationEvents[payload.event]) return;
+    if (!tabId) return;
 
     const projectName = getHookProjectName(payload, tabTitle);
     const title = "CLI-Manager";
     const body = getSystemNotificationBody(payload, projectName);
+    const actionLabel = getClaudeHookToastStyle(payload).actionLabel;
 
-    const { isPermissionGranted, requestPermission, sendNotification } = await import(
+    const { isPermissionGranted, requestPermission } = await import(
       "@tauri-apps/plugin-notification"
     );
 
@@ -212,7 +241,7 @@ async function sendSystemNotification(payload: CliHookPayload, tabTitle?: string
     }
 
     try {
-      sendNotification({ title, body });
+      await invoke("send_interactive_system_notification", { title, body, tabId, actionLabel });
       return;
     } catch (notificationErr) {
       const isWsl = await invoke<boolean>("is_wsl").catch(() => false);
@@ -257,8 +286,7 @@ function showClaudeHookToast(payload: CliHookPayload, tabId: string): void {
               type="button"
               className="claude-hook-toast__action"
               onClick={() => {
-                useHistoryStore.getState().closeHistory();
-                useTerminalStore.getState().setActive(tabId);
+                void activateHookNotificationTarget(tabId);
                 toast.dismiss(item.id);
               }}
             >
@@ -491,7 +519,10 @@ function App() {
         showClaudeHookToast(event.payload, tabId);
       }
       // 系统通知：并行发送（不影响应用内通知）
-      void sendSystemNotification(event.payload, tabTitle);
+      void sendSystemNotification(event.payload, tabId, tabTitle);
+    });
+    const unlistenSystemNotification = listen<SystemNotificationActionPayload>(SYSTEM_NOTIFICATION_ACTION_EVENT, (event) => {
+      void activateHookNotificationTarget(event.payload.tabId);
     });
     // 子 Agent 转录 tail 增量：路由到对应转录面板。
     const unlistenTranscript = listen<SubagentTranscriptAppendPayload>("subagent-transcript-append", (event) => {
@@ -501,6 +532,7 @@ function App() {
 
     return () => {
       void unlistenHook.then((unlisten) => unlisten());
+      void unlistenSystemNotification.then((unlisten) => unlisten());
       void unlistenTranscript.then((unlisten) => unlisten());
     };
   }, []);
@@ -592,7 +624,7 @@ function App() {
           font-family: ${uiFontFamily} !important;
         }
         .xterm, .xterm *, .xterm-helper-textarea {
-          font-family: revert !important;
+          font-family: var(--terminal-font-family, "Cascadia Code", Consolas, monospace) !important;
         }
       `;
     } else {
@@ -876,6 +908,7 @@ function App() {
       <Toaster
         theme={resolvedTheme}
         position="bottom-right"
+        closeButton
         expand
         toastOptions={{
           classNames: {

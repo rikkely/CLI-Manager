@@ -507,6 +507,8 @@ export function GeneralSettingsPage() {
       ),
     [systemFonts, t, uiFontFamily]
   );
+  const showLightPalettes = theme === "light" || theme === "system";
+  const showDarkPalettes = theme === "dark" || theme === "system";
   const updateToolbarVisibility = (key: keyof TerminalToolbarVisibilitySettings, checked: boolean) => {
     void update("terminalToolbarVisibility", { ...terminalToolbarVisibility, [key]: checked });
   };
@@ -546,43 +548,47 @@ export function GeneralSettingsPage() {
               />
             </Stack>
 
-            <Stack gap="xs">
-              <Text size="xs" c="var(--on-surface-variant)">
-                {t("settings.general.lightTheme")}
-              </Text>
-              <SimpleGrid cols={{ base: 1, md: 3 }} spacing="xs">
-                {LIGHT_PALETTE_OPTIONS.map((option) => (
-                  <PaletteCard
-                    key={option.value}
-                    active={lightThemePalette === option.value}
-                    label={t(option.labelKey)}
-                    description={t(option.descriptionKey)}
-                    activeLabel={t("common.current")}
-                    swatches={option.swatches}
-                    onClick={() => void update("lightThemePalette", option.value)}
-                  />
-                ))}
-              </SimpleGrid>
-            </Stack>
+            {showLightPalettes && (
+              <Stack gap="xs">
+                <Text size="xs" c="var(--on-surface-variant)">
+                  {t("settings.general.lightTheme")}
+                </Text>
+                <SimpleGrid cols={{ base: 1, md: 3 }} spacing="xs">
+                  {LIGHT_PALETTE_OPTIONS.map((option) => (
+                    <PaletteCard
+                      key={option.value}
+                      active={lightThemePalette === option.value}
+                      label={t(option.labelKey)}
+                      description={t(option.descriptionKey)}
+                      activeLabel={t("common.current")}
+                      swatches={option.swatches}
+                      onClick={() => void update("lightThemePalette", option.value)}
+                    />
+                  ))}
+                </SimpleGrid>
+              </Stack>
+            )}
 
-            <Stack gap="xs">
-              <Text size="xs" c="var(--on-surface-variant)">
-                {t("settings.general.darkTheme")}
-              </Text>
-              <SimpleGrid cols={{ base: 1, md: 3 }} spacing="xs">
-                {DARK_PALETTE_OPTIONS.map((option) => (
-                  <PaletteCard
-                    key={option.value}
-                    active={darkThemePalette === option.value}
-                    label={t(option.labelKey)}
-                    description={t(option.descriptionKey)}
-                    activeLabel={t("common.current")}
-                    swatches={option.swatches}
-                    onClick={() => void update("darkThemePalette", option.value)}
-                  />
-                ))}
-              </SimpleGrid>
-            </Stack>
+            {showDarkPalettes && (
+              <Stack gap="xs">
+                <Text size="xs" c="var(--on-surface-variant)">
+                  {t("settings.general.darkTheme")}
+                </Text>
+                <SimpleGrid cols={{ base: 1, md: 3 }} spacing="xs">
+                  {DARK_PALETTE_OPTIONS.map((option) => (
+                    <PaletteCard
+                      key={option.value}
+                      active={darkThemePalette === option.value}
+                      label={t(option.labelKey)}
+                      description={t(option.descriptionKey)}
+                      activeLabel={t("common.current")}
+                      swatches={option.swatches}
+                      onClick={() => void update("darkThemePalette", option.value)}
+                    />
+                  ))}
+                </SimpleGrid>
+              </Stack>
+            )}
 
             <FontFamilySelect
               label={t("settings.general.uiFont")}

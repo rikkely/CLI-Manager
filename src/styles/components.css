@@ -2776,6 +2776,43 @@
   box-shadow: none !important;
 }
 
+[data-sonner-toaster][dir="ltr"] {
+  --toast-close-button-start: unset;
+  --toast-close-button-end: 10px;
+  --toast-close-button-transform: none;
+}
+
+[data-sonner-toast][data-styled="true"]:not(:has(.claude-hook-toast)) {
+  padding-right: 44px !important;
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button] {
+  top: 10px !important;
+  right: 10px !important;
+  left: auto !important;
+  width: 24px !important;
+  height: 24px !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-muted) !important;
+  opacity: 0.75;
+  transform: none !important;
+  transition: color 0.16s ease, opacity 0.16s ease;
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button]:hover {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--danger) !important;
+  opacity: 1;
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 28%, transparent) !important;
+}
+
 .claude-hook-toast {
   --claude-hook-toast-accent: #38bdf8;
   --claude-hook-toast-accent-strong: #0ea5e9;
@@ -3759,7 +3796,8 @@
 /*  Activated by `data-bg-enabled="true"` on the `.ui-terminal-bg-layer`
     wrapper inside `XTermTerminal.tsx`. Dynamic values are passed via the
     CSS custom properties --terminal-bg-image / --terminal-bg-opacity /
-    --terminal-bg-blur / --terminal-bg-darken set inline.                  */
+    --terminal-bg-blur / --terminal-bg-darken / --terminal-bg-overlay-color
+    set inline.                                                            */
 
 .ui-terminal-bg-layer[data-bg-enabled="true"] {
   position: relative;
@@ -3825,7 +3863,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background-color: rgba(0, 0, 0, var(--terminal-bg-darken, 0));
+  background-color: rgba(var(--terminal-bg-overlay-color, 0, 0, 0), var(--terminal-bg-darken, 0));
   pointer-events: none;
   z-index: 1;
   transition: background-color 300ms ease;
