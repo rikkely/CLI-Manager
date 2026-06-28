@@ -366,8 +366,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const isTransparentRef = useRef(isTransparent);
   isTransparentRef.current = isTransparent;
 
-  const syncWebglRenderer = (terminal: Terminal, theme: ReturnType<typeof getTerminalTheme>, transparent: boolean) => {
-    const shouldUseWebgl = !transparent || !isLightTerminalTheme(theme);
+  const syncWebglRenderer = (terminal: Terminal, theme: ReturnType<typeof getTerminalTheme>) => {
+    const shouldUseWebgl = !isLightTerminalTheme(theme);
     if (!shouldUseWebgl) {
       webglAddonRef.current?.dispose();
       webglAddonRef.current = null;
@@ -749,7 +749,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       terminal.options.fontWeight = terminalFontWeight;
       terminal.options.fontWeightBold = terminalFontWeightBold;
     }
-    syncWebglRenderer(terminal, baseTheme, isTransparent);
+    syncWebglRenderer(terminal, baseTheme);
     const sizeChanged = terminal.options.fontSize !== fontSize || terminal.options.fontFamily !== fontFamily;
     if (sizeChanged || weightChanged) {
       terminal.options.fontSize = fontSize;
@@ -859,7 +859,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     });
 
     let webglAddon: WebglAddon | null = null;
-    if (!isTransparentRef.current || !isLightTerminalTheme(baseTheme)) {
+    if (!isLightTerminalTheme(baseTheme)) {
       try {
         webglAddon = new WebglAddon();
       // GPU 上下文丢失（驱动崩溃 / GPU 进程重启 / 长会话）后 WebGL 渲染会僵死。
