@@ -2562,6 +2562,10 @@
   --terminal-action-color: #e5c453;
 }
 
+.ui-action-replay {
+  --terminal-action-color: #c77dbb;
+}
+
 .ui-action-git {
   --terminal-action-color: #f59e0b;
 }

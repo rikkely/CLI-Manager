@@ -28,6 +28,7 @@ import { useSyncStore } from "./stores/syncStore";
 import { useHistoryStore } from "./stores/historyStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useUpdateStore } from "./stores/updateStore";
+import { useReplayStore } from "./stores/replayStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
 import { useModelPricingStore } from "./stores/modelPricingStore";
 import { createPerfMarker, logWarn } from "./lib/logger";
@@ -490,6 +491,7 @@ function App() {
   useEffect(() => {
     if (!IN_TAURI) return;
     const unlistenHook = listen<CliHookPayload>("claude-hook-notification", (event) => {
+      void useReplayStore.getState().recordCliHookEvent(event.payload);
       // SubagentStart / AgentToolStart：开/更新子 Agent 转录分屏，独立于 Tab 状态机与 toast。
       if (event.payload.event === "SubagentStart" || event.payload.event === "AgentToolStart") {
         void useTerminalStore.getState().openSubagentTranscript(event.payload);

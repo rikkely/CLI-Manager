@@ -32,6 +32,9 @@ struct ClaudeHookRequest {
     // 仅 SubagentStart 等子 Agent 事件携带：用于定位子 Agent 转录 jsonl。
     agent_id: Option<String>,
     tool_use_id: Option<String>,
+    tool_name: Option<String>,
+    mcp_server: Option<String>,
+    skill_name: Option<String>,
     agent_type: Option<String>,
     agent_transcript_path: Option<String>,
     transcript_path: Option<String>,
@@ -52,6 +55,9 @@ pub struct ClaudeHookPayload {
     timestamp: Option<String>,
     agent_id: Option<String>,
     tool_use_id: Option<String>,
+    tool_name: Option<String>,
+    mcp_server: Option<String>,
+    skill_name: Option<String>,
     agent_type: Option<String>,
     agent_transcript_path: Option<String>,
     transcript_path: Option<String>,
@@ -160,6 +166,9 @@ fn handle_stream(mut stream: TcpStream, app_handle: AppHandle, token: &str) {
         timestamp: payload.timestamp,
         agent_id: payload.agent_id,
         tool_use_id: payload.tool_use_id,
+        tool_name: payload.tool_name,
+        mcp_server: payload.mcp_server,
+        skill_name: payload.skill_name,
         agent_type: payload.agent_type,
         agent_transcript_path: payload.agent_transcript_path,
         transcript_path: payload.transcript_path,
@@ -272,6 +281,8 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
                 | "SubagentStop"
                 | "AgentToolStart"
                 | "AgentToolStop"
+                | "ToolStart"
+                | "ToolStop"
         ),
         "codex" => matches!(
             payload.event.as_str(),
@@ -289,19 +300,28 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
 fn log_hook_payload_diagnostic(payload: &ClaudeHookRequest) {
     if !matches!(
         payload.event.as_str(),
-        "SubagentStart" | "SubagentStop" | "AgentToolStart" | "AgentToolStop" | "Notification"
+        "SubagentStart"
+            | "SubagentStop"
+            | "AgentToolStart"
+            | "AgentToolStop"
+            | "ToolStart"
+            | "ToolStop"
+            | "Notification"
     ) {
         return;
     }
 
     info!(
-        "cli hook payload diagnostic: source={} event={} tabId={} sessionId={:?} agentId={:?} toolUseId={:?} agentType={:?} hasAgentTranscriptPath={} hasTranscriptPath={} wslDistro={:?} cwd={:?}",
+        "cli hook payload diagnostic: source={} event={} tabId={} sessionId={:?} agentId={:?} toolUseId={:?} toolName={:?} mcpServer={:?} skillName={:?} agentType={:?} hasAgentTranscriptPath={} hasTranscriptPath={} wslDistro={:?} cwd={:?}",
         normalize_source(payload.source.as_deref()),
         payload.event,
         payload.tab_id,
         payload.session_id,
         payload.agent_id,
         payload.tool_use_id,
+        payload.tool_name,
+        payload.mcp_server,
+        payload.skill_name,
         payload.agent_type,
         payload
             .agent_transcript_path

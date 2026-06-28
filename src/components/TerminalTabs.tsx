@@ -38,17 +38,20 @@ import {
   TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY,
   TERMINAL_GIT_PANEL_DEFAULT_WIDTH,
   TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY,
+  TERMINAL_REPLAY_PANEL_DEFAULT_WIDTH,
+  TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY,
   TERMINAL_STATS_PANEL_DEFAULT_WIDTH,
   TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY,
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { SubagentTranscriptView } from "./terminal/SubagentTranscriptView";
+import { SessionReplayPanel } from "./terminal/SessionReplayPanel";
 import { FileEditorPane } from "./files/FileEditorPane";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { parseProjectEnvVars } from "../lib/providerSwitching";
-import { Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
+import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { EmptyState } from "./ui/EmptyState";
 import { useHistoryStore } from "../stores/historyStore";
@@ -1565,6 +1568,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
   // 非合并模式：实时统计与 Git 变更各自独立开关，可并排显示
   const [statsOpen, setStatsOpen] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [activeToolbarDragId, setActiveToolbarDragId] = useState<string | null>(null);
   const paneFullscreenStartedFromGlobalRef = useRef(false);
@@ -1646,6 +1650,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
   } as CSSProperties;
   const historyActive = historyOpen && activeWorkspaceTab === "history";
   const statsPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen;
+  const replayPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "replay" : replayOpen;
   const gitPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "git" : gitOpen;
   const filesPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "files" : filesOpen;
 
@@ -1871,6 +1876,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       // 窄屏下退化为单面板：打开实时统计时收起其他面板，避免挤压终端
       if (window.innerWidth < 1100) {
         setGitOpen(false);
+        setReplayOpen(false);
         setFilesOpen(false);
       }
       setStatsOpen(true);
@@ -1890,11 +1896,31 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       // 窄屏下退化为单面板：打开 Git 时收起其他面板，避免挤压终端
       if (window.innerWidth < 1100) {
         setStatsOpen(false);
+        setReplayOpen(false);
         setFilesOpen(false);
       }
       setGitOpen(true);
     }
   }, [gitPanelActive, sidePanelMerged]);
+
+  const handleToggleReplayPanel = useCallback(() => {
+    if (replayPanelActive) {
+      if (sidePanelMerged) setSidePanelOpen(false);
+      else setReplayOpen(false);
+      return;
+    }
+    if (sidePanelMerged) {
+      setSidePanelTab("replay");
+      setSidePanelOpen(true);
+    } else {
+      if (window.innerWidth < 1100) {
+        setStatsOpen(false);
+        setGitOpen(false);
+        setFilesOpen(false);
+      }
+      setReplayOpen(true);
+    }
+  }, [replayPanelActive, sidePanelMerged]);
 
   const syncFilePanelProject = useCallback(async (project: Project) => {
     try {
@@ -1935,6 +1961,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       if (window.innerWidth < 1100) {
         setStatsOpen(false);
         setGitOpen(false);
+        setReplayOpen(false);
       }
       setFilesOpen(true);
     }
@@ -1963,21 +1990,27 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     if (sidePanelMerged) return;
     const enforce = () => {
       if (window.innerWidth >= 1100) return;
-      const openPanels = [statsOpen, gitOpen, filesOpen].filter(Boolean).length;
+      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen].filter(Boolean).length;
       if (openPanels <= 1) return;
       if (statsOpen) {
         setGitOpen(false);
+        setReplayOpen(false);
         setFilesOpen(false);
         return;
       }
       if (gitOpen) {
+        setReplayOpen(false);
+        setFilesOpen(false);
+        return;
+      }
+      if (replayOpen) {
         setFilesOpen(false);
       }
     };
     enforce();
     window.addEventListener("resize", enforce);
     return () => window.removeEventListener("resize", enforce);
-  }, [filesOpen, gitOpen, sidePanelMerged, statsOpen]);
+  }, [filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen]);
 
   useEffect(() => {
     if (!filesPanelActive) return;
@@ -2181,6 +2214,19 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
           {terminalToolbarVisibility.showText && <span>{t("terminal.toolbar.sessionHistory")}</span>}
         </button>
       ),
+      replay: (
+        <button
+          onClick={handleToggleReplayPanel}
+          className="ui-focus-ring ui-icon-action ui-action-replay"
+          data-active={replayPanelActive ? "true" : "false"}
+          title={replayPanelActive ? t("terminal.toolbar.closeReplayPanel") : t("terminal.toolbar.openReplayPanel")}
+          aria-label={replayPanelActive ? t("terminal.toolbar.closeReplayPanel") : t("terminal.toolbar.openReplayPanel")}
+          aria-pressed={replayPanelActive}
+        >
+          <Activity size={13} strokeWidth={1.8} />
+          {terminalToolbarVisibility.showText && <span>{t("terminal.toolbar.replay")}</span>}
+        </button>
+      ),
       gitChanges: (
         <button
           onClick={handleToggleGitChangesPanel}
@@ -2281,13 +2327,16 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     handleToggleFilesPanel,
     handleToggleGitChangesPanel,
     handleToggleGlobalFullscreen,
+    handleToggleReplayPanel,
     handleToggleStatsPanel,
     handleToolbarDragCancel,
     handleToolbarDragEnd,
     handleToolbarDragStart,
     historyOpen,
     onToggleFullscreen,
+    replayPanelActive,
     sessionHistoryShortcutHint,
+    sidePanelMerged,
     statsPanelActive,
     t,
     terminalToolbarOrder,
@@ -2474,6 +2523,16 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
                   <Suspense fallback={null}>
                     <GitChangesPanel open={gitOpen} projectPath={panelSession?.cwd ?? null} embedded />
                   </Suspense>
+                </ResizableTerminalPanelFrame>
+              )}
+              {replayOpen && (
+                <ResizableTerminalPanelFrame
+                  storageKey={TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY}
+                  defaultWidth={TERMINAL_REPLAY_PANEL_DEFAULT_WIDTH}
+                  resizeLabel={t("terminal.panel.resizeReplayLabel")}
+                  resizeTitle={t("terminal.panel.resizeReplayTitle")}
+                >
+                  <SessionReplayPanel activeSessionId={panelSessionId} open={replayOpen} />
                 </ResizableTerminalPanelFrame>
               )}
               {filesOpen && (

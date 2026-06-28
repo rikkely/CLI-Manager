@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import type { SubagentTranscriptSource, TerminalSession, Project } from "../lib/types";
 import { logError, logInfo, logWarn } from "../lib/logger";
-import { normalizeDirectCodexStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
+import { isCodexStartupCommand, normalizeDirectCodexStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
@@ -45,7 +45,9 @@ export type CliHookEventName =
   | "SubagentStart"
   | "SubagentStop"
   | "AgentToolStart"
-  | "AgentToolStop";
+  | "AgentToolStop"
+  | "ToolStart"
+  | "ToolStop";
 export type TabNotificationState = "none" | "running" | "attention" | "done" | "failed";
 export type ShellRuntimeEventName = "command_started" | "command_finished" | "prompt_shown";
 
@@ -93,6 +95,9 @@ export interface CliHookPayload {
   // 仅 SubagentStart 携带：定位子 Agent 转录 jsonl。
   agentId?: string | null;
   toolUseId?: string | null;
+  toolName?: string | null;
+  mcpServer?: string | null;
+  skillName?: string | null;
   agentType?: string | null;
   agentTranscriptPath?: string | null;
   transcriptPath?: string | null;
@@ -674,8 +679,22 @@ async function shouldEnableHookEnv(): Promise<boolean> {
   }
 }
 
-function buildPtyEnvVars(envVars?: Record<string, string> | null, shell?: string | null): Record<string, string> | null {
+function isCodexPtyLaunch(projectId?: string, startupCmd?: string | null): boolean {
+  if (startupCmd?.trim() && isCodexStartupCommand(startupCmd)) return true;
+  if (!projectId) return false;
+  const project = useProjectStore.getState().projects.find((item) => item.id === projectId);
+  return Boolean(project && (isExactCodexProject(project) || isCodexStartupCommand(project.startup_cmd)));
+}
+
+function buildPtyEnvVars(
+  envVars?: Record<string, string> | null,
+  shell?: string | null,
+  options: { codexLaunch?: boolean } = {}
+): Record<string, string> | null {
   const next = { ...(envVars ?? {}) };
+  if (options.codexLaunch) {
+    next.TERM = "dumb";
+  }
   if (isShellRuntimeMonitoringEnabled() && supportsShellRuntimeInjection(shell)) {
     next[SHELL_RUNTIME_MONITORING_ENV] = "1";
   } else {
@@ -718,12 +737,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(shell, !!projectId, os);
     const launchStartupCmd = prepareStartupCommandForPty(startupCmd, resolvedShell);
+    const codexLaunch = isCodexPtyLaunch(projectId, startupCmd);
 
     let sessionId: string;
     try {
       sessionId = await invoke<string>("pty_create", {
         cwd: cwd ?? null,
-        envVars: buildPtyEnvVars(envVars ?? null, resolvedShell),
+        envVars: buildPtyEnvVars(envVars ?? null, resolvedShell, { codexLaunch }),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
         codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd),
@@ -1029,12 +1049,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(options?.shell, !!options?.projectId, os);
     const launchStartupCmd = prepareStartupCommandForPty(options?.startupCmd, resolvedShell);
+    const codexLaunch = isCodexPtyLaunch(options?.projectId, options?.startupCmd);
 
     let splitSessionId: string;
     try {
       splitSessionId = await invoke<string>("pty_create", {
         cwd: options?.cwd ?? null,
-        envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell),
+        envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell, { codexLaunch }),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
         codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd),
@@ -1272,12 +1293,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       // 重建 PTY
       const resolvedShell = resolveShellForPty(ps.shell, !!ps.projectId, os);
+      const codexLaunch = isCodexPtyLaunch(ps.projectId, ps.startupCmd);
 
       let newSessionId: string;
       try {
         newSessionId = await invoke<string>("pty_create", {
           cwd: ps.cwd ?? null,
-          envVars: buildPtyEnvVars(ps.envVars ?? null, resolvedShell),
+          envVars: buildPtyEnvVars(ps.envVars ?? null, resolvedShell, { codexLaunch }),
           shell: resolvedShell,
           hookEnvEnabled: await shouldEnableHookEnv(),
           codexProvider: getCodexProviderLaunchConfig(ps.projectId, ps.startupCmd),

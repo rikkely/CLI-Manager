@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { BarChart3, Folder, GitBranch } from "../icons";
+import { Activity, BarChart3, Folder, GitBranch } from "../icons";
 import { TERM_PANEL, getTerminalSidePanelSkinStyle, panelColorTint } from "../stats/termStatsUi";
+import { SessionReplayPanel } from "./SessionReplayPanel";
 import { TerminalStatsPanel } from "./TerminalStatsPanel";
 import { useI18n } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -9,7 +10,7 @@ const GitChangesPanel = lazy(() =>
   import("../git/GitChangesPanel").then((module) => ({ default: module.GitChangesPanel }))
 );
 
-export type TerminalSidePanelTab = "stats" | "git" | "files";
+export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files";
 
 interface TerminalSidePanelProps {
   open: boolean;
@@ -28,9 +29,11 @@ const TERMINAL_PANEL_MAX_WIDTH = 500;
 export const TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-stats-panel-width";
 export const TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-git-panel-width";
 export const TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-files-panel-width";
+export const TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-replay-panel-width";
 export const TERMINAL_STATS_PANEL_DEFAULT_WIDTH = 203;
 export const TERMINAL_GIT_PANEL_DEFAULT_WIDTH = 196;
 export const TERMINAL_FILES_PANEL_DEFAULT_WIDTH = 220;
+export const TERMINAL_REPLAY_PANEL_DEFAULT_WIDTH = 300;
 
 interface ResizableTerminalPanelFrameProps {
   storageKey: string;
@@ -187,9 +190,10 @@ export function TerminalSidePanel({
   if (!open) return null;
 
   const tabs = [
-    { key: "stats" as const, label: t("terminal.panel.sideStats"), icon: <BarChart3 size={12} strokeWidth={1.8} /> },
-    { key: "git" as const, label: t("terminal.panel.gitChanges"), icon: <GitBranch size={12} strokeWidth={1.8} /> },
-    { key: "files" as const, label: t("terminal.panel.files"), icon: <Folder size={12} strokeWidth={1.8} />, disabled: filesTabDisabled },
+    { key: "stats" as const, label: t("terminal.panel.sideStats"), color: TERM_PANEL.cyan, icon: <BarChart3 size={12} strokeWidth={1.8} /> },
+    { key: "replay" as const, label: t("terminal.panel.replay"), color: TERM_PANEL.magenta, icon: <Activity size={12} strokeWidth={1.8} /> },
+    { key: "git" as const, label: t("terminal.panel.gitChanges"), color: TERM_PANEL.yellow, icon: <GitBranch size={12} strokeWidth={1.8} /> },
+    { key: "files" as const, label: t("terminal.panel.files"), color: TERM_PANEL.blue, icon: <Folder size={12} strokeWidth={1.8} />, disabled: filesTabDisabled },
   ];
 
   return (
@@ -211,17 +215,17 @@ export function TerminalSidePanel({
               type="button"
               onClick={() => onTabChange(tab.key)}
               disabled={tab.disabled}
-              className="ui-focus-ring flex flex-1 items-center justify-center gap-1 whitespace-nowrap rounded px-2 py-1 text-[11px] font-bold transition-colors"
+              className="ui-focus-ring flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded px-1.5 py-1 text-[11px] font-bold transition-colors"
               style={{
-                color: selected ? TERM_PANEL.cyan : TERM_PANEL.dim,
-                backgroundColor: selected ? panelColorTint(TERM_PANEL.cyan, 10) : "transparent",
-                border: `1px solid ${selected ? panelColorTint(TERM_PANEL.cyan, 34) : "transparent"}`,
+                color: selected ? tab.color : TERM_PANEL.dim,
+                backgroundColor: selected ? panelColorTint(tab.color, 10) : "transparent",
+                border: `1px solid ${selected ? panelColorTint(tab.color, 34) : "transparent"}`,
                 opacity: tab.disabled ? 0.45 : 1,
               }}
               aria-pressed={selected}
             >
-              {tab.icon}
-              <span>{tab.label}</span>
+              <span className="shrink-0" style={{ color: tab.color }}>{tab.icon}</span>
+              <span className="min-w-0 truncate">{tab.label}</span>
             </button>
           );
         })}
@@ -229,6 +233,7 @@ export function TerminalSidePanel({
 
       <div className="min-h-0 flex-1 overflow-hidden">
         <TerminalStatsPanel activeSessionId={activeSessionId} open={open} visible={activeTab === "stats"} embedded />
+        <SessionReplayPanel activeSessionId={activeSessionId} open={open} visible={activeTab === "replay"} />
         {activeTab === "git" && (
           <Suspense fallback={null}>
             <GitChangesPanel open={open} projectPath={projectPath} visible embedded />
