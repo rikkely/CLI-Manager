@@ -1,5 +1,5 @@
-import { ChevronRight, Undo2, Check, Minus } from "../icons";
-import type { GitTreeNode, GitFileChange } from "../../lib/types";
+import { ChevronRight, Undo2, Check, Minus, Copy } from "../icons";
+import type { GitTreeNode, GitFileChange, Project } from "../../lib/types";
 import { GitStatusIcon } from "./GitStatusIcon";
 import { useGitStore } from "../../stores/gitStore";
 import { TERM, panelColorTint } from "../stats/termStatsUi";
@@ -7,6 +7,8 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } 
 import { getMaterialFileIcon, getMaterialFolderIcon } from "@baybreezy/file-extension-icon";
 import { StageCheckbox, type StageState } from "./StageCheckbox";
 import { useI18n } from "../../lib/i18n";
+import { copyAiText } from "../../lib/aiClipboard";
+import { formatAiPathBlock } from "../../lib/aiPathFormatter";
 
 // 收集某节点下所有文件变更（含子目录），用于目录级三态勾选框与批量操作。
 function collectFileChanges(node: GitTreeNode): GitFileChange[] {
@@ -38,6 +40,7 @@ function collectCompactDirectoryChain(node: GitTreeNode): { suffixParts: string[
 }
 
 interface GitTreeNodeProps {
+  project: Pick<Project, "name"> | null;
   node: GitTreeNode;
   depth: number;
   treeId: string;
@@ -47,7 +50,7 @@ interface GitTreeNodeProps {
   onToggleStagePaths: (paths: string[], allStaged: boolean) => void;
 }
 
-export function GitTreeNodeComponent({ node, depth, treeId, onFileClick, onRequestDiscard, onToggleStage, onToggleStagePaths }: GitTreeNodeProps) {
+export function GitTreeNodeComponent({ project, node, depth, treeId, onFileClick, onRequestDiscard, onToggleStage, onToggleStagePaths }: GitTreeNodeProps) {
   const { t } = useI18n();
   const { collapsedDirs, toggleDir, selectedUntracked, toggleUntrackedSelection, deselectedAdded, toggleAddedDeselection, setAddedDeselection } = useGitStore();
   // 折叠 key 按分区前缀隔离：已跟踪树与未跟踪树同名目录互不影响。
@@ -177,6 +180,17 @@ export function GitTreeNodeComponent({ node, depth, treeId, onFileClick, onReque
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
+          <ContextMenuItem
+            className="flex items-center gap-2"
+            disabled={!project}
+            onSelect={() => {
+              if (!project) return;
+              void copyAiText(formatAiPathBlock(project, node.path, "file"), t("files.toast.aiPathCopied"));
+            }}
+          >
+            <Copy size={12} />
+            {t("files.menu.copyAiPath")}
+          </ContextMenuItem>
           {isUntracked ? (
             // 未跟踪文件右键：真实「加入跟踪（git add）」立即操作（与复选框的「选中」区分开）。
             <ContextMenuItem
@@ -319,6 +333,17 @@ export function GitTreeNodeComponent({ node, depth, treeId, onFileClick, onReque
         <ContextMenuContent>
           <ContextMenuItem
             className="flex items-center gap-2"
+            disabled={!project}
+            onSelect={() => {
+              if (!project) return;
+              void copyAiText(formatAiPathBlock(project, displayNode.path, "directory"), t("files.toast.aiPathCopied"));
+            }}
+          >
+            <Copy size={12} />
+            {t("files.menu.copyAiPath")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="flex items-center gap-2"
             disabled={dirFiles.length === 0}
             onSelect={() => {
               if (dirAllUntracked) {
@@ -349,7 +374,7 @@ export function GitTreeNodeComponent({ node, depth, treeId, onFileClick, onReque
       {!displayCollapsed && hasChildren && (
         <div>
           {displayNode.children!.map((child) => (
-            <GitTreeNodeComponent key={child.path} node={child} depth={depth + 1} treeId={treeId} onFileClick={onFileClick} onRequestDiscard={onRequestDiscard} onToggleStage={onToggleStage} onToggleStagePaths={onToggleStagePaths} />
+            <GitTreeNodeComponent key={child.path} project={project} node={child} depth={depth + 1} treeId={treeId} onFileClick={onFileClick} onRequestDiscard={onRequestDiscard} onToggleStage={onToggleStage} onToggleStagePaths={onToggleStagePaths} />
           ))}
         </div>
       )}

@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { RefreshCw, GitBranch, Undo2, Files, FilePen, FilePlus, FileMinus, GitCommitHorizontal, ArrowUp, ArrowDown, Upload, Download, ChevronDown, GitMerge, Check, X, FolderTree, Layers } from "lucide-react";
 import { useGitStore } from "../../stores/gitStore";
+import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { GitChangesTree } from "./GitChangesTree";
 import { StageCheckbox, type StageState } from "./StageCheckbox";
@@ -13,7 +14,7 @@ import { DiffViewerModal } from "./DiffViewerModal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TERM, EmptyHint, panelColorTint } from "../stats/termStatsUi";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
-import type { GitTreeNode, GitPullStrategy } from "../../lib/types";
+import type { GitTreeNode, GitPullStrategy, Project } from "../../lib/types";
 
 interface GitChangesPanelProps {
   open: boolean;
@@ -58,8 +59,31 @@ function collectDirectoryPaths(nodes: GitTreeNode[], treeId: string): string[] {
   return paths;
 }
 
+function normalizeProjectPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function findProjectByPath(projects: Project[], path: string | null | undefined): Project | null {
+  const normalizedPath = path?.trim() ? normalizeProjectPath(path) : "";
+  if (!normalizedPath) return null;
+
+  let bestMatch: Project | null = null;
+  let bestMatchLength = -1;
+
+  for (const project of projects) {
+    const normalizedProjectPath = normalizeProjectPath(project.path);
+    const matches = normalizedPath === normalizedProjectPath || normalizedPath.startsWith(`${normalizedProjectPath}/`);
+    if (!matches || normalizedProjectPath.length <= bestMatchLength) continue;
+    bestMatch = project;
+    bestMatchLength = normalizedProjectPath.length;
+  }
+
+  return bestMatch;
+}
+
 export function GitChangesPanel({ open, projectPath, visible = true, embedded = false }: GitChangesPanelProps) {
   const { t } = useI18n();
+  const projects = useProjectStore((state) => state.projects);
   const {
     fetchChanges,
     reset,
@@ -105,6 +129,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
   const [hideFilterLabels, setHideFilterLabels] = useState(false);
   const filterRowRef = useRef<HTMLDivElement | null>(null);
   const panelActive = open && visible;
+  const project = useMemo(() => findProjectByPath(projects, projectPath), [projectPath, projects]);
 
   useEffect(() => {
     if (panelActive && projectPath) {
@@ -594,6 +619,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
                   {t("git.section.changed")}
                 </div>
                 <GitChangesTree
+                  project={project}
                   nodes={tree}
                   treeId="tracked"
                   onFileClick={handleFileClick}
@@ -610,6 +636,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
                   {t("git.section.untracked")}
                 </div>
                 <GitChangesTree
+                  project={project}
                   nodes={untrackedTree}
                   treeId="untracked"
                   onFileClick={handleFileClick}
