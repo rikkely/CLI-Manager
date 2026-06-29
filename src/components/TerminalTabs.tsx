@@ -495,7 +495,7 @@ function SortableTab({
         <div
           ref={setTabNodeRef}
           style={style}
-          className={`ui-interactive ui-tab-trigger mx-1 flex h-7 ${tabMinWidthClass} max-w-[180px] shrink-0 cursor-pointer items-center gap-2 rounded-lg px-3 text-[12px] font-medium`}
+          className={`ui-interactive ui-tab-trigger ui-terminal-tab-item mx-1 flex h-7 ${tabMinWidthClass} max-w-[180px] shrink-0 cursor-pointer items-center gap-2 rounded-lg px-3 text-[12px] font-medium`}
           data-terminal-tab-id={id}
           data-session-kind={sessionKind}
           data-selected={isActive ? "true" : "false"}
@@ -522,7 +522,7 @@ function SortableTab({
             aria-label={statusLabel}
           />
           {vendor && (
-            <span className="inline-flex shrink-0 items-center" aria-hidden="true">
+            <span className="ui-terminal-tab-vendor inline-flex shrink-0 items-center" aria-hidden="true">
               <VendorIcon vendor={vendor} size={14} />
             </span>
           )}
@@ -561,7 +561,7 @@ function SortableTab({
               aria-label={t("terminal.tab.rename", { title })}
             />
           ) : (
-            <span className="min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
+            <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
           )}
           <button
             onClick={(e) => { e.stopPropagation(); onClose(e.currentTarget.getBoundingClientRect()); }}
@@ -658,7 +658,7 @@ function DragOverlayTab({
 
   return (
     <div
-      className={`ui-tab-trigger ui-terminal-drag-overlay-tab mx-1 flex h-7 ${tabMinWidthClass} max-w-[180px] items-center gap-2 rounded-lg px-3 text-[12px] font-medium`}
+      className={`ui-tab-trigger ui-terminal-tab-item ui-terminal-drag-overlay-tab mx-1 flex h-7 ${tabMinWidthClass} max-w-[180px] items-center gap-2 rounded-lg px-3 text-[12px] font-medium`}
       data-selected="true"
     >
       <span
@@ -668,11 +668,11 @@ function DragOverlayTab({
         aria-hidden="true"
       />
       {vendor && (
-        <span className="inline-flex shrink-0 items-center" aria-hidden="true">
+        <span className="ui-terminal-tab-vendor inline-flex shrink-0 items-center" aria-hidden="true">
           <VendorIcon vendor={vendor} size={14} />
         </span>
       )}
-      <span className="min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
+      <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
     </div>
   );
 }
@@ -1071,7 +1071,7 @@ function PaneTabBar({
                     <button
                       key={session.id}
                       type="button"
-                      className="ui-interactive flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-on-surface-variant"
+                      className="ui-interactive ui-terminal-tab-list-item flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-on-surface-variant"
                       data-selected={session.id === pane.activeSessionId ? "true" : "false"}
                       onClick={() => {
                         activatePaneSessionAt(index);

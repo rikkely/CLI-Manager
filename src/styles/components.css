@@ -260,17 +260,33 @@
 }
 
 .ui-tab-trigger {
+  position: relative;
+  isolation: isolate;
   color: var(--on-surface-variant);
   border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 56%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 28%, transparent);
+  transition:
+    background-color var(--animate-duration-fast) var(--ease-standard),
+    border-color var(--animate-duration-fast) var(--ease-standard),
+    box-shadow var(--animate-duration-fast) var(--ease-standard),
+    color var(--animate-duration-fast) var(--ease-standard),
+    transform var(--animate-duration-fast) var(--ease-standard);
 }
 
 .ui-tab-trigger[data-selected="true"] {
   color: var(--on-surface);
-  border-color: color-mix(in srgb, var(--interactive-selected-border) 72%, var(--border) 28%);
+  border-color: transparent;
+  background-color: color-mix(in srgb, var(--surface-container) 92%, var(--surface-container-lowest) 8%);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--on-surface) 8%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 40%, transparent);
+  transform: translateY(-1px);
 }
 
 .ui-tab-runtime-dot {
   color: var(--tab-runtime-dot-color, currentColor);
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
   transition: background-color var(--animate-duration-fast) var(--ease-standard), box-shadow var(--animate-duration-fast) var(--ease-standard);
 }
 
@@ -393,6 +409,7 @@
   --tab-scroll-left-fade: 0px;
   --tab-scroll-right-fade: 0px;
   scrollbar-width: none;
+  gap: 2px;
   -webkit-mask-image: linear-gradient(
     to right,
     transparent 0,
@@ -427,22 +444,29 @@
   align-items: center;
   justify-content: center;
   width: 28px;
-  height: 38px;
+  height: 28px;
   flex-shrink: 0;
-  border: 0;
-  border-radius: 0;
-  background-color: color-mix(in srgb, var(--surface-container-lowest) 68%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 84%, transparent);
   color: var(--on-surface-variant);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 24%, transparent);
   transition:
     background-color var(--animate-duration-fast),
+    border-color var(--animate-duration-fast),
+    box-shadow var(--animate-duration-fast),
     color var(--animate-duration-fast),
     opacity var(--animate-duration-fast);
 }
 
 .ui-terminal-tab-scroll-button:hover:not(:disabled),
 .ui-terminal-tab-list-button:hover:not(:disabled) {
-  background-color: var(--interactive-hover-bg);
+  background-color: color-mix(in srgb, var(--interactive-hover-bg) 88%, var(--surface-container-lowest) 12%);
+  border-color: color-mix(in srgb, var(--interactive-selected-border) 46%, transparent);
   color: var(--on-surface);
+  box-shadow:
+    0 8px 18px color-mix(in srgb, var(--on-surface) 8%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 32%, transparent);
 }
 
 .ui-terminal-tab-scroll-button:disabled,
@@ -452,33 +476,39 @@
 }
 
 .ui-terminal-tab-scroll-button-left {
-  border-right: 1px solid color-mix(in srgb, var(--border) 14%, transparent);
+  margin-left: 6px;
 }
 
 .ui-terminal-tab-scroll-button-right,
 .ui-terminal-tab-list-button {
-  border-left: 1px solid color-mix(in srgb, var(--border) 14%, transparent);
+  margin-left: 4px;
 }
 
 .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button,
 .ui-terminal-pane-chrome .ui-terminal-tab-list-button {
-  background-color: color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 72%, var(--terminal-theme-foreground, #f8fafc) 8%);
+  background-color: color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 78%, var(--terminal-theme-foreground, #f8fafc) 8%);
   color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 66%, var(--terminal-theme-muted, #64748b) 34%);
+  border-color: color-mix(in srgb, var(--terminal-tab-accent-muted) 44%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 10%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button:hover:not(:disabled),
 .ui-terminal-pane-chrome .ui-terminal-tab-list-button:hover:not(:disabled) {
-  background-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 12%, transparent);
+  background-color: color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 64%, var(--terminal-tab-accent) 36%);
   color: var(--terminal-theme-foreground, #f8fafc);
+  border-color: color-mix(in srgb, var(--terminal-tab-accent) 54%, transparent);
+  box-shadow:
+    0 10px 18px color-mix(in srgb, #000 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 16%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button-left {
-  border-right-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 12%, transparent);
+  border-right-color: color-mix(in srgb, var(--terminal-tab-accent-muted) 44%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button-right,
 .ui-terminal-pane-chrome .ui-terminal-tab-list-button {
-  border-left-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 12%, transparent);
+  border-left-color: color-mix(in srgb, var(--terminal-tab-accent-muted) 44%, transparent);
 }
 
 .ui-terminal-actions {
@@ -2331,21 +2361,24 @@
 .ui-terminal-chrome {
   display: flex;
   align-items: center;
-  height: 38px;
-  min-height: 38px;
-  background-color: color-mix(in srgb, var(--surface-container-low) 82%, var(--surface) 18%);
+  height: 42px;
+  min-height: 42px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-container) 90%, white 10%) 0%, color-mix(in srgb, var(--surface-container-low) 88%, var(--surface) 12%) 100%);
   color: var(--on-surface);
-  border-radius: 8px;
+  border-radius: 10px;
   margin: 4px 6px 0;
   overflow: hidden;
-  outline: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface-container-lowest) 44%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  box-shadow:
+    0 12px 28px color-mix(in srgb, var(--on-surface) 6%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 36%, transparent);
 }
 
 .ui-terminal-chrome .ui-tab-trigger {
-  height: 26px;
+  height: 28px;
   gap: 6px;
-  padding-inline: 10px;
+  padding-inline: 11px;
 }
 
 .ui-terminal-chrome .ui-terminal-tab-close {
@@ -2360,14 +2393,21 @@
 .ui-terminal-pane-chrome {
   --terminal-tab-accent: color-mix(in srgb, var(--terminal-theme-accent, #60a5fa) 64%, var(--terminal-theme-foreground, #f8fafc) 36%);
   --terminal-tab-accent-muted: color-mix(in srgb, var(--terminal-tab-accent) 42%, var(--terminal-theme-muted, #64748b) 58%);
-  height: 38px;
-  min-height: 38px;
+  height: 42px;
+  min-height: 42px;
   margin: 0;
   border-radius: 0;
-  background-color: color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 82%, var(--terminal-theme-foreground, #f8fafc) 10%);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 72%, var(--terminal-theme-foreground, #f8fafc) 12%) 0%,
+      color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 88%, black 12%) 100%
+    );
   color: var(--terminal-theme-foreground, #f8fafc);
-  outline-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 10%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 9%, transparent);
+  outline-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 8%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 10%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, black 28%, transparent);
 }
 
 .ui-terminal-well .ui-terminal-pane {
@@ -2376,21 +2416,32 @@
 
 .ui-terminal-pane-chrome .ui-tab-trigger {
   color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 72%, var(--terminal-theme-muted, #64748b) 28%);
-  border-color: color-mix(in srgb, var(--terminal-tab-accent-muted) 48%, transparent);
+  border-color: color-mix(in srgb, var(--terminal-tab-accent-muted) 34%, transparent);
+  background-color: color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 68%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 5%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-tab-trigger:hover:not([data-selected="true"]) {
-  background-color: color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 78%, var(--terminal-tab-accent) 22%);
+  background-color: color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 58%, var(--terminal-tab-accent) 42%);
   color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 88%, var(--terminal-tab-accent) 12%);
-  border-color: color-mix(in srgb, var(--terminal-tab-accent) 42%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--terminal-tab-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--terminal-tab-accent) 40%, transparent);
+  box-shadow:
+    0 8px 18px color-mix(in srgb, #000 16%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--terminal-tab-accent) 18%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-tab-trigger[data-selected="true"] {
   color: var(--terminal-theme-foreground, #f8fafc);
-  background-color: color-mix(in srgb, var(--terminal-theme-selection, var(--terminal-tab-accent)) 20%, transparent);
-  border-color: color-mix(in srgb, var(--terminal-tab-accent) 78%, var(--terminal-theme-foreground, #f8fafc) 22%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--terminal-tab-accent) 54%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--terminal-theme-selection, var(--terminal-tab-accent)) 24%, transparent) 0%,
+      color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 46%, var(--terminal-tab-accent) 54%) 100%
+    );
+  border-color: transparent;
+  box-shadow:
+    0 12px 24px color-mix(in srgb, #000 22%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 18%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-tab-trigger[data-session-kind="file-editor"] {
@@ -2707,6 +2758,39 @@
 .ui-terminal-pane-chrome .text-on-surface-variant,
 .ui-terminal-pane-chrome .text-text-muted {
   color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 64%, var(--terminal-theme-muted, #64748b) 36%);
+}
+
+.ui-terminal-tab-vendor {
+  opacity: 0.86;
+  transition: opacity var(--animate-duration-fast) var(--ease-standard), transform var(--animate-duration-fast) var(--ease-standard);
+}
+
+.ui-tab-trigger:hover .ui-terminal-tab-vendor,
+.ui-tab-trigger[data-selected="true"] .ui-terminal-tab-vendor {
+  opacity: 1;
+}
+
+.ui-terminal-tab-title {
+  text-shadow: 0 1px 0 color-mix(in srgb, black 10%, transparent);
+}
+
+.ui-terminal-tab-list-item {
+  border: 1px solid transparent;
+  transition:
+    background-color var(--animate-duration-fast) var(--ease-standard),
+    border-color var(--animate-duration-fast) var(--ease-standard),
+    color var(--animate-duration-fast) var(--ease-standard);
+}
+
+.ui-terminal-tab-list-item:hover,
+.ui-terminal-tab-list-item[data-selected="true"] {
+  color: var(--on-surface);
+  background-color: color-mix(in srgb, var(--surface-container) 86%, transparent);
+}
+
+.ui-terminal-tab-list-item[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--interactive-selected-border) 44%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 28%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-terminal-tab-close:hover,
