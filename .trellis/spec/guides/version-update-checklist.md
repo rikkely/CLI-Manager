@@ -65,6 +65,34 @@ Before tagging a release that should be installable through the in-app updater:
 - [ ] After release, verify GitHub Release contains `latest.json` and signature-backed updater assets.
 - [ ] Remember that existing versions without updater support cannot auto-install the first updater-enabled release; users must install that one manually.
 
+## Local Unsigned Smoke Build
+
+Use this path only for local packaging/tests when you do not have the updater signing private key on the machine.
+
+- Keep `src-tauri/tauri.conf.json` as the release source of truth. Do not disable updater signing in the main config just to make local builds pass.
+- Put local-only overrides in `src-tauri/tauri.local.conf.json`.
+- For local smoke builds, set only:
+
+```json
+{
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}
+```
+
+- Run the local packaging command instead of `npm run tauri build`:
+
+```bash
+npm run tauri:build:local
+```
+
+- Expected output path:
+  - `src-tauri/target/release/bundle/nsis/`
+  - `src-tauri/target/release/bundle/msi/`
+
+- Never use the local unsigned build flow for GitHub releases or any artifact that should be consumed by the in-app updater.
+
 ## Acceptance Check
 
 A version update is complete only when these values are identical:

@@ -1430,10 +1430,10 @@ function resolveAutoDarkThemeId(darkPalette: DarkTerminalPalette = "night-indigo
   if (darkPalette === "investment-platform") return "investmentPlatformDark";
   if (darkPalette === "github-dark") return "githubDark";
   if (darkPalette === "catppuccin-mocha") return "catppuccinMocha";
-  if (darkPalette === "terminal-green") return "carbonfox";
+  if (darkPalette === "terminal-green") return "forestNightDark";
   if (darkPalette === "dracula-purple") return "dracula";
   if (darkPalette === "carbon-black") return "carbonfox";
-  return "tokyoNightDark";
+  return "forestNightDark";
 }
 
 function resolveAutoLightTheme(lightPalette: LightTerminalPalette = "warm-paper"): ITheme {

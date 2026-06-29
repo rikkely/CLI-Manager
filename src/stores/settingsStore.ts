@@ -252,8 +252,8 @@ interface SettingsStore extends Settings {
 const DEFAULTS: Settings = {
   language: "auto",
   theme: "system",
-  lightThemePalette: "warm-paper",
-  darkThemePalette: "night-indigo",
+  lightThemePalette: "emerald-mist",
+  darkThemePalette: "terminal-green",
   fontSize: 14,
   terminalScrollbackRows: TERMINAL_SCROLLBACK_ROWS_DEFAULT,
   fontFamily: "Cascadia Code, Consolas, monospace",

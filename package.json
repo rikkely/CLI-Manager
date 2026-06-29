@@ -8,7 +8,8 @@
     "dev": "node ./scripts/dev-server.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "node ./scripts/tauri-cli.mjs"
+    "tauri": "node ./scripts/tauri-cli.mjs",
+    "tauri:build:local": "node ./scripts/tauri-cli.mjs build --config src-tauri/tauri.local.conf.json"
   },
   "dependencies": {
     "@baybreezy/file-extension-icon": "^0.0.5",
