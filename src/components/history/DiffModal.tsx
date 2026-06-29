@@ -27,6 +27,8 @@ interface DiffRenderBlock {
   timestamp: string | null;
 }
 
+const EMPTY_DIFF_MESSAGES: HistoryMessage[] = [];
+
 function classifyFallbackLine(line: string): string {
   if (
     line.startsWith("*** Begin Patch") ||
@@ -138,7 +140,7 @@ function buildStructuredBlocks(fileChanges: HistoryFileChangeSummary[] | null | 
 
 export function DiffModal({
   open,
-  messages = [],
+  messages = EMPTY_DIFF_MESSAGES,
   fileChanges,
   container,
   onClose,
@@ -149,6 +151,9 @@ export function DiffModal({
   const requestIdRef = useRef(0);
   const [blocks, setBlocks] = useState<DiffRenderBlock[]>([]);
   const [parsing, setParsing] = useState(false);
+  const portalContainer = container ?? undefined;
+  const overlayPositionClass = container ? "absolute inset-0" : "fixed inset-0";
+  const contentPositionClass = container ? "absolute inset-0" : "fixed inset-0";
 
   useEffect(() => {
     return () => {
@@ -199,20 +204,22 @@ export function DiffModal({
         if (!next) onClose();
       }}
     >
-      <DialogPrimitive.Portal container={container ?? undefined}>
+      <DialogPrimitive.Portal container={portalContainer}>
         <DialogPrimitive.Overlay
           className={cn(
-            "absolute inset-0 bg-black/45",
+            overlayPositionClass,
+            "bg-black/45",
             "data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out"
           )}
           style={{ zIndex: 56 }}
         />
         <DialogPrimitive.Content
           className={cn(
-            "absolute inset-0 flex items-center justify-center p-4 outline-none",
+            contentPositionClass,
+            "flex items-center justify-center p-4 outline-none",
             "data-[state=open]:animate-scale-in data-[state=closed]:animate-scale-out"
           )}
-          style={{ zIndex: 56 }}
+          style={{ zIndex: 57 }}
         >
           <div
             className="w-full max-w-6xl h-[min(84vh,780px)] rounded-lg border overflow-hidden flex flex-col"

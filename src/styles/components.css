@@ -2251,6 +2251,37 @@
   border-radius: 12px;
 }
 
+.ui-file-search-input-shell,
+.ui-file-search-mode-tabs {
+  transition:
+    border-color var(--animate-duration-fast),
+    box-shadow var(--animate-duration-fast),
+    background-color var(--animate-duration-fast);
+}
+
+.ui-file-search-input-shell:focus-within,
+.ui-file-search-mode-tabs:focus-within {
+  border-color: color-mix(in srgb, var(--border) 72%, var(--on-surface) 28%);
+  background-color: var(--surface-container-high);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 10%, transparent);
+}
+
+.ui-file-search-input-shell :where(input, select, textarea):focus-visible {
+  box-shadow: none;
+}
+
+.ui-file-search-mode-option[data-selected="true"] {
+  background-color: color-mix(in srgb, var(--surface-container-highest) 82%, var(--on-surface) 18%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+
+.ui-file-search-mode-option:focus-visible {
+  outline: none !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--border) 86%, var(--on-surface) 14%);
+}
+
 .ui-search-focus-shell {
   transition:
     box-shadow var(--animate-duration-fast),
@@ -2529,6 +2560,10 @@
 
 .ui-action-session-history {
   --terminal-action-color: #e5c453;
+}
+
+.ui-action-replay {
+  --terminal-action-color: #c77dbb;
 }
 
 .ui-action-git {

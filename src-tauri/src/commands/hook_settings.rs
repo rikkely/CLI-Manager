@@ -678,6 +678,16 @@ fn apply_claude_hook_module(settings: &mut Value, exe: &str, module: ClaudeHookM
                 "Agent|Task",
                 build_command(exe, "claude", "AgentToolStop"),
             );
+            add_hook_command(
+                settings,
+                "PreToolUse",
+                build_command(exe, "claude", "ToolStart"),
+            );
+            add_hook_command(
+                settings,
+                "PostToolUse",
+                build_command(exe, "claude", "ToolStop"),
+            );
         }
     }
 }
@@ -693,9 +703,7 @@ fn remove_claude_hook_module(settings: &mut Value, module: ClaudeHookModule) {
         ClaudeHookModule::Attention => {
             remove_hook_commands(settings, &["Notification"], &CLAUDE_LEGACY_SCRIPTS)
         }
-        ClaudeHookModule::Stop => {
-            remove_hook_commands(settings, &["Stop"], &CLAUDE_LEGACY_SCRIPTS)
-        }
+        ClaudeHookModule::Stop => remove_hook_commands(settings, &["Stop"], &CLAUDE_LEGACY_SCRIPTS),
         ClaudeHookModule::Failure => {
             remove_hook_commands(settings, &["StopFailure"], &CLAUDE_LEGACY_SCRIPTS)
         }
@@ -884,6 +892,18 @@ fn common_config_has_hooks(
                 "PostToolUse",
                 "claude",
                 "AgentToolStop",
+            ) && registered_exact_command(
+                &settings,
+                Some(exe),
+                "PreToolUse",
+                "claude",
+                "ToolStart",
+            ) && registered_exact_command(
+                &settings,
+                Some(exe),
+                "PostToolUse",
+                "claude",
+                "ToolStop",
             ))
         }
         CommonConfigTool::Codex => Ok(toml_features_hooks_enabled(raw)),
@@ -1085,10 +1105,7 @@ fn hook_status_has_hooks(status: &ToolHookSettingsStatus) -> bool {
         || status.hooks_feature_installed
 }
 
-fn tool_status_is_fully_installed(
-    status: &ToolHookSettingsStatus,
-    tool: CommonConfigTool,
-) -> bool {
+fn tool_status_is_fully_installed(status: &ToolHookSettingsStatus, tool: CommonConfigTool) -> bool {
     match tool {
         CommonConfigTool::Claude => {
             status.session_start_hook_installed
@@ -1249,10 +1266,7 @@ fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     write_json(&settings_path, &settings)
 }
 
-fn install_claude_hook_module(
-    claude_dir: &Path,
-    module: ClaudeHookModule,
-) -> Result<(), String> {
+fn install_claude_hook_module(claude_dir: &Path, module: ClaudeHookModule) -> Result<(), String> {
     let exe = hook_exe_for_dir(claude_dir)?;
     let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let mut settings = read_json(&settings_path)?;
@@ -1286,10 +1300,7 @@ fn uninstall_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     write_json(&settings_path, &settings)
 }
 
-fn uninstall_claude_hook_module(
-    claude_dir: &Path,
-    module: ClaudeHookModule,
-) -> Result<(), String> {
+fn uninstall_claude_hook_module(claude_dir: &Path, module: ClaudeHookModule) -> Result<(), String> {
     cleanup_legacy_scripts(&claude_dir.join("hooks"), &CLAUDE_LEGACY_SCRIPTS);
     let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let mut settings = read_json(&settings_path)?;
@@ -1802,10 +1813,7 @@ fn uninstall_codex_hooks(codex_dir: &Path) -> Result<(), String> {
     write_json(&hooks_path, &settings)
 }
 
-fn uninstall_codex_hook_module(
-    codex_dir: &Path,
-    module: CodexHookModule,
-) -> Result<(), String> {
+fn uninstall_codex_hook_module(codex_dir: &Path, module: CodexHookModule) -> Result<(), String> {
     if matches!(module, CodexHookModule::HooksFeature) {
         return disable_codex_hooks_feature(codex_dir);
     }
@@ -1947,6 +1955,20 @@ fn build_claude_status(claude_dir: Option<PathBuf>) -> Result<ToolHookSettingsSt
                 "PostToolUse",
                 "claude",
                 "AgentToolStop",
+            )
+            && registered_exact_command(
+                &settings,
+                exe.as_deref(),
+                "PreToolUse",
+                "claude",
+                "ToolStart",
+            )
+            && registered_exact_command(
+                &settings,
+                exe.as_deref(),
+                "PostToolUse",
+                "claude",
+                "ToolStop",
             ),
         subagent_start_hook_required: true,
         hooks_feature_installed: true,
@@ -2423,6 +2445,8 @@ mod tests {
         assert!(after_install.contains("PostToolUse"));
         assert!(after_install.contains("--event AgentToolStart"));
         assert!(after_install.contains("--event AgentToolStop"));
+        assert!(after_install.contains("--event ToolStart"));
+        assert!(after_install.contains("--event ToolStop"));
 
         uninstall_claude_hooks(&claude_dir).unwrap();
         let after_uninstall =
@@ -2431,6 +2455,8 @@ mod tests {
         assert!(!after_uninstall.contains("--event SubagentStop"));
         assert!(!after_uninstall.contains("--event AgentToolStart"));
         assert!(!after_uninstall.contains("--event AgentToolStop"));
+        assert!(!after_uninstall.contains("--event ToolStart"));
+        assert!(!after_uninstall.contains("--event ToolStop"));
     }
 
     #[tokio::test]

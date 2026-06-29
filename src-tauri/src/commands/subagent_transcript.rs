@@ -209,7 +209,10 @@ fn trimmed(value: Option<String>) -> Option<String> {
 }
 
 fn trimmed_str(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 fn is_linux_absolute_path(path: &str) -> bool {
@@ -439,8 +442,7 @@ fn list_wsl_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf
         Err(err) => {
             warn!(
                 "[subagent_transcript:codex] wsl discover failed: root={} agentId={} error={err}",
-                root_str,
-                agent_id
+                root_str, agent_id
             );
             Vec::new()
         }

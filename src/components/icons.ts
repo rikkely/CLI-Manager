@@ -1,4 +1,5 @@
 export {
+  Activity,
   AlertTriangle,
   ArrowLeftRight,
   BarChart3,

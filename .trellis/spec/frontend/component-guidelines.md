@@ -79,6 +79,65 @@ const handleOpenProjectFiles = async (project: Project) => {
 
 **Tests**: Run `npx tsc --noEmit`; manually verify opening the right Files panel leaves the left project tree visible, while the left context-menu Browse Files action still opens a file tree with a working return button.
 
+### Convention: Optional-container Radix dialogs pick positioning by portal target
+
+**What**: A Radix `Dialog.Portal` that accepts an optional `container` must use container-relative `absolute inset-0` positioning only when a container is supplied. When the portal falls back to `document.body`, the overlay and content must use viewport-relative `fixed inset-0`.
+
+**Why**: `absolute inset-0` is correct inside a known `relative` panel such as the history detail pane. With the default body portal, the same classes can render only the overlay or place content in the wrong positioning context, which looks like a black screen.
+
+**Correct**:
+
+```tsx
+const portalContainer = container ?? undefined;
+const positionClass = container ? "absolute inset-0" : "fixed inset-0";
+
+<DialogPrimitive.Portal container={portalContainer}>
+  <DialogPrimitive.Overlay className={cn(positionClass, "bg-black/45")} />
+  <DialogPrimitive.Content className={cn(positionClass, "flex items-center justify-center")} />
+</DialogPrimitive.Portal>
+```
+
+**Wrong**:
+
+```tsx
+<DialogPrimitive.Portal container={container ?? undefined}>
+  <DialogPrimitive.Overlay className="absolute inset-0 bg-black/45" />
+  <DialogPrimitive.Content className="absolute inset-0" />
+</DialogPrimitive.Portal>
+```
+
+**Tests**: Run `npx tsc --noEmit` and `npm run build`; manually verify both a container-scoped caller and a default body-portal caller can open and close the dialog with visible content.
+
+### Convention: Hook-dependent fallback props use stable module constants
+
+**What**: If an optional array or object prop is used in a hook dependency list, do not default it to an inline literal in the function parameter list. Use a module-level constant instead.
+
+**Why**: Defaults such as `items = []` create a fresh array on every render. If an effect depends on that prop and calls `setState`, callers that omit the prop can trigger repeated effects and React's "Maximum update depth exceeded" error.
+
+**Correct**:
+
+```tsx
+const EMPTY_ITEMS: Item[] = [];
+
+function Panel({ items = EMPTY_ITEMS }: { items?: Item[] }) {
+  useEffect(() => {
+    setRows(buildRows(items));
+  }, [items]);
+}
+```
+
+**Wrong**:
+
+```tsx
+function Panel({ items = [] }: { items?: Item[] }) {
+  useEffect(() => {
+    setRows(buildRows(items));
+  }, [items]);
+}
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually verify a caller that omits the optional prop can open, close, and rerender the component without a React maximum-depth error.
+
 ### Convention: Markdown rendering goes through the shared MarkdownContent component
 
 **What**: Any UI that renders user/session/release Markdown must use `src/components/ui/MarkdownContent.tsx`. Do not import `react-markdown` directly from feature components.

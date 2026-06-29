@@ -52,6 +52,34 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
         .or_else(|| {
             tool_input.and_then(|value| first_string(value, &["tool_use_id", "toolUseId", "id"]))
         });
+    let tool_name = first_string(&hook_input, &["tool_name", "toolName", "name"])
+        .or_else(|| {
+            tool_input.and_then(|value| first_string(value, &["tool_name", "toolName", "name"]))
+        })
+        .or_else(|| {
+            tool_response.and_then(|value| first_string(value, &["tool_name", "toolName", "name"]))
+        });
+    if matches!(event, "ToolStart" | "ToolStop")
+        && tool_name
+            .as_deref()
+            .is_some_and(|name| matches!(name, "Agent" | "Task"))
+    {
+        return None;
+    }
+    let mcp_server = tool_name
+        .as_deref()
+        .and_then(extract_mcp_server)
+        .or_else(|| first_string(&hook_input, &["mcp_server", "mcpServer", "server"]))
+        .or_else(|| {
+            tool_input.and_then(|value| first_string(value, &["mcp_server", "mcpServer", "server"]))
+        })
+        .or_else(|| {
+            tool_response
+                .and_then(|value| first_string(value, &["mcp_server", "mcpServer", "server"]))
+        });
+    let skill_name = tool_input
+        .and_then(|value| first_string(value, &["skill", "skill_name", "skillName"]))
+        .or_else(|| first_string(&hook_input, &["skill", "skill_name", "skillName"]));
     let agent_type = first_string(&hook_input, &["agent_type"])
         .or_else(|| {
             tool_input.and_then(|value| {
@@ -110,6 +138,9 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "agentId": agent_id,
         "toolUseId": tool_use_id,
+        "toolName": tool_name,
+        "mcpServer": mcp_server,
+        "skillName": skill_name,
         "agentType": agent_type,
         "agentTranscriptPath": agent_transcript_path,
         "transcriptPath": transcript_path,
@@ -174,6 +205,12 @@ fn deep_first_string(value: &Value, keys: &[&str]) -> Option<String> {
     }
 }
 
+fn extract_mcp_server(value: &str) -> Option<String> {
+    let rest = value.strip_prefix("mcp__")?;
+    let (server, _) = rest.split_once("__")?;
+    non_empty_trimmed(server)
+}
+
 fn extract_reasoning_effort(hook_input: &Value) -> Option<String> {
     let candidates = [
         hook_input.get("effort").and_then(Value::as_str),
@@ -215,6 +252,8 @@ fn title_for(source: &str, event: &str) -> &'static str {
         (_, "SubagentStop") => "Claude Code subagent done",
         (_, "AgentToolStart") => "Claude Code Agent tool started",
         (_, "AgentToolStop") => "Claude Code Agent tool done",
+        (_, "ToolStart") => "Claude Code tool started",
+        (_, "ToolStop") => "Claude Code tool done",
         (_, _) => "Claude Code needs attention", // Notification
     }
 }
@@ -242,5 +281,14 @@ mod tests {
         });
 
         assert_eq!(extract_reasoning_effort(&input).as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn extract_mcp_server_reads_claude_tool_name() {
+        assert_eq!(
+            extract_mcp_server("mcp__exa__web_search_exa").as_deref(),
+            Some("exa")
+        );
+        assert_eq!(extract_mcp_server("Read"), None);
     }
 }

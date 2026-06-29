@@ -13,7 +13,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "../ui/dialog";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../ui/context-menu";
-import { ChevronRight, Copy, File, FileCode, Folder, FolderPlus, Pencil, RefreshCw, Search, Trash2, X } from "../icons";
+import { ChevronRight, Copy, EyeOff, File, FileCode, Folder, FolderPlus, Pencil, RefreshCw, Search, Trash2, X } from "../icons";
 import { TERM } from "../stats/termStatsUi";
 
 interface FileExplorerSidebarProps {
@@ -628,10 +628,17 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const [renamingAction, setRenamingAction] = useState<RenameAction | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [expandedAutoCollapseGroups, setExpandedAutoCollapseGroups] = useState<Set<string>>(new Set());
+  const [searchControlsVisible, setSearchControlsVisible] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setExpandedAutoCollapseGroups(new Set());
+    setSearchControlsVisible(false);
   }, [project?.id]);
+
+  useEffect(() => {
+    if (searchQuery.trim()) setSearchControlsVisible(true);
+  }, [searchQuery]);
 
   const hasSearchQuery = Boolean(searchQuery.trim());
   const visibleRows = hasSearchQuery && searchMode === "files" ? searchResults : tree;
@@ -785,6 +792,30 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const getDropTargetPath = useCallback((entry: ProjectFileEntry) => (
     entry.kind === "directory" ? entry.path : parentPath(entry.path)
   ), []);
+
+  const focusSearchInput = useCallback(() => {
+    window.requestAnimationFrame(() => searchInputRef.current?.focus());
+  }, []);
+
+  const revealSearchControls = useCallback(() => {
+    setSearchControlsVisible(true);
+    focusSearchInput();
+  }, [focusSearchInput]);
+
+  const toggleSearchControls = useCallback(() => {
+    if (searchControlsVisible) {
+      setSearchControlsVisible(false);
+      return;
+    }
+    revealSearchControls();
+  }, [revealSearchControls, searchControlsVisible]);
+
+  const handleSidebarKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f") return;
+    event.preventDefault();
+    event.stopPropagation();
+    revealSearchControls();
+  }, [revealSearchControls]);
 
   const handleFileKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>, entry: ProjectFileEntry) => {
     if (event.key === "F2" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
@@ -1040,6 +1071,8 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   };
 
   const closeLabel = mode === "panel" ? t("files.closePanel") : t("files.backToProjects");
+  const searchLabel = searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder");
+  const searchToggleLabel = searchControlsVisible ? t("files.hideSearch") : searchLabel;
   const panelStyle = mode === "panel"
     ? ({
         "--surface-container": TERM.card,
@@ -1058,7 +1091,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
     : undefined;
 
   return (
-    <div className="flex h-full min-h-0 flex-col" style={panelStyle}>
+    <div className="ui-file-explorer-sidebar flex h-full min-h-0 flex-col" style={panelStyle} onKeyDown={handleSidebarKeyDown}>
       <div className="shrink-0 border-b border-border px-2 py-2">
         <div className="mb-2 flex items-center gap-2">
           <Folder size={15} className="text-on-surface-variant" />
@@ -1066,6 +1099,15 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
             <div className="truncate text-xs font-semibold text-on-surface">{project.name}</div>
             <div className="truncate text-[10px] text-text-muted">{project.path}</div>
           </div>
+          <button
+            className="ui-icon-action"
+            title={searchToggleLabel}
+            aria-label={searchToggleLabel}
+            aria-pressed={searchControlsVisible}
+            onClick={toggleSearchControls}
+          >
+            {searchControlsVisible ? <EyeOff size={13} /> : <Search size={13} />}
+          </button>
           <button className="ui-icon-action" title={t("common.refresh")} aria-label={t("files.refreshList")} onClick={() => void refresh()}>
             <RefreshCw size={13} />
           </button>
@@ -1073,35 +1115,41 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
             <X size={14} />
           </button>
         </div>
-        <div className="flex items-center gap-1 rounded-md border border-border bg-surface-container-lowest px-2">
-          <Search size={13} className="text-text-muted" />
-          <input
-            className="min-w-0 flex-1 bg-transparent py-1.5 text-xs text-on-surface outline-none"
-            value={searchQuery}
-            aria-label={searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder")}
-            placeholder={searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder")}
-            onChange={(event) => void setSearchQuery(event.currentTarget.value)}
-          />
-        </div>
-        <div className="mt-1 grid grid-cols-2 rounded-md border border-border bg-surface-container-lowest p-0.5">
-          {SEARCH_MODES.map((mode) => {
-            const active = searchMode === mode.value;
-            return (
-              <button
-                key={mode.value}
-                type="button"
-                className={[
-                  "rounded px-2 py-1 text-[11px] transition-colors",
-                  active ? "bg-surface-container text-on-surface" : "text-text-muted hover:text-on-surface",
-                ].join(" ")}
-                aria-pressed={active}
-                onClick={() => setSearchMode(mode.value)}
-              >
-                {t(mode.labelKey)}
-              </button>
-            );
-          })}
-        </div>
+        {searchControlsVisible && (
+          <>
+            <div className="ui-file-search-input-shell flex items-center gap-1 rounded-md border border-border bg-surface-container-lowest px-2">
+              <Search size={13} className="text-text-muted" />
+              <input
+                ref={searchInputRef}
+                className="min-w-0 flex-1 bg-transparent py-1.5 text-xs text-on-surface outline-none"
+                value={searchQuery}
+                aria-label={searchLabel}
+                placeholder={searchLabel}
+                onChange={(event) => void setSearchQuery(event.currentTarget.value)}
+              />
+            </div>
+            <div className="ui-file-search-mode-tabs mt-1 grid grid-cols-2 rounded-md border border-border bg-surface-container-lowest p-0.5">
+              {SEARCH_MODES.map((mode) => {
+                const active = searchMode === mode.value;
+                return (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    className={[
+                      "ui-file-search-mode-option rounded px-2 py-1 text-[11px] transition-colors",
+                      active ? "text-on-surface" : "text-text-muted hover:text-on-surface",
+                    ].join(" ")}
+                    data-selected={active ? "true" : "false"}
+                    aria-pressed={active}
+                    onClick={() => setSearchMode(mode.value)}
+                  >
+                    {t(mode.labelKey)}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
         {clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
       </div>
       <ContextMenu>

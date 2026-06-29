@@ -1,4 +1,4 @@
-use git2::{Repository, StatusOptions};
+use git2::{build::CheckoutBuilder, DiffOptions, Repository, ResetType, StatusOptions};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{AppHandle, State};
@@ -120,6 +120,17 @@ pub struct GitFileChange {
     pub staged: bool,
     pub added: i32,
     pub deleted: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitWorktreeSnapshot {
+    pub project_path: String,
+    pub head: String,
+    pub branch: Option<String>,
+    pub dirty: bool,
+    pub patch: String,
+    pub files: Vec<GitFileChange>,
 }
 
 /// 获取指定路径的 Git 文件变更列表
@@ -456,6 +467,91 @@ fn normalize_path(p: &str) -> String {
     p.replace('\\', "/")
 }
 
+fn repo_head_oid(repo: &Repository) -> Result<String, String> {
+    let head = repo.head().map_err(|e| format!("head_failed: {e}"))?;
+    let oid = head.target().ok_or("head_target_missing")?;
+    Ok(oid.to_string())
+}
+
+fn repo_branch_name(repo: &Repository) -> Option<String> {
+    repo.head()
+        .ok()
+        .and_then(|head| head.shorthand().map(|value| value.to_string()))
+}
+
+fn collect_git_changes_from_repo(repo: &Repository) -> Result<Vec<GitFileChange>, String> {
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true);
+    opts.recurse_untracked_dirs(true);
+
+    let statuses = repo
+        .statuses(Some(&mut opts))
+        .map_err(|e| format!("status_failed: {e}"))?;
+    let skipped_line_stats = should_skip_diff_line_stats(statuses.len());
+    let stats = if skipped_line_stats {
+        std::collections::HashMap::new()
+    } else {
+        compute_diff_line_stats(repo)
+    };
+
+    let mut changes = Vec::new();
+    for entry in statuses.iter() {
+        let file_path = entry.path().unwrap_or("").to_string();
+        if file_path.is_empty() {
+            continue;
+        }
+        let (status_char, staged) = parse_git2_status(entry.status());
+        let (added, deleted) = stats
+            .get(&normalize_path(&file_path))
+            .copied()
+            .unwrap_or((0, 0));
+        changes.push(GitFileChange {
+            path: file_path,
+            status: status_char.to_string(),
+            staged,
+            added,
+            deleted,
+        });
+    }
+    Ok(changes)
+}
+
+fn build_worktree_patch(repo: &Repository) -> Result<String, String> {
+    let head_tree = repo
+        .head()
+        .and_then(|head| head.peel_to_tree())
+        .map_err(|e| format!("head_tree_failed: {e}"))?;
+
+    let mut diff_opts = DiffOptions::new();
+    diff_opts
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true)
+        .show_binary(true)
+        .context_lines(3);
+
+    let diff = repo
+        .diff_tree_to_workdir_with_index(Some(&head_tree), Some(&mut diff_opts))
+        .map_err(|e| format!("snapshot_diff_failed: {e}"))?;
+    format_diff_to_text_allow_empty(diff)
+}
+
+fn build_worktree_snapshot(
+    project_path: &str,
+    repo: &Repository,
+) -> Result<GitWorktreeSnapshot, String> {
+    let patch = build_worktree_patch(repo)?;
+    let files = collect_git_changes_from_repo(repo)?;
+    Ok(GitWorktreeSnapshot {
+        project_path: project_path.to_string(),
+        head: repo_head_oid(repo)?,
+        branch: repo_branch_name(repo),
+        dirty: !patch.trim().is_empty() || !files.is_empty(),
+        patch,
+        files,
+    })
+}
+
 fn should_skip_diff_line_stats(status_count: usize) -> bool {
     status_count > GIT_DIFF_LINE_STATS_STATUS_LIMIT
 }
@@ -692,7 +788,219 @@ pub async fn git_get_file_diff(
     .map_err(|e| format!("任务失败: {}", e))?
 }
 
+#[tauri::command]
+pub async fn git_get_worktree_snapshot(
+    project_path: String,
+) -> Result<GitWorktreeSnapshot, String> {
+    log::info!("[git_get_worktree_snapshot] project_path: {}", project_path);
+
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&project_path);
+        if !crate::wsl::is_wsl_config_dir(&project_path) && !path.exists() {
+            return Err("path_not_found".to_string());
+        }
+        let repo = open_git_repo(path).map_err(|e| format!("open_repo_failed: {e}"))?;
+        build_worktree_snapshot(&project_path, &repo)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+fn remove_untracked_snapshot_file(workdir: &Path, relative_path: &str) -> Result<(), String> {
+    validate_repo_relative_path(relative_path)?;
+    let full_path = workdir.join(relative_path);
+    if !full_path.exists() {
+        return Ok(());
+    }
+
+    let canon_root = workdir
+        .canonicalize()
+        .map_err(|e| format!("root_canonicalize_failed: {e}"))?;
+    let canon_target = full_path
+        .canonicalize()
+        .map_err(|e| format!("target_canonicalize_failed: {e}"))?;
+    if !canon_target.starts_with(&canon_root) {
+        return Err("path_outside_root".to_string());
+    }
+
+    let metadata =
+        std::fs::symlink_metadata(&full_path).map_err(|e| format!("metadata_failed: {e}"))?;
+    if metadata.is_dir() {
+        return Err("untracked_directory_not_supported".to_string());
+    }
+    std::fs::remove_file(&full_path).map_err(|e| format!("remove_untracked_failed: {e}"))?;
+
+    let mut parent = full_path.parent();
+    while let Some(dir) = parent {
+        if dir == workdir {
+            break;
+        }
+        match std::fs::remove_dir(dir) {
+            Ok(()) => parent = dir.parent(),
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+fn validate_snapshot_branch_name(branch_name: &str) -> Result<(), String> {
+    let trimmed = branch_name.trim();
+    if trimmed.is_empty() {
+        return Err("branch_name_empty".to_string());
+    }
+    if trimmed != branch_name || trimmed.contains("..") || trimmed.starts_with('/') {
+        return Err("branch_name_invalid".to_string());
+    }
+    if trimmed.ends_with('/') || trimmed.ends_with(".lock") {
+        return Err("branch_name_invalid".to_string());
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+    {
+        return Err("branch_name_invalid".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_restore_worktree_snapshot(
+    project_path: String,
+    target_patch: String,
+    expected_current_patch: String,
+    target_head: String,
+) -> Result<GitWorktreeSnapshot, String> {
+    log::info!(
+        "[git_restore_worktree_snapshot] project_path: {}, target_patch_bytes: {}, expected_patch_bytes: {}",
+        project_path,
+        target_patch.len(),
+        expected_current_patch.len()
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&project_path);
+        if !crate::wsl::is_wsl_config_dir(&project_path) && !path.exists() {
+            return Err("path_not_found".to_string());
+        }
+        let repo = open_git_repo(path).map_err(|e| format!("open_repo_failed: {e}"))?;
+        let current_head = repo_head_oid(&repo)?;
+        if !target_head.trim().is_empty() && current_head != target_head {
+            return Err("head_mismatch".to_string());
+        }
+
+        let current_patch = build_worktree_patch(&repo)?;
+        if current_patch != expected_current_patch {
+            return Err("worktree_changed_since_snapshot".to_string());
+        }
+
+        let current_changes = collect_git_changes_from_repo(&repo)?;
+        let head = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .map_err(|e| format!("head_failed: {e}"))?;
+        repo.reset(head.as_object(), ResetType::Hard, None)
+            .map_err(|e| format!("reset_failed: {e}"))?;
+
+        if let Some(workdir) = repo.workdir() {
+            for change in current_changes
+                .iter()
+                .filter(|item| item.status == "U" || item.status == "??")
+            {
+                remove_untracked_snapshot_file(workdir, &change.path)?;
+            }
+        }
+
+        if !target_patch.trim().is_empty() {
+            apply_patch_to_repo(&repo, &target_patch)?;
+        }
+
+        build_worktree_snapshot(&project_path, &repo)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_fork_worktree_snapshot(
+    project_path: String,
+    target_patch: String,
+    expected_current_patch: String,
+    target_head: String,
+    branch_name: String,
+) -> Result<GitWorktreeSnapshot, String> {
+    log::info!(
+        "[git_fork_worktree_snapshot] project_path: {}, branch: {}, target_patch_bytes: {}, expected_patch_bytes: {}",
+        project_path,
+        branch_name,
+        target_patch.len(),
+        expected_current_patch.len()
+    );
+
+    validate_snapshot_branch_name(&branch_name)?;
+
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&project_path);
+        if !crate::wsl::is_wsl_config_dir(&project_path) && !path.exists() {
+            return Err("path_not_found".to_string());
+        }
+        let repo = open_git_repo(path).map_err(|e| format!("open_repo_failed: {e}"))?;
+        let current_head = repo_head_oid(&repo)?;
+        if !target_head.trim().is_empty() && current_head != target_head {
+            return Err("head_mismatch".to_string());
+        }
+
+        let current_patch = build_worktree_patch(&repo)?;
+        if current_patch != expected_current_patch {
+            return Err("worktree_changed_since_snapshot".to_string());
+        }
+
+        let current_changes = collect_git_changes_from_repo(&repo)?;
+        let head = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .map_err(|e| format!("head_failed: {e}"))?;
+        repo.branch(&branch_name, &head, false)
+            .map_err(|e| format!("branch_create_failed: {e}"))?;
+        repo.set_head(&format!("refs/heads/{branch_name}"))
+            .map_err(|e| format!("set_head_failed: {e}"))?;
+        repo.checkout_head(Some(CheckoutBuilder::new().force()))
+            .map_err(|e| format!("checkout_failed: {e}"))?;
+        repo.reset(head.as_object(), ResetType::Hard, None)
+            .map_err(|e| format!("reset_failed: {e}"))?;
+
+        if let Some(workdir) = repo.workdir() {
+            for change in current_changes
+                .iter()
+                .filter(|item| item.status == "U" || item.status == "??")
+            {
+                remove_untracked_snapshot_file(workdir, &change.path)?;
+            }
+        }
+
+        if !target_patch.trim().is_empty() {
+            apply_patch_to_repo(&repo, &target_patch)?;
+        }
+
+        build_worktree_snapshot(&project_path, &repo)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
 fn format_diff_to_text(diff: git2::Diff, file_path: &str) -> Result<String, String> {
+    let patch_text = format_diff_to_text_allow_empty(diff)?;
+    if patch_text.is_empty() {
+        return Err(format!("文件 {} 无变更", file_path));
+    }
+
+    log::info!(
+        "[git_get_file_diff] diff 生成成功，长度: {}",
+        patch_text.len()
+    );
+    Ok(patch_text)
+}
+
+fn format_diff_to_text_allow_empty(diff: git2::Diff) -> Result<String, String> {
     let mut patch_text = String::new();
 
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
@@ -707,14 +1015,6 @@ fn format_diff_to_text(diff: git2::Diff, file_path: &str) -> Result<String, Stri
     })
     .map_err(|e| format!("打印 diff 失败: {}", e))?;
 
-    if patch_text.is_empty() {
-        return Err(format!("文件 {} 无变更", file_path));
-    }
-
-    log::info!(
-        "[git_get_file_diff] diff 生成成功，长度: {}",
-        patch_text.len()
-    );
     Ok(patch_text)
 }
 
@@ -923,13 +1223,7 @@ fn build_reverse_hunk_patch(diff_text: &str, hunk_index: usize) -> Result<String
 
 /// 把反向 patch 应用到工作区：解析 → dry-run 校验 → 正式 apply。
 /// dry-run 防止 stale diff 错位应用损坏工作区；失败返回稳定错误串。
-fn apply_patch_to_workdir(project_path: &str, reverse_patch: &str) -> Result<(), String> {
-    let path = Path::new(project_path);
-    if !path.exists() {
-        return Err("path_not_found".to_string());
-    }
-    let repo = Repository::open(path).map_err(|e| format!("open_repo_failed: {e}"))?;
-
+fn apply_patch_to_repo(repo: &Repository, reverse_patch: &str) -> Result<(), String> {
     let diff = git2::Diff::from_buffer(reverse_patch.as_bytes())
         .map_err(|e| format!("parse_patch_failed: {e}"))?;
 
@@ -944,6 +1238,15 @@ fn apply_patch_to_workdir(project_path: &str, reverse_patch: &str) -> Result<(),
         .map_err(|e| format!("apply_failed: {e}"))?;
 
     Ok(())
+}
+
+fn apply_patch_to_workdir(project_path: &str, reverse_patch: &str) -> Result<(), String> {
+    let path = Path::new(project_path);
+    if !crate::wsl::is_wsl_config_dir(project_path) && !path.exists() {
+        return Err("path_not_found".to_string());
+    }
+    let repo = open_git_repo(path).map_err(|e| format!("open_repo_failed: {e}"))?;
+    apply_patch_to_repo(&repo, reverse_patch)
 }
 
 /// 回滚 diff 中的单个 hunk（Hunk 级回滚入口）。
@@ -1782,10 +2085,54 @@ pub async fn git_watch_stop(bridge: State<'_, GitWatcherBridge>) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::{
-        build_reverse_hunk_patch, build_reverse_lines_patch, parse_wsl_git_status,
-        parse_wsl_numstat, should_skip_diff_line_stats, validate_repo_relative_path,
+        build_reverse_hunk_patch, build_reverse_lines_patch, build_worktree_snapshot,
+        git_fork_worktree_snapshot, git_restore_worktree_snapshot, parse_wsl_git_status,
+        parse_wsl_numstat, remove_untracked_snapshot_file, should_skip_diff_line_stats,
+        validate_repo_relative_path, validate_snapshot_branch_name,
         GIT_DIFF_LINE_STATS_STATUS_LIMIT,
     };
+    use git2::{IndexAddOption, Repository, Signature};
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn init_temp_repo() -> (TempDir, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(temp.path()).unwrap();
+        fs::write(temp.path().join("tracked.txt"), "base\n").unwrap();
+
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["tracked.txt"], IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = Signature::now("CLI Manager", "cli-manager@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+
+        let path = temp.path().to_string_lossy().to_string();
+        (temp, path)
+    }
+
+    fn snapshot_patch(repo_path: &str) -> (String, String) {
+        let repo = Repository::open(repo_path).unwrap();
+        let snapshot = build_worktree_snapshot(repo_path, &repo).unwrap();
+        (snapshot.head, snapshot.patch)
+    }
+
+    fn tracked_file(repo_path: &str) -> String {
+        fs::read_to_string(Path::new(repo_path).join("tracked.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+    }
+
+    fn current_branch(repo_path: &str) -> String {
+        let repo = Repository::open(repo_path).unwrap();
+        let head = repo.head().unwrap();
+        head.shorthand().unwrap().to_string()
+    }
 
     #[test]
     fn accepts_normal_relative_path() {
@@ -1879,6 +2226,118 @@ mod tests {
     #[test]
     fn rejects_empty() {
         assert_eq!(validate_repo_relative_path("").unwrap_err(), "empty_path");
+    }
+
+    #[test]
+    fn remove_untracked_snapshot_file_rejects_path_escape() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            remove_untracked_snapshot_file(temp.path(), "../outside.txt").unwrap_err(),
+            "path_escape"
+        );
+    }
+
+    #[test]
+    fn remove_untracked_snapshot_file_removes_file_inside_workdir() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("tmp").join("note.txt");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(&nested, "draft").unwrap();
+
+        remove_untracked_snapshot_file(temp.path(), "tmp/note.txt").unwrap();
+
+        assert!(!nested.exists());
+        assert!(!temp.path().join("tmp").exists());
+    }
+
+    #[test]
+    fn validate_snapshot_branch_name_rejects_invalid_names() {
+        assert!(validate_snapshot_branch_name("replay/test").is_ok());
+        assert_eq!(
+            validate_snapshot_branch_name("../main").unwrap_err(),
+            "branch_name_invalid"
+        );
+        assert_eq!(
+            validate_snapshot_branch_name("bad branch").unwrap_err(),
+            "branch_name_invalid"
+        );
+        assert_eq!(
+            validate_snapshot_branch_name("").unwrap_err(),
+            "branch_name_empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_worktree_snapshot_rejects_head_mismatch() {
+        let (_temp, repo_path) = init_temp_repo();
+        fs::write(Path::new(&repo_path).join("tracked.txt"), "target\n").unwrap();
+        let (_head, patch) = snapshot_patch(&repo_path);
+
+        let err = git_restore_worktree_snapshot(
+            repo_path,
+            patch.clone(),
+            patch,
+            "0000000000000000000000000000000000000000".to_string(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err, "head_mismatch");
+    }
+
+    #[tokio::test]
+    async fn restore_worktree_snapshot_rejects_changed_worktree() {
+        let (_temp, repo_path) = init_temp_repo();
+        let file = Path::new(&repo_path).join("tracked.txt");
+        fs::write(&file, "target\n").unwrap();
+        let (head, target_patch) = snapshot_patch(&repo_path);
+        fs::write(&file, "current\n").unwrap();
+
+        let err =
+            git_restore_worktree_snapshot(repo_path, target_patch.clone(), target_patch, head)
+                .await
+                .unwrap_err();
+
+        assert_eq!(err, "worktree_changed_since_snapshot");
+    }
+
+    #[tokio::test]
+    async fn restore_worktree_snapshot_restores_target_patch() {
+        let (_temp, repo_path) = init_temp_repo();
+        let file = Path::new(&repo_path).join("tracked.txt");
+        fs::write(&file, "target\n").unwrap();
+        let (head, target_patch) = snapshot_patch(&repo_path);
+        fs::write(&file, "current\n").unwrap();
+        let (_current_head, current_patch) = snapshot_patch(&repo_path);
+
+        git_restore_worktree_snapshot(repo_path.clone(), target_patch, current_patch, head)
+            .await
+            .unwrap();
+
+        assert_eq!(tracked_file(&repo_path), "target\n");
+    }
+
+    #[tokio::test]
+    async fn fork_worktree_snapshot_creates_branch_and_restores_target_patch() {
+        let (_temp, repo_path) = init_temp_repo();
+        let file = Path::new(&repo_path).join("tracked.txt");
+        fs::write(&file, "target\n").unwrap();
+        let (head, target_patch) = snapshot_patch(&repo_path);
+        fs::write(&file, "current\n").unwrap();
+        let (_current_head, current_patch) = snapshot_patch(&repo_path);
+
+        git_fork_worktree_snapshot(
+            repo_path.clone(),
+            target_patch,
+            current_patch,
+            head,
+            "replay/test-fork".to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(current_branch(&repo_path), "replay/test-fork");
+        assert_eq!(tracked_file(&repo_path), "target\n");
     }
 
     const SAMPLE_DIFF: &str = "\
