@@ -843,3 +843,36 @@ invoke("pty_write", { sessionId, data });
 - [ ] Claude Code multi-line paste preserves line order and is not submitted line-by-line.
 - [ ] CMD still accepts normal paste and Enter behavior.
 
+### Common Mistake: Letting xterm sync updates clear the screen while the user is reading scrollback
+
+**Symptom**: During Codex / Claude Code / Copilot-style TUI streaming, scrolling upward to inspect older output becomes impossible, or a later resize causes the current screen to be replayed into scrollback.
+
+**Cause**: Modern TUIs can wrap redraw bursts in `DECSET/DECRST 2026` sync-update blocks and emit `CSI 2 J` / `CSI 3 J` clears inside those bursts. In `@xterm/xterm` 6.x on embedded terminals, those clears can yank the viewport back to the live screen or amplify resize redraws, especially on Windows ConPTY.
+
+**Fix**: Keep the workaround in the frontend xterm stream path, not in the Rust PTY backend. Track whether the user has scrolled away from bottom, detect `\x1b[?2026h` / `\x1b[?2026l`, and while a sync-update block is active drop `CSI 2 J` / `CSI 3 J` only when preserving scrollback matters. Also defer opportunistic `fit()` calls until the sync-update block ends.
+
+**Correct**:
+
+```tsx
+if (
+  syncUpdateDepthRef.current > 0
+  && shouldPreserveViewportDuringSync()
+  && (sequence === "\x1b[2J" || sequence === "\x1b[3J")
+) {
+  continue;
+}
+```
+
+**Wrong**:
+
+```tsx
+// Do not globally strip screen-clearing sequences for every terminal frame.
+text = text.replace(/\x1b\[[23]J/g, "");
+```
+
+**Prevention**:
+
+- [ ] When terminal scrollback breaks only during agent/TUI streaming, inspect sync-update and clear-screen sequences before changing PTY/backend logic.
+- [ ] Scope clear-screen filtering to the "user is reading history" case; do not degrade normal at-bottom TUI redraw fidelity.
+- [ ] If resize is noisy during TUI streaming, prefer deferring `fit()` rather than rebuilding the terminal or forcing outer-container scroll resets.
+
