@@ -1299,7 +1299,6 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           symbolSize: 5,
           itemStyle: { color: USAGE_TREND_COLORS.total },
           lineStyle: { width: 3, color: USAGE_TREND_COLORS.total },
-          areaStyle: { color: `color-mix(in srgb, ${USAGE_TREND_COLORS.total} 16%, transparent)` },
           data: items.map((item) =>
             peak?.date === item.date
               ? { value: item.totalTokens, symbolSize: 12, itemStyle: { color: PEAK, borderColor: "var(--bg-secondary)", borderWidth: 2 } }

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3, Coins, Database, Folder, Layers, LineChart, RefreshCw, X } from "lucide-react";
 import {
-  Area,
   Bar,
   BarChart,
   CartesianGrid,
@@ -661,7 +660,7 @@ function DailyUsageTrendChart({
                 content={(props) => <DailyUsageTrendTooltip {...props} language={language} costLabel={costLabel} />}
               />
               <Legend wrapperStyle={{ color: "var(--text-secondary)", fontSize: 11 }} />
-              <Area yAxisId="tokens" type="monotone" dataKey="totalTokens" name={t("stats.trend.totalToken")} stroke={HISTORY_TREND_COLORS.total} fill={HISTORY_TREND_COLORS.total} fillOpacity={0.14} strokeWidth={3} dot={{ r: 2.5 }} activeDot={{ r: 5, fill: PEAK }} />
+              <Line yAxisId="tokens" type="monotone" dataKey="totalTokens" name={t("stats.trend.totalToken")} stroke={HISTORY_TREND_COLORS.total} strokeWidth={3} dot={{ r: 2.5 }} activeDot={{ r: 5, fill: PEAK }} />
               <Line yAxisId="tokens" type="monotone" dataKey="input_tokens" name={t("termStats.input")} stroke={HISTORY_TREND_COLORS.input} strokeWidth={1.8} dot={false} />
               <Line yAxisId="tokens" type="monotone" dataKey="output_tokens" name={t("termStats.output")} stroke={HISTORY_TREND_COLORS.output} strokeWidth={1.8} strokeDasharray="6 4" dot={false} />
               <Line yAxisId="tokens" type="monotone" dataKey="cache_creation_tokens" name={t("termStats.cacheWrite")} stroke={HISTORY_TREND_COLORS.cacheCreation} strokeWidth={1.8} strokeDasharray="3 3" dot={false} />
