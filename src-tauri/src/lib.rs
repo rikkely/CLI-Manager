@@ -249,11 +249,13 @@ pub fn run() {
             }
             LogBuilder::new()
                 .level(log_level)
+                .level_for("sqlx", LevelFilter::Info)
                 .timezone_strategy(TimezoneStrategy::UseLocal)
                 .targets(targets)
                 .build()
         })
         .setup(move |app| {
+            // 保留应用自身调试日志，但压掉 sqlx 的逐条 SQL 输出。
             log::set_max_level(log_level);
             app.manage(claude_hook::ClaudeHookBridge::start(app.handle().clone()));
             // 注入 appLocalData 目录用于历史索引磁盘缓存（加速冷启动加载）。
@@ -330,6 +332,7 @@ pub fn run() {
             commands::terminal::pty_create,
             commands::terminal::pty_write,
             commands::terminal::pty_resize,
+            commands::terminal::pty_resize_and_wait,
             commands::terminal::pty_close,
             commands::terminal::pty_close_all,
             commands::terminal::pty_status,
