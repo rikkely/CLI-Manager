@@ -12,10 +12,10 @@ Show all Token trend points in the realtime statistics Token trend card instead 
 
 ## Acceptance Criteria
 
-* [ ] `TrendCard` uses every valid token trend point from `session.usage.token_trend`.
-* [ ] Message-level fallback trend also uses every valid point when backend trend data is unavailable.
-* [ ] The displayed trend point count reflects the full plotted point count.
-* [ ] Frontend type checking passes.
+* [x] `TrendCard` uses every valid token trend point from `session.usage.token_trend`.
+* [x] Message-level fallback trend also uses every valid point when backend trend data is unavailable.
+* [x] The displayed trend point count reflects the full plotted point count.
+* [x] Frontend type checking passes.
 
 ## Definition of Done
 

@@ -531,7 +531,7 @@ export function Sparkline({
   const areaPath = `${linePath} L100,100 L0,100 Z`;
   const [lastX, lastY] = coords[coords.length - 1];
 
-  // hover 命中：用容器像素宽换算最近点索引（点数 ≤ 40，离散定位即可）
+  // hover 命中：用容器像素宽换算最近点索引
   const safeIndex =
     hoverIndex !== null && hoverIndex >= 0 && hoverIndex < coords.length ? hoverIndex : -1;
   const active = safeIndex >= 0;

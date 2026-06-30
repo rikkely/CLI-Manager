@@ -178,8 +178,6 @@ export function ModelContextCard({
   );
 }
 
-const TREND_POINT_LIMIT = 40;
-
 export function TrendCard({ session }: { session: HistorySessionDetail | null }) {
   const { t } = useI18n();
   const trend: SparkPoint[] = [];
@@ -211,10 +209,10 @@ export function TrendCard({ session }: { session: HistorySessionDetail | null })
       }
     }
   }
-  const recent = trend.slice(-TREND_POINT_LIMIT);
-  const values = recent.map((p) => p.total);
+  const chartPoints = trend;
+  const values = chartPoints.map((p) => p.total);
   const peakTokens = values.length > 0 ? Math.max(...values) : 0;
-  const hasTrend = recent.length >= 2;
+  const hasTrend = chartPoints.length >= 2;
   // 未绑定空态（session 为 null）补骨架占位，使高度与有数据时一致；
   // 非空会话维持原生行为，历史会话面板不受影响
   const isEmpty = !session;
@@ -226,20 +224,20 @@ export function TrendCard({ session }: { session: HistorySessionDetail | null })
       title={t("termStats.tokenTrend")}
       headerRight={
         hasTrend ? (
-          <HeaderPill color={TERM_PANEL.cyan}>{t("termStats.trendPointCount", { count: recent.length })}</HeaderPill>
+          <HeaderPill color={TERM_PANEL.cyan}>{t("termStats.trendPointCount", { count: chartPoints.length })}</HeaderPill>
         ) : isEmpty ? (
           <HeaderPill color={TERM_PANEL.cyan}>—</HeaderPill>
         ) : undefined
       }
     >
       {hasTrend ? (
-        <Sparkline points={values} details={recent} color={TERM_PANEL.cyan} height={40} />
+        <Sparkline points={values} details={chartPoints} color={TERM_PANEL.cyan} height={40} />
       ) : (
         <div
           className="flex items-center justify-center rounded-md text-[10px]"
           style={{ height: 40, color: TERM_PANEL.dim, backgroundColor: TERM_PANEL.cardInner }}
         >
-          {recent.length === 1
+          {chartPoints.length === 1
             ? t("termStats.singleTrendPoint", { tokens: formatCompactCount(peakTokens) })
             : t("termStats.noTrendData")}
         </div>
