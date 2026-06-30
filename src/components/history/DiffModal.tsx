@@ -59,8 +59,8 @@ function renderHighlightedPatch(patch: string): ReactNode {
 
 const FallbackDiffViewer = memo(function FallbackDiffViewer({ patch }: { patch: string }) {
   return (
-    <div className="mt-2 rounded-md border border-border bg-bg-secondary overflow-x-scroll overflow-y-hidden max-w-full diff-code-scroll">
-      <pre className="text-xs whitespace-pre m-0 p-2 min-w-max font-mono leading-5 diff-code-inner text-text-primary">
+    <div className="mt-2 max-w-full rounded-md border border-border bg-bg-secondary overflow-x-auto overflow-y-hidden diff-code-scroll">
+      <pre className="m-0 min-w-max p-2 font-mono text-xs leading-5 text-text-primary diff-code-inner">
         {renderHighlightedPatch(patch)}
       </pre>
     </div>
@@ -105,7 +105,7 @@ function DiffBlockViewer({ block }: { block: DiffRenderBlock }) {
         <span className="rounded bg-danger/10 px-1.5 py-0.5 text-danger">-{changes.deletions}</span>
       </div>
       {files.map((file, index) => (
-        <div key={`${file.oldPath ?? "old"}-${file.newPath ?? "new"}-${index}`} className="history-diff-viewer rounded-md border border-border overflow-x-auto diff-code-scroll">
+        <div key={`${file.oldPath ?? "old"}-${file.newPath ?? "new"}-${index}`} className="history-diff-viewer max-w-full rounded-md border border-border overflow-x-auto overflow-y-hidden diff-code-scroll">
           <Diff
             viewType="split"
             diffType={file.type}

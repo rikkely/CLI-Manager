@@ -1,4 +1,4 @@
-import { Activity, CalendarClock, Coins, Cpu, FileCode2, Wrench } from "lucide-react";
+import { Activity, CalendarClock, Coins, Cpu, FileCode2, GitCompareArrows, Wrench } from "lucide-react";
 import type { HistoryFileChangeSummary, HistorySessionDetail, HistoryToolCount } from "../../lib/types";
 import { VendorIcon, inferVendor } from "../VendorIcon";
 import { resolveContextLimit } from "../../lib/modelPricing";
@@ -413,10 +413,12 @@ export function LatestChangesCard({
                 <button
                   type="button"
                   onClick={() => onOpenDiff(fileChange)}
-                  className="shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold"
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors"
                   style={{ color: TERM_PANEL.cyan, backgroundColor: "color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 12%, transparent)" }}
+                  title={t("termStats.latestChangesViewDiff")}
+                  aria-label={t("termStats.latestChangesViewDiff")}
                 >
-                  {t("termStats.latestChangesViewDiff")}
+                  <GitCompareArrows size={14} strokeWidth={1.8} />
                 </button>
               </div>
             ))}
