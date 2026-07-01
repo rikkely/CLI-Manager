@@ -14,38 +14,46 @@ export const SERIES_COLORS = {
 } as const;
 
 export const USAGE_SERIES_COLORS = {
-  input: "#34d399",
-  output: "#fb7185",
-  cacheCreation: "#facc15",
-  cacheRead: "#a78bfa",
+  input: "#33B1FF",
+  output: "#FF8389",
+  cacheCreation: "#F1C21B",
+  cacheRead: "#08BDBA",
 } as const;
 
 export const USAGE_TREND_COLORS = {
-  total: "#60a5fa",
+  total: "#78A9FF",
   ...USAGE_SERIES_COLORS,
 } as const;
 
 export const HISTORY_SERIES_COLORS = USAGE_SERIES_COLORS;
 export const HISTORY_TREND_COLORS = USAGE_TREND_COLORS;
 
-// 主趋势线、排行主条等使用的主色；峰值/选中用暖色点缀。
-export const ACCENT = "var(--accent)";
-export const PEAK = "var(--warning)";
+export const HISTORY_HEATMAP_COLORS = {
+  empty: "var(--bg-tertiary)",
+  level1: "#003A6D",
+  level2: "#0072C3",
+  level3: "#33B1FF",
+  level4: "#78A9FF",
+} as const;
+
+// 主趋势线、排行主条等使用冷蓝；峰值/选中用少量暖色点缀。
+export const ACCENT = "#33B1FF";
+export const PEAK = "#F1C21B";
 
 // 费用等辅助量：保留暖色识别度，避免浅色主题下透明混色看成灰色。
-export const COST_COLOR = "#f59e0b";
+export const COST_COLOR = "#FF832B";
 
 export const RECHARTS_AXIS_CURSOR = {
-  stroke: "color-mix(in srgb, var(--accent) 36%, transparent)",
+  stroke: "color-mix(in srgb, #33B1FF 36%, transparent)",
   strokeWidth: 1,
 } as const;
 
 export const RECHARTS_BAR_CURSOR = {
-  fill: "color-mix(in srgb, var(--accent) 10%, transparent)",
+  fill: "color-mix(in srgb, #33B1FF 10%, transparent)",
 } as const;
 
-export const ECHARTS_AXIS_SHADOW = "color-mix(in srgb, var(--accent) 10%, transparent)";
-export const ECHARTS_AXIS_LINE = "color-mix(in srgb, var(--accent) 36%, transparent)";
+export const ECHARTS_AXIS_SHADOW = "color-mix(in srgb, #33B1FF 10%, transparent)";
+export const ECHARTS_AXIS_LINE = "color-mix(in srgb, #33B1FF 36%, transparent)";
 
 export const RECHARTS_TOOLTIP_WRAPPER_STYLE = {
   outline: "none",

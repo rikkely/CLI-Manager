@@ -3,6 +3,8 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Scatter, Scatt
 import type { HistoryStatsHeatmapDay } from "../../lib/types";
 import { useI18n, type AppLanguage } from "../../lib/i18n";
 import {
+  ACCENT,
+  HISTORY_HEATMAP_COLORS,
   RECHARTS_BAR_CURSOR,
   RECHARTS_TOOLTIP_ITEM_STYLE,
   RECHARTS_TOOLTIP_LABEL_STYLE,
@@ -64,11 +66,11 @@ function formatCount(value: number, language: AppLanguage): string {
 }
 
 function cellColor(level: number): string {
-  if (level <= 0) return "var(--bg-tertiary)";
-  if (level === 1) return "color-mix(in srgb, var(--accent) 24%, var(--bg-tertiary))";
-  if (level === 2) return "color-mix(in srgb, var(--accent) 42%, var(--bg-tertiary))";
-  if (level === 3) return "color-mix(in srgb, var(--accent) 62%, var(--bg-tertiary))";
-  return "color-mix(in srgb, var(--accent) 82%, var(--bg-tertiary))";
+  if (level <= 0) return HISTORY_HEATMAP_COLORS.empty;
+  if (level === 1) return HISTORY_HEATMAP_COLORS.level1;
+  if (level === 2) return HISTORY_HEATMAP_COLORS.level2;
+  if (level === 3) return HISTORY_HEATMAP_COLORS.level3;
+  return HISTORY_HEATMAP_COLORS.level4;
 }
 
 export const TimelineHeatmap = memo(TimelineHeatmapImpl);
@@ -164,7 +166,7 @@ function TimelineHeatmapImpl({
                   <Cell
                     key={day.day_start_utc}
                     fill={cellColor(Math.max(day.level, day.messages > 0 ? 1 : 0))}
-                    stroke={day.day_start_utc === selectedDayStart ? "var(--accent)" : "transparent"}
+                    stroke={day.day_start_utc === selectedDayStart ? ACCENT : "transparent"}
                   />
                 ))}
               </Bar>
@@ -212,7 +214,7 @@ function TimelineHeatmapImpl({
                       height={16}
                       rx={4}
                       fill={cellColor(point.day.level)}
-                      stroke={selected ? "var(--accent)" : "var(--border)"}
+                      stroke={selected ? ACCENT : "var(--border)"}
                       strokeOpacity={selected ? 1 : 0.28}
                       style={{ cursor: "pointer" }}
                       onClick={() => onSelectDay(point.day)}
