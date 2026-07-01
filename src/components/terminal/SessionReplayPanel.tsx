@@ -25,6 +25,7 @@ import {
   type ReplayEvent,
   type ReplayEventKind,
   type ReplayEventStatus,
+  type ReplaySession,
   type ReplayWorktreeSnapshot,
 } from "../../stores/replayStore";
 import type { HistoryMessage } from "../../lib/types";
@@ -76,6 +77,7 @@ const STATUS_KEYS: Record<ReplayEventStatus, TranslationKey> = {
 };
 
 const TIMELINE_LINE_LEFT = "calc(78px + 12px + 14px)";
+type TranslateFn = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
 function statusColor(status: ReplayEventStatus): string {
   if (status === "failed" || status === "attention") return TERM_PANEL.red;
@@ -135,6 +137,42 @@ function getStringPayload(payload: Record<string, unknown>, key: string): string
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function buildPromptReplayTitle(message: string | null | undefined): string | null {
+  const normalized = message?.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  const maxLength = 72;
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function getReplaySourceLabel(source: string | null | undefined, t: TranslateFn): string {
+  if (source === "codex") return t("aiReplay.source.codex");
+  if (source === "claude") return t("aiReplay.source.claude");
+  return t("aiReplay.source.default");
+}
+
+function isGeneratedReplaySessionTitle(title: string): boolean {
+  const normalized = title.trim();
+  if (!normalized) return true;
+  return [
+    /^codex cli (?:session started|running|done|subagent started|subagent done|needs attention)$/i,
+    /^claude code (?:session started|running|done|failed|subagent started|subagent done|agent tool started|agent tool done|tool started|tool done|needs attention)$/i,
+    /^(?:SessionStart|UserPromptSubmit|Notification|Stop|StopFailure|PermissionRequest)$/i,
+    /^(?:codex|claude|cli) replay$/i,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function resolveReplaySessionTitle(session: ReplaySession | null, events: ReplayEvent[] | undefined, t: TranslateFn): string {
+  if (!session) return t("aiReplay.noSession");
+  const storedTitle = session.title.trim();
+  const promptEvent = events?.find((event) => event.kind === "prompt");
+  const promptTitle = promptEvent
+    ? buildPromptReplayTitle(getStringPayload(promptEvent.payload, "message"))
+    : null;
+  if (storedTitle && !isGeneratedReplaySessionTitle(storedTitle)) return storedTitle;
+  if (promptTitle) return promptTitle;
+  return getReplaySourceLabel(session.source, t);
+}
+
 function buildSnapshotForkBranchName(event: ReplayEvent): string {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
   return `replay/${stamp}-event-${event.eventIndex}`;
@@ -188,6 +226,52 @@ function DetailMetric({ label, value, color }: { label: string; value: string; c
   );
 }
 
+function SessionSummaryCard({
+  session,
+  title,
+  viewingHistory,
+  language,
+}: {
+  session: ReplaySession | null;
+  title: string;
+  viewingHistory: boolean;
+  language: string;
+}) {
+  const { t } = useI18n();
+  if (!session) return null;
+
+  return (
+    <section
+      className="shrink-0 rounded-xl border px-3 py-3"
+      style={{ backgroundColor: TERM_PANEL.card, borderColor: TERM_PANEL.border }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <HeaderPill color={viewingHistory ? TERM_PANEL.yellow : TERM_PANEL.cyan}>
+              {viewingHistory ? t("aiReplay.historySession") : t("aiReplay.currentSession")}
+            </HeaderPill>
+            <span className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }}>
+              {getReplaySourceLabel(session.source, t)}
+            </span>
+          </div>
+          <div className="mt-2 truncate text-[13px] font-semibold leading-6" style={{ color: TERM_PANEL.fg }} title={title}>
+            {title}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
+            <span>{formatClock(session.updatedAt, language)}</span>
+            <span className="inline-block h-1 w-1 rounded-full" style={{ backgroundColor: statusColor(session.status) }} />
+            <span>
+              {session.eventCount} {t("aiReplay.metric.events")}
+            </span>
+          </div>
+        </div>
+        <HeaderPill color={statusColor(session.status)}>{t(STATUS_KEYS[session.status])}</HeaderPill>
+      </div>
+    </section>
+  );
+}
+
 function EventMetaGrid({
   event,
   firstTimestamp,
@@ -200,7 +284,10 @@ function EventMetaGrid({
   const { t } = useI18n();
 
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div
+      className="grid gap-2"
+      style={{ gridTemplateColumns: "repeat(auto-fit, minmax(108px, 1fr))" }}
+    >
       <DetailMetric label={t("aiReplay.detail.event")} value={`#${event.eventIndex}`} color={KIND_META[event.kind].color} />
       <DetailMetric label={t("aiReplay.detail.status")} value={t(STATUS_KEYS[event.status])} color={statusColor(event.status)} />
       <DetailMetric label={t("aiReplay.detail.elapsed")} value={formatElapsed(firstTimestamp, event.timestamp)} color={TERM_PANEL.cyan} />
@@ -246,7 +333,10 @@ function SnapshotDetail({
   return (
     <div className="space-y-3">
       <EventMetaGrid event={event} firstTimestamp={firstTimestamp} language={language} />
-      <div className="grid grid-cols-2 gap-2">
+      <div
+        className="grid gap-2"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))" }}
+      >
         <DetailMetric
           label={t("aiReplay.detail.checkpoint")}
           value={String(event.payload.checkpointId ?? `#${event.eventIndex}`)}
@@ -276,7 +366,10 @@ function SnapshotDetail({
           ))}
         </div>
       )}
-      <div className="grid grid-cols-3 gap-2">
+      <div
+        className="grid gap-2"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(104px, 1fr))" }}
+      >
         <ActionButton
           icon={<Code2 size={12} />}
           label={t("aiReplay.action.viewSnapshot")}
@@ -394,17 +487,29 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
   const [selectedEventIndex, setSelectedEventIndex] = useState<number | null>(null);
   const [rollbackPending, setRollbackPending] = useState(false);
   const [forkPending, setForkPending] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [snapshotDiffMessages, setSnapshotDiffMessages] = useState<HistoryMessage[] | null>(null);
   const panelActive = open && visible;
 
   useEffect(() => {
     if (!panelActive) return;
-    void loadRecentSessions();
-    if (activeSessionId) void loadSession(activeSessionId);
-  }, [activeSessionId, loadRecentSessions, loadSession, panelActive]);
+    void loadRecentSessions(12, activeSessionId);
+    if (activeSessionId) void selectSession(activeSessionId);
+  }, [activeSessionId, loadRecentSessions, panelActive, selectSession]);
+
+  useEffect(() => {
+    setHistoryOpen(false);
+  }, [activeSessionId]);
 
   const selectedSession = sessions.find((session) => session.sessionKey === selectedSessionKey) ?? null;
+  const selectedSessionEvents = selectedSessionKey ? eventsBySession[selectedSessionKey] : undefined;
   const events = selectedSessionKey ? eventsBySession[selectedSessionKey] ?? [] : [];
+  const selectedSessionTitle = resolveReplaySessionTitle(selectedSession, selectedSessionEvents, t);
+  const viewingHistory = Boolean(activeSessionId && selectedSessionKey && selectedSessionKey !== activeSessionId);
+  const historySessions = useMemo(
+    () => sessions.filter((session) => session.sessionKey !== activeSessionId),
+    [activeSessionId, sessions]
+  );
   const firstTimestamp = events[0]?.timestamp ?? null;
   const latestSnapshot = useMemo(() => {
     for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -440,6 +545,23 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
     if (!selectedEvent) return;
     setSelectedEventIndex(selectedEvent.eventIndex);
   }, [selectedEvent]);
+
+  useEffect(() => {
+    setSelectedEventIndex(null);
+  }, [selectedSessionKey]);
+
+  const handleSelectReplaySession = async (sessionKey: string) => {
+    setHistoryOpen(false);
+    setSelectedEventIndex(null);
+    await selectSession(sessionKey);
+  };
+
+  const handleBackToCurrent = async () => {
+    if (!activeSessionId) return;
+    setHistoryOpen(false);
+    setSelectedEventIndex(null);
+    await selectSession(activeSessionId);
+  };
 
   const handleRollback = async (event: ReplayEvent, latest: ReplayEvent) => {
     const projectPath = getStringPayload(event.payload, "projectPath");
@@ -517,8 +639,8 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
   const DetailIcon = selectedMeta?.icon ?? Sparkles;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 font-mono" style={{ backgroundColor: TERM_PANEL.bg }}>
-      <div className="flex shrink-0 items-center justify-between gap-3">
+    <div className="ui-thin-scroll flex h-full min-h-0 flex-col gap-2 overflow-x-hidden overflow-y-auto p-2 font-mono" style={{ backgroundColor: TERM_PANEL.bg }}>
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl"
@@ -531,76 +653,119 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
               {t("aiReplay.title")}
             </div>
             <div className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }}>
-              {selectedSession?.title ?? t("aiReplay.noSession")}
+              {selectedSessionTitle}
             </div>
           </div>
         </div>
-        <HeaderPill color={error ? TERM_PANEL.red : ready ? TERM_PANEL.green : TERM_PANEL.yellow}>
-          {error ? t("aiReplay.health.error") : ready ? t("aiReplay.health.persisted") : t("aiReplay.health.pending")}
-        </HeaderPill>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {viewingHistory && activeSessionId && (
+            <button
+              type="button"
+              className="ui-focus-ring rounded-lg border px-2.5 py-1.5 text-[10px] font-semibold transition-colors"
+              style={{
+                color: TERM_PANEL.cyan,
+                borderColor: panelColorTint(TERM_PANEL.cyan, 34),
+                backgroundColor: panelColorTint(TERM_PANEL.cyan, 8),
+              }}
+              onClick={() => void handleBackToCurrent()}
+            >
+              {t("aiReplay.action.backToCurrent")}
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={historySessions.length === 0}
+            className="ui-focus-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+            style={{
+              color: historyOpen ? TERM_PANEL.yellow : TERM_PANEL.dim,
+              borderColor: historyOpen ? panelColorTint(TERM_PANEL.yellow, 34) : TERM_PANEL.border,
+              backgroundColor: historyOpen ? panelColorTint(TERM_PANEL.yellow, 8) : "transparent",
+            }}
+            onClick={() => setHistoryOpen((value) => !value)}
+          >
+            <Clock3 size={12} />
+            <span>{t("aiReplay.history")}</span>
+            {historySessions.length > 0 && <span className="tabular-nums">{historySessions.length}</span>}
+          </button>
+          <HeaderPill color={error ? TERM_PANEL.red : ready ? TERM_PANEL.green : TERM_PANEL.yellow}>
+            {error ? t("aiReplay.health.error") : ready ? t("aiReplay.health.persisted") : t("aiReplay.health.pending")}
+          </HeaderPill>
+        </div>
       </div>
 
-      {sessions.length > 0 && (
-        <div className="flex shrink-0 gap-2 overflow-x-auto pb-1 pr-1 ui-thin-scroll">
-          {sessions.map((session) => {
-            const selected = session.sessionKey === selectedSessionKey;
-            const sessionTone = statusColor(session.status);
-            return (
-              <button
-                key={session.sessionKey}
-                type="button"
-                className="ui-focus-ring min-w-[172px] rounded-xl border px-3 py-2.5 text-left transition-colors"
-                style={{
-                  backgroundColor: selected ? panelColorTint(TERM_PANEL.cyan, 12, TERM_PANEL.card) : TERM_PANEL.card,
-                  borderColor: selected ? panelColorTint(TERM_PANEL.cyan, 38) : TERM_PANEL.border,
-                }}
-                onClick={() => void selectSession(session.sessionKey)}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-[12px] font-semibold leading-5" style={{ color: selected ? TERM_PANEL.cyan : TERM_PANEL.fg }}>
-                      {session.title}
-                    </div>
-                    <div className="mt-1.5 flex items-center gap-1.5 text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
-                      <span>{formatClock(session.updatedAt, language)}</span>
-                      <span className="inline-block h-1 w-1 rounded-full" style={{ backgroundColor: sessionTone }} />
-                      <span>
-                        {session.eventCount} {t("aiReplay.metric.events")}
-                      </span>
-                    </div>
-                  </div>
-                  <span
-                    className="mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border"
+      <SessionSummaryCard
+        session={selectedSession}
+        title={selectedSessionTitle}
+        viewingHistory={viewingHistory}
+        language={language}
+      />
+
+      {historyOpen && (
+        <section
+          className="shrink-0 rounded-xl border px-2.5 py-2.5"
+          style={{ backgroundColor: TERM_PANEL.card, borderColor: TERM_PANEL.border }}
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-bold" style={{ color: TERM_PANEL.fg }}>
+              {t("aiReplay.history")}
+            </span>
+            <span className="text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
+              {historySessions.length}
+            </span>
+          </div>
+          {historySessions.length === 0 ? (
+            <EmptyHint text={t("aiReplay.empty.history")} />
+          ) : (
+            <div className="max-h-32 space-y-1.5 overflow-y-auto pr-1 ui-thin-scroll">
+              {historySessions.map((session) => {
+                const selected = session.sessionKey === selectedSessionKey;
+                const tone = statusColor(session.status);
+                const title = resolveReplaySessionTitle(session, eventsBySession[session.sessionKey], t);
+                return (
+                  <button
+                    key={session.sessionKey}
+                    type="button"
+                    className="ui-focus-ring w-full rounded-lg border px-2.5 py-2 text-left transition-colors"
                     style={{
-                      borderColor: panelColorTint(sessionTone, 40),
-                      backgroundColor: panelColorTint(sessionTone, selected ? 18 : 10),
+                      backgroundColor: selected ? panelColorTint(TERM_PANEL.yellow, 10, TERM_PANEL.cardInner) : TERM_PANEL.cardInner,
+                      borderColor: selected ? panelColorTint(TERM_PANEL.yellow, 34) : TERM_PANEL.border,
                     }}
+                    onClick={() => void handleSelectReplaySession(session.sessionKey)}
                   >
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: sessionTone }} />
-                  </span>
-                </div>
-                <div className="mt-2.5 flex items-center justify-between gap-2">
-                  <span className="truncate text-[9px]" style={{ color: TERM_PANEL.dim }}>
-                    {session.source ?? t("aiReplay.title")}
-                  </span>
-                  <span className="text-[9px] font-semibold" style={{ color: sessionTone }}>
-                    {t(STATUS_KEYS[session.status])}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-[11px] font-semibold leading-5" style={{ color: selected ? TERM_PANEL.yellow : TERM_PANEL.fg }}>
+                          {title}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
+                          <span>{formatClock(session.updatedAt, language)}</span>
+                          <span className="inline-block h-1 w-1 rounded-full" style={{ backgroundColor: tone }} />
+                          <span>
+                            {session.eventCount} {t("aiReplay.metric.events")}
+                          </span>
+                        </div>
+                      </div>
+                      <HeaderPill color={tone}>{t(STATUS_KEYS[session.status])}</HeaderPill>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
       )}
 
-      <div className="grid shrink-0 grid-cols-3 gap-1.5">
+      <div
+        className="grid shrink-0 gap-1.5"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(92px, 1fr))" }}
+      >
         <SummaryMetricCard icon={<Clock3 size={15} />} label={t("aiReplay.metric.events")} value={String(summary.events)} color={TERM_PANEL.cyan} />
         <SummaryMetricCard icon={<Wrench size={15} />} label={t("aiReplay.metric.tools")} value={String(summary.tools)} color={TERM_PANEL.blue} />
         <SummaryMetricCard icon={<Network size={15} />} label={t("aiReplay.metric.subtasks")} value={String(summary.subtasks)} color={TERM_PANEL.magenta} />
       </div>
 
       <section
-        className="min-h-0 flex flex-1 flex-col rounded-xl border px-2.5 py-2.5"
+        className="flex min-h-[220px] shrink-0 flex-[1_0_220px] flex-col overflow-hidden rounded-xl border px-2.5 py-2.5"
         style={{ backgroundColor: TERM_PANEL.card, borderColor: TERM_PANEL.border }}
       >
         <div className="flex items-center gap-2 text-[11px] font-bold" style={{ color: TERM_PANEL.fg }}>
@@ -713,7 +878,7 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
       </section>
 
       <section
-        className="flex h-[278px] shrink-0 flex-col rounded-xl border px-2.5 py-2.5"
+        className="flex min-h-[160px] max-h-[38vh] flex-[0_1_220px] flex-col overflow-hidden rounded-xl border px-2.5 py-2.5"
         style={{ backgroundColor: TERM_PANEL.card, borderColor: TERM_PANEL.border }}
       >
         <div className="mb-2.5 flex items-center justify-between gap-3">
