@@ -14,7 +14,8 @@ import { DiffViewerModal } from "./DiffViewerModal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TERM, EmptyHint, panelColorTint } from "../stats/termStatsUi";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
-import type { GitTreeNode, GitPullStrategy, Project } from "../../lib/types";
+import { findProjectByPath } from "../../lib/terminalProject";
+import type { GitTreeNode, GitPullStrategy } from "../../lib/types";
 
 interface GitChangesPanelProps {
   open: boolean;
@@ -57,28 +58,6 @@ function collectDirectoryPaths(nodes: GitTreeNode[], treeId: string): string[] {
 
   visit(nodes);
   return paths;
-}
-
-function normalizeProjectPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-
-function findProjectByPath(projects: Project[], path: string | null | undefined): Project | null {
-  const normalizedPath = path?.trim() ? normalizeProjectPath(path) : "";
-  if (!normalizedPath) return null;
-
-  let bestMatch: Project | null = null;
-  let bestMatchLength = -1;
-
-  for (const project of projects) {
-    const normalizedProjectPath = normalizeProjectPath(project.path);
-    const matches = normalizedPath === normalizedProjectPath || normalizedPath.startsWith(`${normalizedProjectPath}/`);
-    if (!matches || normalizedProjectPath.length <= bestMatchLength) continue;
-    bestMatch = project;
-    bestMatchLength = normalizedProjectPath.length;
-  }
-
-  return bestMatch;
 }
 
 export function GitChangesPanel({ open, projectPath, visible = true, embedded = false }: GitChangesPanelProps) {

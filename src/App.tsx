@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { toast, Toaster } from "sonner";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -35,6 +36,7 @@ import { createPerfMarker, logWarn } from "./lib/logger";
 import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contrast";
 import { translateCurrent, useI18n } from "./lib/i18n";
 import { getOsPlatform } from "./lib/shell";
+import { resolveProjectForSession } from "./lib/terminalProject";
 import "./App.css";
 
 const appStartAt =
@@ -201,18 +203,7 @@ async function focusMainWindow(): Promise<void> {
   }
 }
 
-async function activateHookNotificationTarget(tabId: string): Promise<void> {
-  await focusMainWindow();
-
-  const terminalStore = useTerminalStore.getState();
-  if (!terminalStore.sessions.some((session) => session.id === tabId)) {
-    toast.warning(translateCurrent("notifications.system.targetClosed"));
-    return;
-  }
-
-  useHistoryStore.getState().closeHistory();
-  terminalStore.setActive(tabId);
-}
+type HookNotificationTargetActivator = (tabId: string) => void | Promise<void>;
 
 async function sendSystemNotification(payload: CliHookPayload, tabId: string | null, tabTitle?: string | null): Promise<void> {
   try {
@@ -254,7 +245,7 @@ async function sendSystemNotification(payload: CliHookPayload, tabId: string | n
   }
 }
 
-function showClaudeHookToast(payload: CliHookPayload, tabId: string): void {
+function showClaudeHookToast(payload: CliHookPayload, tabId: string, onActivateTarget: HookNotificationTargetActivator): void {
   const settings = useSettingsStore.getState();
   if (!settings.hookPopupNotificationsEnabled) return;
 
@@ -287,7 +278,7 @@ function showClaudeHookToast(payload: CliHookPayload, tabId: string): void {
               type="button"
               className="claude-hook-toast__action"
               onClick={() => {
-                void activateHookNotificationTarget(tabId);
+                void onActivateTarget(tabId);
                 toast.dismiss(item.id);
               }}
             >
@@ -514,6 +505,33 @@ function App() {
     })();
   }, [terminalFullscreen, t]);
 
+  const handleActivateHookNotificationTarget = useCallback(async (tabId: string) => {
+    await focusMainWindow();
+
+    const terminalStore = useTerminalStore.getState();
+    const targetSession = terminalStore.sessions.find((session) => session.id === tabId);
+    if (!targetSession) {
+      toast.warning(translateCurrent("notifications.system.targetClosed"));
+      return;
+    }
+
+    useHistoryStore.getState().closeHistory();
+    if (useSettingsStore.getState().projectScopedTerminalViewEnabled) {
+      const projects = useProjectStore.getState().projects;
+      const projectById = new Map(projects.map((project) => [project.id, project]));
+      const targetProjectId = resolveProjectForSession(
+        targetSession,
+        terminalStore.sessions,
+        projects,
+        projectById
+      )?.id ?? null;
+      flushSync(() => {
+        setTerminalScopeProjectId(targetProjectId);
+      });
+    }
+    terminalStore.setActive(tabId);
+  }, []);
+
   useKeyboardShortcuts({ onToggleTerminalFullscreen: handleToggleTerminalFullscreen });
 
   useEffect(() => {
@@ -551,13 +569,13 @@ function App() {
       const tabTitle = tabId ? terminalStore.sessions.find((session) => session.id === tabId)?.title ?? null : null;
       // SessionStart 仅用于绑定 sessionId（无需用户介入），与 UserPromptSubmit 一样不弹 toast
       if (tabId && event.payload.event !== "UserPromptSubmit" && event.payload.event !== "SessionStart") {
-        showClaudeHookToast(event.payload, tabId);
+        showClaudeHookToast(event.payload, tabId, handleActivateHookNotificationTarget);
       }
       // 系统通知：并行发送（不影响应用内通知）
       void sendSystemNotification(event.payload, tabId, tabTitle);
     });
     const unlistenSystemNotification = listen<SystemNotificationActionPayload>(SYSTEM_NOTIFICATION_ACTION_EVENT, (event) => {
-      void activateHookNotificationTarget(event.payload.tabId);
+      void handleActivateHookNotificationTarget(event.payload.tabId);
     });
     // 子 Agent 转录 tail 增量：路由到对应转录面板。
     const unlistenTranscript = listen<SubagentTranscriptAppendPayload>("subagent-transcript-append", (event) => {
@@ -570,7 +588,7 @@ function App() {
       void unlistenSystemNotification.then((unlisten) => unlisten());
       void unlistenTranscript.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [handleActivateHookNotificationTarget]);
 
   useEffect(() => {
     if (!IN_TAURI) return;

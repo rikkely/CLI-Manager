@@ -200,6 +200,17 @@ export function Sidebar({
 
   useEffect(() => {
     if (!projectScopedTerminalViewEnabled) return;
+    setSelectedId(terminalScopeProjectId);
+    selectionAnchorRef.current = terminalScopeProjectId;
+    setSelectedProjectIds((prev) => {
+      if (!terminalScopeProjectId) return prev.size === 0 ? prev : new Set();
+      if (prev.size === 1 && prev.has(terminalScopeProjectId)) return prev;
+      return new Set([terminalScopeProjectId]);
+    });
+  }, [projectScopedTerminalViewEnabled, terminalScopeProjectId]);
+
+  useEffect(() => {
+    if (!projectScopedTerminalViewEnabled) return;
     if (!terminalScopeProjectId) return;
     if (projects.some((project) => project.id === terminalScopeProjectId)) return;
     onTerminalScopeChange?.(null);

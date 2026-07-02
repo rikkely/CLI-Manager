@@ -76,6 +76,7 @@ import { Button } from "./ui/button";
 import { Portal } from "./ui/Portal";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { getTerminalSidePanelSkinStyle } from "./stats/termStatsUi";
+import { resolveProjectForSession } from "../lib/terminalProject";
 
 const HistoryWorkspace = lazy(() =>
   import("./HistoryWorkspace").then((module) => ({ default: module.HistoryWorkspace }))
@@ -264,58 +265,6 @@ function resolveHistorySourceFilter(cliTool: string | null | undefined): History
 // 终端 Tab 厂商图标：从启动命令 + 标题推断（未配自定义启动命令时 startupCmd 即为 cli_tool）
 function inferSessionVendor(session: TerminalSession): VendorKey | null {
   return inferVendor(`${session.startupCmd ?? ""} ${session.title}`);
-}
-
-function normalizeProjectPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-
-function findProjectByPath(projects: Project[], path: string | null | undefined): Project | null {
-  const normalizedPath = path?.trim() ? normalizeProjectPath(path) : "";
-  if (!normalizedPath) return null;
-
-  let bestMatch: Project | null = null;
-  let bestMatchLength = -1;
-
-  for (const project of projects) {
-    const normalizedProjectPath = normalizeProjectPath(project.path);
-    const matches = normalizedPath === normalizedProjectPath || normalizedPath.startsWith(`${normalizedProjectPath}/`);
-    if (!matches || normalizedProjectPath.length <= bestMatchLength) continue;
-    bestMatch = project;
-    bestMatchLength = normalizedProjectPath.length;
-  }
-
-  return bestMatch;
-}
-
-function resolveProjectForSession(
-  session: TerminalSession | null,
-  sessions: TerminalSession[],
-  projects: Project[],
-  projectById: Map<string, Project>,
-  seenSessionIds: Set<string> = new Set()
-): Project | null {
-  if (!session || seenSessionIds.has(session.id)) return null;
-  seenSessionIds.add(session.id);
-
-  if (session.kind === "subagent-transcript" && session.subagent?.parentSessionId) {
-    const parentSession = sessions.find((item) => item.id === session.subagent?.parentSessionId) ?? null;
-    return resolveProjectForSession(parentSession, sessions, projects, projectById, seenSessionIds);
-  }
-
-  if (session.kind === "file-editor") {
-    return session.fileEditor?.project
-      ?? projectById.get(session.fileEditor?.projectId ?? "")
-      ?? findProjectByPath(projects, session.fileEditor?.projectPath)
-      ?? null;
-  }
-
-  if (session.projectId) {
-    const project = projectById.get(session.projectId);
-    if (project) return project;
-  }
-
-  return findProjectByPath(projects, session.cwd);
 }
 
 function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
@@ -1765,9 +1714,11 @@ export function TerminalTabs({
   // 避免聚焦转录 Tab 时面板被清空/错位。
   useEffect(() => {
     if (!projectScopedTerminalViewEnabled || !projectScopeProjectId) return;
-    if (!preferredScopedSessionId || preferredScopedSessionId === activeSessionId) return;
+    const currentActiveSessionId = useTerminalStore.getState().activeSessionId;
+    if (currentActiveSessionId && scopedSessionIds?.has(currentActiveSessionId)) return;
+    if (!preferredScopedSessionId || preferredScopedSessionId === currentActiveSessionId) return;
     setActive(preferredScopedSessionId);
-  }, [activeSessionId, preferredScopedSessionId, projectScopeProjectId, projectScopedTerminalViewEnabled, setActive]);
+  }, [preferredScopedSessionId, projectScopeProjectId, projectScopedTerminalViewEnabled, scopedSessionIds, setActive]);
 
   const panelSession = useMemo(() => {
     if (activeSession?.kind === "subagent-transcript" && activeSession.subagent) {
