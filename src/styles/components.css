@@ -3761,10 +3761,39 @@
   justify-content: flex-start;
 }
 
+.ui-history-message-stack {
+  display: flex;
+  min-width: 0;
+  max-width: min(72%, 780px);
+  flex-direction: column;
+}
+
+.ui-history-message-card[data-role="user"] .ui-history-message-stack {
+  align-items: flex-end;
+}
+
+.ui-history-message-card[data-role="assistant"] .ui-history-message-stack,
+.ui-history-message-card[data-role="other"] .ui-history-message-stack {
+  align-items: flex-start;
+}
+
+.ui-history-message-meta {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 0.18rem 0.24rem;
+  color: var(--text-muted);
+  font-family: var(--font-ui-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ui-history-message-bubble {
   position: relative;
   width: fit-content;
-  max-width: min(72%, 780px);
+  max-width: 100%;
   min-width: 0;
   border: 1px solid var(--history-message-bubble-border, color-mix(in srgb, var(--border) 24%, transparent));
   border-radius: 6px;
@@ -3913,7 +3942,7 @@
 }
 
 @media (max-width: 720px) {
-  .ui-history-message-bubble {
+  .ui-history-message-stack {
     max-width: calc(100% - 3rem);
   }
 }

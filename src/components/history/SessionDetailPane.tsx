@@ -67,6 +67,7 @@ const DETAIL_VIEWS: Array<{ id: HistoryDetailView; labelKey: TranslationKey }> =
 const MESSAGE_PREVIEW_LINE_COUNT = 5;
 const LONG_MESSAGE_LINE_THRESHOLD = 8;
 const LONG_MESSAGE_CHAR_THRESHOLD = 900;
+const TOKEN_FORMATTER = new Intl.NumberFormat("en-US");
 
 function isInjectedPromptContent(content: string): boolean {
   const trimmed = content.trimStart();
@@ -93,6 +94,51 @@ function shouldCollapseMessage(message: HistoryMessage): boolean {
   if (isInjectedPromptContent(message.content)) return true;
   const lines = message.content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   return lines.length >= LONG_MESSAGE_LINE_THRESHOLD || message.content.length >= LONG_MESSAGE_CHAR_THRESHOLD;
+}
+
+function padTimePart(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatMessageTimestamp(timestamp?: string | null): string | null {
+  const raw = timestamp?.trim();
+  if (!raw) return null;
+
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) {
+    const date = new Date(parsed);
+    return `${padTimePart(date.getMonth() + 1)}/${padTimePart(date.getDate())} ${padTimePart(date.getHours())}:${padTimePart(date.getMinutes())}`;
+  }
+
+  const fallback = /(\d{1,2})[/-](\d{1,2}).*?(\d{1,2}):(\d{2})/.exec(raw);
+  if (fallback) {
+    return `${padTimePart(Number(fallback[1]))}/${padTimePart(Number(fallback[2]))} ${padTimePart(Number(fallback[3]))}:${fallback[4]}`;
+  }
+
+  return raw;
+}
+
+function positiveToken(value?: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function formatMessageTokenMeta(message: HistoryMessage): string | null {
+  const input = positiveToken(message.input_tokens);
+  const output = positiveToken(message.output_tokens);
+  const cache = positiveToken(message.cache_read_tokens) + positiveToken(message.cache_creation_tokens);
+  const parts: string[] = [];
+
+  if (input > 0) parts.push(`in ${TOKEN_FORMATTER.format(input)}`);
+  if (output > 0) parts.push(`out ${TOKEN_FORMATTER.format(output)}`);
+  if (cache > 0) parts.push(`cache ${TOKEN_FORMATTER.format(cache)}`);
+
+  return parts.length > 0 ? parts.join(" / ") : null;
+}
+
+function formatMessageMeta(message: HistoryMessage): string | null {
+  const timestamp = formatMessageTimestamp(message.timestamp);
+  const tokens = formatMessageTokenMeta(message);
+  return [timestamp, tokens].filter(Boolean).join("  ") || null;
 }
 
 function getCollapsedMessagePreview(content: string, fallback: string): string[] {
@@ -160,6 +206,7 @@ function HistoryMessageCard({
   const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
   const forceOpen = isMatched || isFocused;
   const collapsible = shouldCollapseMessage(message);
+  const messageMeta = formatMessageMeta(message);
   const [open, setOpen] = useState(forceOpen);
   const cardRef = useRef<HTMLDivElement | null>(null);
 
@@ -193,22 +240,29 @@ function HistoryMessageCard({
           <img src={avatarUrl} alt="" />
         </span>
       )}
-      <div className="ui-history-message-bubble">
-        <ConversationMessageContent message={message} query={query} open={open} collapsible={collapsible} />
-        {collapsible && (
-          <button
-            type="button"
-            className="ui-history-message-expand"
-            onClick={() => setOpen((current) => !current)}
-            aria-expanded={open}
-            title={toggleTitle}
-          >
-            <span className="ui-history-message-collapse-icon" aria-hidden="true">
-              {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            </span>
-            {toggleTitle}
-          </button>
+      <div className="ui-history-message-stack">
+        {messageMeta && (
+          <div className="ui-history-message-meta" title={messageMeta}>
+            {messageMeta}
+          </div>
         )}
+        <div className="ui-history-message-bubble">
+          <ConversationMessageContent message={message} query={query} open={open} collapsible={collapsible} />
+          {collapsible && (
+            <button
+              type="button"
+              className="ui-history-message-expand"
+              onClick={() => setOpen((current) => !current)}
+              aria-expanded={open}
+              title={toggleTitle}
+            >
+              <span className="ui-history-message-collapse-icon" aria-hidden="true">
+                {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              </span>
+              {toggleTitle}
+            </button>
+          )}
+        </div>
       </div>
       {roleKind === "user" && (
         <span className="ui-history-message-avatar" aria-hidden="true">
