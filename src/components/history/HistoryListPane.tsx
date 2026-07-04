@@ -1,12 +1,12 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bot, Check, ChevronDown, ChevronRight, CircleChevronDown, CircleChevronRight, Folder, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, CircleChevronDown, CircleChevronRight, Clock3, Folder, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { VendorIcon, inferVendor } from "../VendorIcon";
 import { Portal } from "../ui/Portal";
-import { buildHistorySessionChildMap, formatTime, makeSessionLabel } from "./historyViewUtils";
+import { buildHistorySessionChildMap, formatTime } from "./historyViewUtils";
 
 interface SessionGroup {
   label: string;
@@ -95,7 +95,7 @@ function rowHeight(row: HistoryListRow): number {
   if (row.type === "empty") return 88;
   if (row.type === "loading" || row.type === "loadMore") return 56;
   if (row.type === "searchHit") return 72;
-  return row.depth > 0 ? 82 : 96;
+  return row.depth > 0 ? 68 : 78;
 }
 
 function SelectionCheckbox({
@@ -213,6 +213,11 @@ function countProjects(node: HistoryProjectTreeNode): number {
 
 function ProjectFilterIcon({ project, size = 13 }: { project: Project; size?: number }) {
   const vendor = project.cli_tool ? inferVendor(project.cli_tool) : null;
+  return vendor ? <VendorIcon vendor={vendor} size={size} /> : <Terminal size={size} strokeWidth={1.5} />;
+}
+
+function SessionSourceIcon({ source, size = 14 }: { source: string; size?: number }) {
+  const vendor = inferVendor(source);
   return vendor ? <VendorIcon vendor={vendor} size={size} /> : <Terminal size={size} strokeWidth={1.5} />;
 }
 
@@ -775,10 +780,10 @@ export function HistoryListPane({
                       onContextMenu={(e) => handleSessionContextMenu(e, row.item)}
                       onClick={selectionMode ? () => onToggleSessionSelection(row.item.sessionKey) : undefined}
                       className={[
-                        "ui-list-row flex w-full items-start gap-2 border text-left",
+                        "ui-list-row group/session-row flex w-full items-center gap-2 border text-left",
                         row.depth > 0
-                          ? "min-h-[72px] rounded-lg border-border/45 bg-surface-container-low px-2 py-1.5"
-                          : "min-h-[88px] rounded-xl border-border/70 bg-surface-container-lowest px-2.5 py-2",
+                          ? "min-h-[58px] rounded-lg border-border/45 bg-surface-container-low px-2 py-1.5"
+                          : "min-h-[68px] rounded-xl border-border/70 bg-surface-container-lowest px-2.5 py-2",
                         selectionMode ? "cursor-pointer" : "",
                       ].join(" ")}
                       style={{ backgroundColor: row.item.sessionKey === activeSessionKey ? "var(--bg-tertiary)" : undefined }}
@@ -823,6 +828,9 @@ export function HistoryListPane({
                       {selectionMode ? (
                         <div className="min-w-0 flex-1 overflow-hidden text-left">
                           <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-primary">
+                              <SessionSourceIcon source={row.item.source} size={14} />
+                            </span>
                             {row.item.starred && <Star size={12} className="shrink-0" style={{ color: "var(--warning)" }} fill="currentColor" />}
                             {row.depth > 0 && (
                               <span
@@ -839,16 +847,20 @@ export function HistoryListPane({
                             )}
                             <span className="truncate text-[13px] font-semibold text-text-primary">{row.item.displayTitle}</span>
                             {row.childCount > 0 && (
-                              <span className="shrink-0 rounded-full border border-border/70 px-1.5 text-[10px] font-medium text-text-muted">
+                              <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium text-text-muted">
                                 {t("history.tree.childCount", { count: row.childCount })}
                               </span>
                             )}
                           </div>
-                          <div className="ui-dev-label mt-1 truncate text-[11px] text-text-muted">
-                            {row.item.source} · {makeSessionLabel(row.item)} · {t("history.messageCount", { count: row.item.message_count })}
-                          </div>
-                          <div className="ui-dev-label mt-1 truncate text-[11px] text-text-muted">
-                            {t("history.updatedAt", { time: formatTime(row.item.updated_at, language) })}
+                          <div className="ui-dev-label mt-1.5 flex min-w-0 items-center gap-2 text-[11px] text-text-muted">
+                            <span className="inline-flex min-w-0 items-center gap-1">
+                              <Clock3 size={11} className="shrink-0" />
+                              <span className="truncate">{formatTime(row.item.updated_at, language)}</span>
+                            </span>
+                            <span className="inline-flex shrink-0 items-center gap-1">
+                              <MessageSquare size={11} className="shrink-0" />
+                              {t("history.messageCount", { count: row.item.message_count })}
+                            </span>
                           </div>
                         </div>
                       ) : (
@@ -858,6 +870,9 @@ export function HistoryListPane({
                           className="min-w-0 flex-1 overflow-hidden text-left"
                         >
                           <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-primary">
+                              <SessionSourceIcon source={row.item.source} size={14} />
+                            </span>
                             {row.item.starred && <Star size={12} className="shrink-0" style={{ color: "var(--warning)" }} fill="currentColor" />}
                             {row.depth > 0 && (
                               <span
@@ -874,16 +889,20 @@ export function HistoryListPane({
                             )}
                             <span className="truncate text-[13px] font-semibold text-text-primary">{row.item.displayTitle}</span>
                             {row.childCount > 0 && (
-                              <span className="shrink-0 rounded-full border border-border/70 px-1.5 text-[10px] font-medium text-text-muted">
+                              <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium text-text-muted">
                                 {t("history.tree.childCount", { count: row.childCount })}
                               </span>
                             )}
                           </div>
-                          <div className="ui-dev-label mt-1 truncate text-[11px] text-text-muted">
-                            {row.item.source} · {makeSessionLabel(row.item)} · {t("history.messageCount", { count: row.item.message_count })}
-                          </div>
-                          <div className="ui-dev-label mt-1 truncate text-[11px] text-text-muted">
-                            {t("history.updatedAt", { time: formatTime(row.item.updated_at, language) })}
+                          <div className="ui-dev-label mt-1.5 flex min-w-0 items-center gap-2 text-[11px] text-text-muted">
+                            <span className="inline-flex min-w-0 items-center gap-1">
+                              <Clock3 size={11} className="shrink-0" />
+                              <span className="truncate">{formatTime(row.item.updated_at, language)}</span>
+                            </span>
+                            <span className="inline-flex shrink-0 items-center gap-1">
+                              <MessageSquare size={11} className="shrink-0" />
+                              {t("history.messageCount", { count: row.item.message_count })}
+                            </span>
                           </div>
                         </button>
                       )}
@@ -891,7 +910,7 @@ export function HistoryListPane({
                         <button
                           type="button"
                           onClick={() => onDeleteSession(row.item)}
-                          className="ui-flat-action mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-danger/25 bg-danger/10 text-danger/85 hover:border-danger/40 hover:bg-danger/18 hover:text-danger"
+                          className="ui-flat-action inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent bg-transparent px-0 text-text-muted opacity-55 hover:border-danger/30 hover:bg-danger/10 hover:text-danger hover:opacity-100 focus-visible:opacity-100 group-hover/session-row:opacity-100"
                           aria-label={t("history.deleteSessionNamed", { title: row.item.displayTitle })}
                           title={t("history.deleteSession")}
                         >
