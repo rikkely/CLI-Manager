@@ -15,6 +15,17 @@ use tauri::{AppHandle, Emitter};
 
 const EVENT_NAME: &str = "project-files-changed";
 const DEBOUNCE_MS: u64 = 400;
+const IGNORED_DIRS: &[&str] = &[
+    ".gitnexus",
+    ".next",
+    ".trellis",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "out",
+    "target",
+];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,6 +155,13 @@ fn is_relevant(root: &str, path: &Path) -> bool {
         return git_rel == "index" || git_rel == "HEAD";
     }
 
+    if rel
+        .split('/')
+        .any(|segment| IGNORED_DIRS.contains(&segment))
+    {
+        return false;
+    }
+
     !path_str.ends_with(".lock")
 }
 
@@ -177,5 +195,12 @@ mod tests {
     #[test]
     fn worktree_lock_ignored() {
         assert!(!is_relevant(ROOT, Path::new("F:/proj/build/cache.lock")));
+    }
+
+    #[test]
+    fn generated_directories_ignored() {
+        assert!(!is_relevant(ROOT, Path::new("F:/proj/node_modules/pkg/index.js")));
+        assert!(!is_relevant(ROOT, Path::new("F:/proj/target/debug/app.exe")));
+        assert!(!is_relevant(ROOT, Path::new("F:/proj/.gitnexus/index.db")));
     }
 }

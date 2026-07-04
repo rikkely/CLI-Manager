@@ -46,6 +46,7 @@ type DraggedFileEntry = Pick<ProjectFileEntry, "kind" | "name" | "path">;
 type Translate = ReturnType<typeof useI18n>["t"];
 
 const FILE_EXPLORER_ENTRY_MIME = "application/x-cli-manager-file-entry";
+const FILE_WATCH_REFRESH_DEBOUNCE_MS = 600;
 
 interface AutoCollapseGroupState {
   expandedGroupPaths: Set<string>;
@@ -737,10 +738,19 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
     let disposed = false;
     let unlisten: (() => void) | undefined;
     let fallbackTimer: number | undefined;
+    let refreshTimer: number | undefined;
 
     const isActive = () => document.visibilityState === "visible" && document.hasFocus();
     const refreshIfActive = () => {
       if (isActive()) void refreshVisibleState();
+    };
+    const scheduleRefreshIfActive = () => {
+      if (!isActive()) return;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        refreshIfActive();
+      }, FILE_WATCH_REFRESH_DEBOUNCE_MS);
     };
     const startFallback = () => {
       if (fallbackTimer === undefined) {
@@ -756,7 +766,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
 
     void listen<{ projectPath: string }>("project-files-changed", (event) => {
       if (disposed) return;
-      if (event.payload.projectPath === project.path) refreshIfActive();
+      if (event.payload.projectPath === project.path) scheduleRefreshIfActive();
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
@@ -777,6 +787,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
     return () => {
       disposed = true;
       stopFallback();
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       if (unlisten) unlisten();
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
