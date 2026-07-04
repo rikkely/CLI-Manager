@@ -1109,12 +1109,17 @@
   min-width: 148px;
   padding: 4px;
   border-radius: 10px;
-  background-color: color-mix(in srgb, var(--surface) 84%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--border) 24%, transparent);
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--on-surface) 8%, transparent);
+  background-color: color-mix(in srgb, var(--surface) 96%, var(--on-surface) 4%);
+  outline: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--on-surface) 18%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   animation: slide-down var(--animate-duration-fast) var(--ease-standard);
+}
+
+[data-theme="dark"] .context-menu {
+  outline: 1px solid color-mix(in srgb, var(--border) 26%, transparent);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 34%);
 }
 
 .context-menu-item {
