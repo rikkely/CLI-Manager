@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useId, type Ref } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/projectStore";
@@ -17,11 +17,13 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { toast } from "sonner";
 import { logError, logInfo, logWarn } from "../lib/logger";
+import { useI18n } from "../lib/i18n";
 
 interface Props {
   project?: Project;
@@ -34,9 +36,20 @@ const CLI_TOOL_OPTIONS = ["claude", "codex"] as const;
 
 export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Props) {
   const { createProject, updateProject, groups } = useProjectStore();
+  const { t } = useI18n();
   const isEdit = !!project;
   const isClone = !!cloneFrom;
   const logInstanceIdRef = useRef(crypto.randomUUID().slice(0, 8));
+  const previousFocusRef = useRef<HTMLElement | null>(
+    typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null
+  );
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const dialogDescriptionId = useId();
+  const nameFieldId = useId();
+  const pathFieldId = useId();
+  const cliToolFieldId = useId();
+  const cliToolLabelId = useId();
+  const shellFieldId = useId();
 
   const [osPlatform, setOsPlatform] = useState<OsPlatform>("windows");
 
@@ -55,6 +68,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showConfirmEdit, setShowConfirmEdit] = useState(false);
+  const [cliToolComboboxOpen, setCliToolComboboxOpen] = useState(false);
 
   useEffect(() => {
     logInfo("[config-modal] mounted", {
@@ -235,11 +249,34 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
           if (!next) onClose();
         }}
       >
-        <DialogContent className="max-w-[420px]" showCloseButton={false}>
+        <DialogContent
+          className="max-w-[420px]"
+          showCloseButton={false}
+          aria-describedby={dialogDescriptionId}
+          onEscapeKeyDown={(event) => {
+            const escapeTarget = event.target instanceof HTMLElement ? event.target : null;
+            const hasOpenListbox = typeof document !== "undefined" && document.querySelector("[role='listbox']") !== null;
+            const escapeFromOptionLayer = escapeTarget?.closest("[role='listbox'], [role='option']") !== null;
+            if (!(cliToolComboboxOpen || hasOpenListbox || escapeFromOptionLayer)) return;
+            event.preventDefault();
+            setCliToolComboboxOpen(false);
+          }}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            nameInputRef.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            previousFocusRef.current?.focus();
+          }}
+        >
           <form onSubmit={handleSubmit}>
             <DialogTitle className="mb-4 text-base font-semibold text-text-primary">
               {isEdit ? "编辑终端" : isClone ? "复制终端配置" : "新增终端"}
             </DialogTitle>
+            <DialogDescription id={dialogDescriptionId} className="sr-only">
+              {t("configModal.a11y.dialogDescription")}
+            </DialogDescription>
 
             {error && (
               <div className="mb-3 rounded bg-danger/15 px-2 py-1.5 text-xs text-danger">
@@ -248,13 +285,20 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
             )}
 
             <div className="space-y-3">
-              <Field label="名称 *" value={name} onChange={setName} />
+              <Field
+                id={nameFieldId}
+                inputRef={nameInputRef}
+                label="名称 *"
+                value={name}
+                onChange={setName}
+              />
 
               {/* Path with folder picker */}
               <div>
-                <label className="mb-1 block text-xs text-text-muted">路径 *</label>
+                <label htmlFor={pathFieldId} className="mb-1 block text-xs text-text-muted">路径 *</label>
                 <div className="flex gap-1">
                   <Input
+                    id={pathFieldId}
                     type="text"
                     value={path}
                     onChange={(e) => setPath(e.target.value)}
@@ -283,8 +327,16 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
               </div>
 
               <div>
-                <label className="mb-1 block text-xs text-text-muted">CLI 工具</label>
-                <CliToolCombobox value={cliTool} onChange={setCliTool} />
+                <label id={cliToolLabelId} htmlFor={cliToolFieldId} className="mb-1 block text-xs text-text-muted">CLI 工具</label>
+                <CliToolCombobox
+                  id={cliToolFieldId}
+                  ariaLabel={t("configModal.a11y.cliTool")}
+                  labelledBy={cliToolLabelId}
+                  open={cliToolComboboxOpen}
+                  onOpenChange={setCliToolComboboxOpen}
+                  value={cliTool}
+                  onChange={setCliTool}
+                />
               </div>
 
               <Field
@@ -295,10 +347,12 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
               />
 
               <div>
-                <label className="mb-1 block text-xs text-text-muted">Shell</label>
+                <label htmlFor={shellFieldId} className="mb-1 block text-xs text-text-muted">Shell</label>
                 <Select
+                  id={shellFieldId}
                   key={shellSelectKey}
                   value={shellSelectValue}
+                  aria-label={t("configModal.a11y.shell")}
                   onChange={(e) => {
                     const nextShell = e.target.value;
                     logInfo("[config-modal] shell select onChange", {
@@ -362,17 +416,36 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
 }
 
 function CliToolCombobox({
+  id,
+  ariaLabel,
+  labelledBy,
+  open,
+  onOpenChange,
   value,
   onChange,
 }: {
+  id?: string;
+  ariaLabel?: string;
+  labelledBy?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   value: string;
   onChange: (value: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const listboxId = useId();
+  const { t } = useI18n();
   const vendor = inferVendor(value);
   const normalizedValue = value.trim().toLowerCase();
+  const resolveOptionIndex = useCallback((nextValue: string) => {
+    const normalized = nextValue.trim().toLowerCase();
+    const exactMatch = CLI_TOOL_OPTIONS.findIndex((tool) => tool === normalized);
+    if (exactMatch >= 0) return exactMatch;
+    const prefixMatch = CLI_TOOL_OPTIONS.findIndex((tool) => tool.startsWith(normalized));
+    return prefixMatch >= 0 ? prefixMatch : 0;
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -380,27 +453,34 @@ function CliToolCombobox({
     const handler = (e: MouseEvent) => {
       const target = e.target as Node;
       if (rootRef.current?.contains(target)) return;
-      setOpen(false);
+      onOpenChange(false);
     };
 
     document.addEventListener("mousedown", handler);
     return () => {
       document.removeEventListener("mousedown", handler);
     };
-  }, [open]);
+  }, [onOpenChange, open]);
+
+  useEffect(() => {
+    setActiveIndex(resolveOptionIndex(value));
+  }, [resolveOptionIndex, value]);
 
   const selectTool = (tool: (typeof CLI_TOOL_OPTIONS)[number]) => {
     onChange(tool);
-    setOpen(false);
+    onOpenChange(false);
+    setActiveIndex(CLI_TOOL_OPTIONS.indexOf(tool));
     inputRef.current?.focus();
   };
 
   const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
     const nextFocus = e.relatedTarget as Node | null;
     if (!nextFocus || !e.currentTarget.contains(nextFocus)) {
-      setOpen(false);
+      onOpenChange(false);
     }
   };
+
+  const activeOptionId = open ? `${listboxId}-option-${CLI_TOOL_OPTIONS[activeIndex]}` : undefined;
 
   return (
     <div ref={rootRef} className="relative" onBlur={handleBlur}>
@@ -410,27 +490,71 @@ function CliToolCombobox({
         </span>
       )}
       <Input
+        id={id}
         ref={inputRef}
         type="text"
         value={value}
-        onFocus={() => setOpen(true)}
         onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
+          const nextValue = e.target.value;
+          onChange(nextValue);
+          setActiveIndex(resolveOptionIndex(nextValue));
+          onOpenChange(true);
+        }}
+        onClick={() => {
+          setActiveIndex(resolveOptionIndex(value));
+          onOpenChange(true);
         }}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            setOpen(true);
+            if (!open) {
+              setActiveIndex(resolveOptionIndex(value));
+              onOpenChange(true);
+              return;
+            }
+            setActiveIndex((current) => (current + 1) % CLI_TOOL_OPTIONS.length);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            if (!open) {
+              setActiveIndex(resolveOptionIndex(value));
+              onOpenChange(true);
+              return;
+            }
+            setActiveIndex((current) => (current - 1 + CLI_TOOL_OPTIONS.length) % CLI_TOOL_OPTIONS.length);
+          } else if (e.key === "Enter") {
+            if (!open) {
+              e.preventDefault();
+              setActiveIndex(resolveOptionIndex(value));
+              onOpenChange(true);
+              return;
+            }
+            e.preventDefault();
+            selectTool(CLI_TOOL_OPTIONS[activeIndex]);
+          } else if (e.key === "Home" && open) {
+            e.preventDefault();
+            setActiveIndex(0);
+          } else if (e.key === "End" && open) {
+            e.preventDefault();
+            setActiveIndex(CLI_TOOL_OPTIONS.length - 1);
           } else if (e.key === "Escape") {
-            setOpen(false);
+            if (open) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+            onOpenChange(false);
+          } else if (e.key === "Tab") {
+            onOpenChange(false);
           }
         }}
-        placeholder="claude / codex / custom"
+        placeholder={t("configModal.cliToolPlaceholder")}
         role="combobox"
+        aria-label={ariaLabel}
+        aria-labelledby={labelledBy}
+        aria-autocomplete="list"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-controls="cli-tool-options-panel"
+        aria-controls={listboxId}
+        aria-activedescendant={activeOptionId}
         className={`pr-8 text-sm ${vendor ? "pl-9" : ""}`}
       />
       <button
@@ -439,7 +563,8 @@ function CliToolCombobox({
         aria-hidden="true"
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => {
-          setOpen((prev) => !prev);
+          setActiveIndex(resolveOptionIndex(value));
+          onOpenChange(!open);
           inputRef.current?.focus();
         }}
         className="ui-focus-ring absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-text-muted outline-none transition-colors hover:bg-surface-container-highest hover:text-text-primary"
@@ -453,22 +578,25 @@ function CliToolCombobox({
 
       {open && (
         <div
-          id="cli-tool-options-panel"
+          id={listboxId}
           role="listbox"
           className="ui-select-popover absolute left-0 top-full z-[60] mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-border bg-surface-container-high py-1 text-xs shadow-lg"
         >
-          {CLI_TOOL_OPTIONS.map((tool) => {
+          {CLI_TOOL_OPTIONS.map((tool, index) => {
             const selected = normalizedValue === tool;
             return (
               <button
+                id={`${listboxId}-option-${tool}`}
                 key={tool}
                 type="button"
                 role="option"
                 aria-selected={selected}
                 data-selected={selected ? "true" : undefined}
+                data-active={activeIndex === index ? "true" : undefined}
                 onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => selectTool(tool)}
-                className="flex w-[calc(100%-8px)] cursor-pointer items-center gap-2 outline-none hover:bg-surface-container-highest hover:text-text-primary"
+                className="flex w-[calc(100%-8px)] cursor-pointer items-center gap-2 outline-none hover:bg-surface-container-highest hover:text-text-primary data-[active=true]:bg-surface-container-highest data-[active=true]:text-text-primary"
               >
                 <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
                   <VendorIcon vendor={inferVendor(tool)} size={14} />
@@ -587,8 +715,15 @@ function GroupSelector({
 }
 
 function Field({
-  label, value, onChange, placeholder,
+  id,
+  inputRef,
+  label,
+  value,
+  onChange,
+  placeholder,
 }: {
+  id?: string;
+  inputRef?: Ref<HTMLInputElement>;
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -596,8 +731,10 @@ function Field({
 }) {
   return (
     <div>
-      <label className="mb-1 block text-xs text-text-muted">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-xs text-text-muted">{label}</label>
       <Input
+        id={id}
+        ref={inputRef}
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}

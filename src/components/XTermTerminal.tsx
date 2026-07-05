@@ -24,9 +24,15 @@ import {
 import { backgroundAssetUrl } from "../lib/assetUrl";
 import { TERMINAL_FILE_PATH_MIME } from "../lib/aiPathFormatter";
 import { resolveManualDirectCodexEnterData } from "../lib/codexManualInput";
+import { debugConsoleWarn } from "../lib/debugConsole";
 import { useI18n } from "../lib/i18n";
 import { normalizeTerminalFontFamily } from "../lib/terminalFontFamily";
-import { endTerminalFileDrag, getTerminalFileDragText } from "../lib/terminalFileDrag";
+import {
+  endTerminalFileDrag,
+  getTerminalFileDragText,
+  registerTerminalDropZone,
+  updateTerminalFileDragPointFromEvent,
+} from "../lib/terminalFileDrag";
 import { planTerminalVisibilityRestore, refreshTerminalViewport } from "../lib/terminalVisibility";
 import {
   defaultShellForOs,
@@ -39,7 +45,7 @@ import {
 import { Portal } from "./ui/Portal";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
 import { useProjectStore } from "../stores/projectStore";
-import { useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
+import { formatStartupInputForPty, useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
 import { useSettingsStore, type LightThemePalette, type DarkThemePalette } from "../stores/settingsStore";
 
 const FONT_SIZE_MIN = 8;
@@ -258,6 +264,15 @@ const quoteShellPath = (path: string, shell: string | null | undefined) => {
 const formatShellPathList = (paths: string[], shell: string | null | undefined) => (
   paths.filter(Boolean).map((path) => quoteShellPath(path, shell)).join(" ")
 );
+
+const hasDataTransferType = (dataTransfer: DataTransfer | null, type: string): boolean => {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types as DataTransfer["types"] & {
+    contains?: (value: string) => boolean;
+  };
+  if (typeof types.contains === "function") return types.contains(type);
+  return Array.from(types).includes(type);
+};
 
 const openHttpUrl = (sessionId: string, uri: string) => {
   if (!/^https?:\/\//i.test(uri)) return;
@@ -1047,7 +1062,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       const now = Date.now();
       if (now - activeWriteQueueLastDropLogAtRef.current >= ACTIVE_WRITE_QUEUE_LOG_INTERVAL_MS) {
         activeWriteQueueLastDropLogAtRef.current = now;
-        console.warn("[oom-diagnostics:webview]", {
+        debugConsoleWarn("[oom-diagnostics:webview]", {
           area: "xterm",
           phase: "activeWriteQueueTrim",
           sessionId,
@@ -1240,6 +1255,23 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
     scheduleFit(true);
+    const sessionSnapshot = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
+    const initialTerminalOutput = sessionSnapshot?.initialTerminalOutput;
+    const writeDeferredStartup = () => {
+      if (!sessionSnapshot?.deferStartupUntilInitialOutput || !sessionSnapshot.startupCmd) return;
+      invoke("pty_write", {
+        sessionId,
+        data: formatStartupInputForPty(sessionSnapshot.startupCmd, normalizeShellKey(sessionSnapshot.shell) ?? null),
+      }).catch((err) => reportPtyWriteError("deferredStartup", err));
+    };
+    if (initialTerminalOutput) {
+      terminal.write(initialTerminalOutput, () => {
+        terminal.scrollToBottom();
+        writeDeferredStartup();
+      });
+    } else {
+      writeDeferredStartup();
+    }
     if (isActive) {
       terminal.focus();
     }
@@ -1277,8 +1309,17 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     };
 
     const hasTerminalFileDragData = (dataTransfer: DataTransfer | null) => (
-      Boolean(getTerminalFileDragText()) || Boolean(dataTransfer?.types.includes(TERMINAL_FILE_PATH_MIME))
+      Boolean(getTerminalFileDragText()) || hasDataTransferType(dataTransfer, TERMINAL_FILE_PATH_MIME)
     );
+    const unregisterTerminalDropZone = registerTerminalDropZone({
+      id: sessionId,
+      getRect: () => {
+        if (!isVisibleRef.current) return null;
+        return pasteTarget.getBoundingClientRect();
+      },
+      paste: pasteIntoTerminal,
+      focus: () => terminal.focus(),
+    });
     const getShellForPathQuoting = async () => {
       const os = await getOsPlatformForPathQuoting();
       const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
@@ -1290,7 +1331,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
     const onDragOver = (e: DragEvent) => {
       const isActiveTerminalFileDrag = Boolean(getTerminalFileDragText());
-      if (!isActiveTerminalFileDrag && (!isPointInsidePasteTarget(e.clientX, e.clientY) || !hasTerminalFileDragData(e.dataTransfer))) return;
+      if (isActiveTerminalFileDrag) updateTerminalFileDragPointFromEvent(e);
+      if (!isPointInsidePasteTarget(e.clientX, e.clientY) || !hasTerminalFileDragData(e.dataTransfer)) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
@@ -1299,6 +1341,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (!isPointInsidePasteTarget(e.clientX, e.clientY) || !hasTerminalFileDragData(e.dataTransfer)) return;
       const text = getTerminalFileDragText()
         || e.dataTransfer?.getData(TERMINAL_FILE_PATH_MIME)
+        || e.dataTransfer?.getData("text/plain")
         || "";
       e.preventDefault();
       e.stopPropagation();
@@ -2022,6 +2065,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       cancelled = true;
       cancelPendingCursorShow();
       pasteTarget.removeEventListener("paste", onPaste, pasteListenerOptions);
+      unregisterTerminalDropZone();
       window.removeEventListener("dragover", onDragOver, true);
       window.removeEventListener("drop", onDrop, true);
       fileDropCancelled = true;

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
+import { debugConsoleWarn } from "../../lib/debugConsole";
 import { getTerminalTheme, isLightTerminalTheme } from "../../lib/terminalThemes";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -115,7 +116,7 @@ function parseTranscript(content: string): RenderedMessage[] {
     ? content.slice(-TRANSCRIPT_PARSE_MAX_CHARS)
     : content;
   if (parseContent.length !== content.length) {
-    console.warn("[oom-diagnostics:webview]", {
+    debugConsoleWarn("[oom-diagnostics:webview]", {
       area: "subagentTranscript",
       phase: "parseTailOnly",
       contentChars: content.length,
