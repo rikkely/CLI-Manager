@@ -21,7 +21,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
-import { useExternalSessionSyncStore } from "../stores/externalSessionSyncStore";
 import { isProjectFileDirty, useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { logError } from "../lib/logger";
@@ -52,7 +51,7 @@ import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { parseProjectEnvVars } from "../lib/providerSwitching";
-import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check, RefreshCw } from "./icons";
+import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { EmptyState } from "./ui/EmptyState";
 import { useHistoryStore } from "../stores/historyStore";
@@ -1654,9 +1653,6 @@ export function TerminalTabs({
   const openHistory = useHistoryStore((s) => s.openHistory);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const focusGlobalSearchSeq = useHistoryStore((s) => s.focusGlobalSearchSeq);
-  const openExternalSessionSyncDialog = useExternalSessionSyncStore((s) => s.openManualDialog);
-  const externalSessionSyncScanning = useExternalSessionSyncStore((s) => s.scanningProjects);
-  const externalSessionSyncing = useExternalSessionSyncStore((s) => s.syncingProjects);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"terminal" | "history">("terminal");
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [splitPicker, setSplitPicker] = useState<SplitPickerState>(null);
@@ -2515,21 +2511,6 @@ export function TerminalTabs({
               </SortableToolbarButton>
             ))}
           </SortableContext>
-          <button
-            onClick={() => {
-              void openExternalSessionSyncDialog();
-            }}
-            disabled={externalSessionSyncScanning || externalSessionSyncing}
-            className="ui-focus-ring ui-icon-action ui-action-external-session-sync"
-            title="同步 Codex/Claude 历史"
-            aria-label="同步 Codex/Claude 历史"
-          >
-            <RefreshCw
-              size={13}
-              strokeWidth={1.8}
-              className={externalSessionSyncScanning || externalSessionSyncing ? "animate-spin" : undefined}
-            />
-          </button>
         </nav>
         <DragOverlay dropAnimation={null}>
           {activeToolbarDragId && buttonMap[activeToolbarDragId] ? (
@@ -2542,8 +2523,6 @@ export function TerminalTabs({
     );
   }, [
     activeToolbarDragId,
-    externalSessionSyncScanning,
-    externalSessionSyncing,
     fullscreen,
     filePanelProject,
     filesPanelActive,
@@ -2560,7 +2539,6 @@ export function TerminalTabs({
     handleToolbarDragStart,
     historyOpen,
     onToggleFullscreen,
-    openExternalSessionSyncDialog,
     replayPanelActive,
     sessionHistoryShortcutHint,
     sidePanelMerged,

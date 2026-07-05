@@ -71,3 +71,65 @@ await db.execute("UPDATE session_meta SET starred = 1 WHERE session_key = $1", [
 await updateMeta(sessionKey, { starred: true });
 // updateMeta writes session_meta and session_favorite_snapshots together.
 ```
+
+## Scenario: External History Project Sync Prompt
+
+### 1. Scope / Trigger
+
+- Trigger: changing how Claude/Codex history projects are detected, prompted, or materialized into the maintained project list.
+
+### 2. Signatures
+
+- Store action: `externalSessionSyncStore.openInitialDialog()`
+- Store action: `externalSessionSyncStore.openManualDialog()`
+- Store action: `externalSessionSyncStore.syncProjectCandidates(keys: string[])`
+- History refresh caller: `HistoryWorkspace.handleRefreshSessions()`
+
+### 3. Contracts
+
+- Startup detection is only for empty maintained-project installs. `openInitialDialog()` must load project state first and return without scanning when `projectStore.projects.length > 0`.
+- Manual detection is user-triggered from the history session list refresh action. It must still run when maintained projects exist.
+- Manual detection should prompt only for history candidates whose project path/source is not already represented by a maintained project.
+- No-candidate manual scans should use a toast and keep the sync dialog closed.
+- Candidate and dialog copy must use `useI18n()` / `translateCurrent()` in both `zh-CN` and `en-US`.
+
+### 4. Validation & Error Matrix
+
+- Startup + projects exist -> mark initial prompt handled, no scan, no dialog.
+- Startup + no projects + candidates exist -> show initial sync dialog with all candidates selected.
+- Startup + no projects + no candidates -> mark initial prompt handled, no dialog.
+- Manual refresh + missing project candidates exist -> refresh history list, then show manual sync dialog.
+- Manual refresh + no missing project candidates -> refresh history list, show no-candidates toast, keep dialog closed.
+- Scan failure -> clear scanning state and show scan-failed toast for manual scans; log warning for startup scans.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a user with an existing project list clicks history refresh and only sees a sync prompt when history contains a new, unmaintained project.
+- Base: a fresh install with no projects still gets the first-run detection prompt.
+- Bad: startup scans every launch even though the user already maintains projects.
+- Bad: history refresh opens an empty sync dialog when there are no missing projects.
+
+### 6. Tests Required
+
+- Run `npx tsc --noEmit` after frontend store/component changes.
+- Manually verify the history refresh button reloads sessions and opens the sync dialog only when missing projects exist.
+- Manually verify Settings -> General language switching updates the sync dialog, tooltips/aria labels where visible, and toasts.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+void useExternalSessionSyncStore.getState().openInitialDialog();
+```
+
+#### Correct
+
+```typescript
+await ensureProjectStoreLoaded("startup");
+if (useProjectStore.getState().projects.length > 0) {
+  set({ initialSyncPromptHandled: true, scanningProjects: false, projectCandidates: [] });
+  await persistCurrentState(get());
+  return;
+}
+```

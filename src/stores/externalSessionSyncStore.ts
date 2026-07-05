@@ -565,6 +565,7 @@ async function scanProjectCandidates(handledKeys: Set<string>, limit: number): P
   projectScanInFlight = (async () => {
     const startedAt = Date.now();
     logInfo("External session project scan started", { limit });
+    const projects = useProjectStore.getState().projects;
     const summariesRaw = await invoke<unknown[]>("history_list_sessions", {
       source: null,
       ...getHistoryPathArgs(),
@@ -583,12 +584,14 @@ async function scanProjectCandidates(handledKeys: Set<string>, limit: number): P
       .map((summary) => normalizeCandidate(summary))
       .filter((candidate): candidate is ExternalSessionCandidate => Boolean(candidate));
 
-    const unsyncedCandidates = allCandidates.filter((candidate) => !handledKeys.has(candidate.key));
-    const projectCandidates = groupProjectCandidates(unsyncedCandidates, useProjectStore.getState().projects, allCandidates);
+    const missingProjectCandidates = allCandidates.filter((candidate) => !findContainingProject(projects, candidate));
+    const unsyncedCandidates = missingProjectCandidates.filter((candidate) => !handledKeys.has(candidate.key));
+    const projectCandidates = groupProjectCandidates(unsyncedCandidates, projects, missingProjectCandidates);
     logInfo("External session project scan finished", {
       durationMs: Date.now() - startedAt,
       summaries: summaries.length,
       candidates: allCandidates.length,
+      missingProjects: missingProjectCandidates.length,
       unsynced: unsyncedCandidates.length,
       projects: projectCandidates.length,
     });
@@ -597,6 +600,12 @@ async function scanProjectCandidates(handledKeys: Set<string>, limit: number): P
     projectScanInFlight = null;
   });
   return projectScanInFlight;
+}
+
+async function ensureProjectStoreLoaded(reason: "startup" | "interactive"): Promise<void> {
+  if (!useProjectStore.getState().loaded) {
+    await useProjectStore.getState().fetchAll(reason);
+  }
 }
 
 export const useExternalSessionSyncStore = create<ExternalSessionSyncStore>((set, get) => ({
@@ -652,8 +661,14 @@ export const useExternalSessionSyncStore = create<ExternalSessionSyncStore>((set
   openInitialDialog: async () => {
     if (!get().loaded) await get().load();
     if (get().initialSyncPromptHandled) return;
-    set({ scanningProjects: true, dialogMode: "initial" });
     try {
+      await ensureProjectStoreLoaded("startup");
+      if (useProjectStore.getState().projects.length > 0) {
+        set({ initialSyncPromptHandled: true, scanningProjects: false, projectCandidates: [] });
+        await persistCurrentState(get());
+        return;
+      }
+      set({ scanningProjects: true, dialogMode: "initial" });
       const projectCandidates = await scanProjectCandidates(handledSessionKeys(get()), INITIAL_PROJECT_SCAN_LIMIT);
       if (projectCandidates.length === 0) {
         set({ initialSyncPromptHandled: true, scanningProjects: false, projectCandidates: [] });
@@ -674,21 +689,22 @@ export const useExternalSessionSyncStore = create<ExternalSessionSyncStore>((set
 
   openManualDialog: async () => {
     if (!get().loaded) await get().load();
-    set({ scanningProjects: true, dialogMode: "manual", dialogOpen: true, projectCandidates: [] });
+    set({ scanningProjects: true, dialogMode: "manual", dialogOpen: false, projectCandidates: [] });
     try {
+      await ensureProjectStoreLoaded("interactive");
       const projectCandidates = await scanProjectCandidates(handledSessionKeys(get()), MANUAL_PROJECT_SCAN_LIMIT);
       set({
         projectCandidates,
         dialogMode: "manual",
-        dialogOpen: true,
+        dialogOpen: projectCandidates.length > 0,
         scanningProjects: false,
       });
       if (projectCandidates.length === 0) {
-        toast.info("没有找到可同步的 Codex/Claude 项目");
+        toast.info(translateCurrent("notifications.externalSessionSync.noSyncableProjects"));
       }
     } catch (err) {
-      set({ scanningProjects: false });
-      toast.error("扫描 Codex/Claude 项目失败", { description: String(err) });
+      set({ scanningProjects: false, dialogOpen: false });
+      toast.error(translateCurrent("notifications.externalSessionSync.scanFailed"), { description: String(err) });
     }
   },
 
@@ -712,7 +728,7 @@ export const useExternalSessionSyncStore = create<ExternalSessionSyncStore>((set
     if (candidates.length === 0) {
       set({ dialogOpen: false, initialSyncPromptHandled: nextInitialHandled });
       await persistCurrentState(get());
-      toast.info("没有选择要同步的项目");
+      toast.info(translateCurrent("notifications.externalSessionSync.noSelectedProjects"));
       return;
     }
 
@@ -739,12 +755,18 @@ export const useExternalSessionSyncStore = create<ExternalSessionSyncStore>((set
       await persistCurrentState(get());
       toast.success(
         createdProjects > 0
-          ? `同步完成，新建 ${createdProjects} 个项目，${candidates.length} 条记录`
-          : `同步完成，共同步 ${selectedProjects.length} 个项目，${candidates.length} 条记录`
+          ? translateCurrent("notifications.externalSessionSync.projectSyncSuccessCreated", {
+              projectCount: createdProjects,
+              sessionCount: candidates.length,
+            })
+          : translateCurrent("notifications.externalSessionSync.projectSyncSuccess", {
+              projectCount: selectedProjects.length,
+              sessionCount: candidates.length,
+            })
       );
     } catch (err) {
       set({ syncingProjects: false });
-      toast.error("同步 Codex/Claude 项目失败", { description: String(err) });
+      toast.error(translateCurrent("notifications.externalSessionSync.projectSyncFailed"), { description: String(err) });
     }
   },
 

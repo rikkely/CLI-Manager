@@ -5,6 +5,7 @@ import { useTerminalStore } from "../stores/terminalStore";
 import type { HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, Project } from "../lib/types";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
+import { useExternalSessionSyncStore } from "../stores/externalSessionSyncStore";
 import { useI18n } from "../lib/i18n";
 import { PromptLibrary } from "./prompts/PromptLibrary";
 import { DiffModal } from "./history/DiffModal";
@@ -440,10 +441,11 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
       if (query) {
         await runGlobalSearch(query);
       }
+      await useExternalSessionSyncStore.getState().openManualDialog();
     })().catch((err) => {
-      toast.error("刷新失败", { description: String(err) });
+      toast.error(t("history.toast.refreshFailed"), { description: String(err) });
     });
-  }, [globalQuery, loadSessions, runGlobalSearch]);
+  }, [globalQuery, loadSessions, runGlobalSearch, t]);
 
   const matchIndices = useMemo(() => {
     const query = debouncedSessionQuery.trim();

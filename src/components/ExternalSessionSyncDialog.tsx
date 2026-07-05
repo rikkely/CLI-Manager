@@ -9,13 +9,16 @@ import {
 import { Button } from "./ui/button";
 import { Check, RefreshCw } from "./icons";
 import { useExternalSessionSyncStore, type ExternalSessionProjectCandidate } from "../stores/externalSessionSyncStore";
+import { useI18n, type TranslationKey } from "../lib/i18n";
 import type { HistorySource } from "../lib/types";
+
+type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
 function sourceLabel(source: HistorySource): string {
   return source === "codex" ? "Codex" : "Claude";
 }
 
-function formatRelativeTime(ms: number): string {
+function formatRelativeTime(ms: number, t: Translate): string {
   if (!ms) return "";
   const diff = Math.max(0, Date.now() - ms);
   const minute = 60_000;
@@ -23,12 +26,12 @@ function formatRelativeTime(ms: number): string {
   const day = hour * 24;
   const week = day * 7;
   const month = day * 30;
-  if (diff < minute) return "刚刚";
-  if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))} 分钟前`;
-  if (diff < day) return `${Math.max(1, Math.floor(diff / hour))} 小时前`;
-  if (diff < week) return `${Math.max(1, Math.floor(diff / day))} 天前`;
-  if (diff < month) return `${Math.max(1, Math.floor(diff / week))} 周前`;
-  return `${Math.max(1, Math.floor(diff / month))} 个月前`;
+  if (diff < minute) return t("externalSessionSync.relative.justNow");
+  if (diff < hour) return t("externalSessionSync.relative.minutesAgo", { count: Math.max(1, Math.floor(diff / minute)) });
+  if (diff < day) return t("externalSessionSync.relative.hoursAgo", { count: Math.max(1, Math.floor(diff / hour)) });
+  if (diff < week) return t("externalSessionSync.relative.daysAgo", { count: Math.max(1, Math.floor(diff / day)) });
+  if (diff < month) return t("externalSessionSync.relative.weeksAgo", { count: Math.max(1, Math.floor(diff / week)) });
+  return t("externalSessionSync.relative.monthsAgo", { count: Math.max(1, Math.floor(diff / month)) });
 }
 
 function ProjectRow({
@@ -36,11 +39,13 @@ function ProjectRow({
   checked,
   disabled,
   onToggle,
+  t,
 }: {
   project: ExternalSessionProjectCandidate;
   checked: boolean;
   disabled: boolean;
   onToggle: () => void;
+  t: Translate;
 }) {
   const latestTitle = project.sessions[0]?.title ?? project.name;
   return (
@@ -52,7 +57,7 @@ function ProjectRow({
           disabled={disabled}
           onChange={onToggle}
           className="peer h-5 w-5 appearance-none rounded border border-border bg-surface-container-lowest transition-colors checked:border-[var(--color-primary)] checked:bg-[var(--color-primary)] disabled:opacity-60"
-          aria-label={`同步 ${project.name}`}
+          aria-label={t("externalSessionSync.selectProjectAria", { name: project.name })}
         />
         <Check
           size={13}
@@ -66,7 +71,9 @@ function ProjectRow({
           <span className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-on-surface-variant ring-1 ring-border/70">
             {sourceLabel(project.source)}
           </span>
-          <span className="shrink-0 text-xs text-on-surface-variant">{project.sessionCount} 条</span>
+          <span className="shrink-0 text-xs text-on-surface-variant">
+            {t("externalSessionSync.sessionCount", { count: project.sessionCount })}
+          </span>
         </span>
         <span className="mt-0.5 block truncate text-xs text-on-surface-variant" title={project.cwd}>
           {project.cwd}
@@ -75,12 +82,13 @@ function ProjectRow({
           {latestTitle}
         </span>
       </span>
-      <span className="shrink-0 text-xs text-on-surface-variant">{formatRelativeTime(project.updatedAt)}</span>
+      <span className="shrink-0 text-xs text-on-surface-variant">{formatRelativeTime(project.updatedAt, t)}</span>
     </label>
   );
 }
 
 export function ExternalSessionSyncDialog() {
+  const { t } = useI18n();
   const open = useExternalSessionSyncStore((state) => state.dialogOpen);
   const mode = useExternalSessionSyncStore((state) => state.dialogMode);
   const candidates = useExternalSessionSyncStore((state) => state.projectCandidates);
@@ -126,24 +134,24 @@ export function ExternalSessionSyncDialog() {
     >
       <DialogContent className="max-w-[680px] p-0" showCloseButton={!disabled}>
         <div className="border-b border-border/70 px-5 py-4">
-          <DialogTitle>同步 Codex / Claude 历史</DialogTitle>
+          <DialogTitle>{t("externalSessionSync.title")}</DialogTitle>
           <DialogDescription className="mt-1">
             {mode === "initial"
-              ? "首次检测到本机历史项目，默认全选。"
-              : "选择要同步到左侧项目列表的历史项目。"}
+              ? t("externalSessionSync.initialDescription")
+              : t("externalSessionSync.manualDescription")}
           </DialogDescription>
         </div>
 
         <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
           <div className="text-sm text-on-surface-variant">
-            已选择 {selectedCount} 个项目，{totalSessionCount} 条记录
+            {t("externalSessionSync.selectedSummary", { projectCount: selectedCount, sessionCount: totalSessionCount })}
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" disabled={disabled || candidates.length === 0} onClick={selectAll}>
-              全选
+              {t("externalSessionSync.selectAll")}
             </Button>
             <Button variant="ghost" size="sm" disabled={disabled || candidates.length === 0} onClick={clearAll}>
-              清空
+              {t("externalSessionSync.clearAll")}
             </Button>
           </div>
         </div>
@@ -152,11 +160,11 @@ export function ExternalSessionSyncDialog() {
           {scanning ? (
             <div className="flex min-h-[180px] items-center justify-center gap-2 text-sm text-on-surface-variant">
               <RefreshCw size={15} className="animate-spin" />
-              正在扫描 Codex / Claude 历史...
+              {t("externalSessionSync.scanning")}
             </div>
           ) : candidates.length === 0 ? (
             <div className="flex min-h-[180px] items-center justify-center text-sm text-on-surface-variant">
-              没有找到可同步的项目
+              {t("externalSessionSync.empty")}
             </div>
           ) : (
             <div className="space-y-4">
@@ -176,6 +184,7 @@ export function ExternalSessionSyncDialog() {
                           checked={selectedKeys.has(project.key)}
                           disabled={disabled}
                           onToggle={() => toggleProject(project.key)}
+                          t={t}
                         />
                       ))}
                     </div>
@@ -188,14 +197,14 @@ export function ExternalSessionSyncDialog() {
 
         <DialogFooter className="border-t border-border/70 px-5 py-4">
           <Button variant="outline" disabled={disabled} onClick={() => void closeProjectDialog()}>
-            取消
+            {t("externalSessionSync.cancel")}
           </Button>
           <Button
             variant="default"
             disabled={disabled || candidates.length === 0}
             onClick={() => void syncProjectCandidates(Array.from(selectedKeys))}
           >
-            {syncing ? "同步中..." : "同步"}
+            {syncing ? t("externalSessionSync.syncing") : t("externalSessionSync.confirm")}
           </Button>
         </DialogFooter>
       </DialogContent>
