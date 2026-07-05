@@ -27,7 +27,12 @@ import { resolveManualDirectCodexEnterData } from "../lib/codexManualInput";
 import { debugConsoleWarn } from "../lib/debugConsole";
 import { useI18n } from "../lib/i18n";
 import { normalizeTerminalFontFamily } from "../lib/terminalFontFamily";
-import { endTerminalFileDrag, getTerminalFileDragText } from "../lib/terminalFileDrag";
+import {
+  endTerminalFileDrag,
+  getTerminalFileDragText,
+  registerTerminalDropZone,
+  updateTerminalFileDragPointFromEvent,
+} from "../lib/terminalFileDrag";
 import { planTerminalVisibilityRestore, refreshTerminalViewport } from "../lib/terminalVisibility";
 import {
   defaultShellForOs,
@@ -259,6 +264,15 @@ const quoteShellPath = (path: string, shell: string | null | undefined) => {
 const formatShellPathList = (paths: string[], shell: string | null | undefined) => (
   paths.filter(Boolean).map((path) => quoteShellPath(path, shell)).join(" ")
 );
+
+const hasDataTransferType = (dataTransfer: DataTransfer | null, type: string): boolean => {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types as DataTransfer["types"] & {
+    contains?: (value: string) => boolean;
+  };
+  if (typeof types.contains === "function") return types.contains(type);
+  return Array.from(types).includes(type);
+};
 
 const openHttpUrl = (sessionId: string, uri: string) => {
   if (!/^https?:\/\//i.test(uri)) return;
@@ -1295,8 +1309,17 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     };
 
     const hasTerminalFileDragData = (dataTransfer: DataTransfer | null) => (
-      Boolean(getTerminalFileDragText()) || Boolean(dataTransfer?.types.includes(TERMINAL_FILE_PATH_MIME))
+      Boolean(getTerminalFileDragText()) || hasDataTransferType(dataTransfer, TERMINAL_FILE_PATH_MIME)
     );
+    const unregisterTerminalDropZone = registerTerminalDropZone({
+      id: sessionId,
+      getRect: () => {
+        if (!isVisibleRef.current) return null;
+        return pasteTarget.getBoundingClientRect();
+      },
+      paste: pasteIntoTerminal,
+      focus: () => terminal.focus(),
+    });
     const getShellForPathQuoting = async () => {
       const os = await getOsPlatformForPathQuoting();
       const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
@@ -1308,7 +1331,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
     const onDragOver = (e: DragEvent) => {
       const isActiveTerminalFileDrag = Boolean(getTerminalFileDragText());
-      if (!isActiveTerminalFileDrag && (!isPointInsidePasteTarget(e.clientX, e.clientY) || !hasTerminalFileDragData(e.dataTransfer))) return;
+      if (isActiveTerminalFileDrag) updateTerminalFileDragPointFromEvent(e);
+      if (!isPointInsidePasteTarget(e.clientX, e.clientY) || !hasTerminalFileDragData(e.dataTransfer)) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
@@ -1317,6 +1341,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (!isPointInsidePasteTarget(e.clientX, e.clientY) || !hasTerminalFileDragData(e.dataTransfer)) return;
       const text = getTerminalFileDragText()
         || e.dataTransfer?.getData(TERMINAL_FILE_PATH_MIME)
+        || e.dataTransfer?.getData("text/plain")
         || "";
       e.preventDefault();
       e.stopPropagation();
@@ -2040,6 +2065,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       cancelled = true;
       cancelPendingCursorShow();
       pasteTarget.removeEventListener("paste", onPaste, pasteListenerOptions);
+      unregisterTerminalDropZone();
       window.removeEventListener("dragover", onDragOver, true);
       window.removeEventListener("drop", onDrop, true);
       fileDropCancelled = true;

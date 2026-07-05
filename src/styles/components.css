@@ -5314,6 +5314,33 @@
   color: var(--primary);
 }
 
+.ui-file-drag-preview {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(360px, calc(100vw - 24px));
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--surface-container-high) 94%, transparent);
+  color: var(--on-surface);
+  box-shadow: 0 14px 34px color-mix(in srgb, #000 34%, transparent);
+  opacity: 0.94;
+  overflow: hidden;
+}
+
+.ui-file-drag-preview[data-over-terminal="true"] {
+  border-color: color-mix(in srgb, var(--primary) 72%, transparent);
+  background-color: color-mix(in srgb, var(--primary) 16%, var(--surface-container-high));
+  box-shadow:
+    0 14px 34px color-mix(in srgb, #000 34%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.ui-file-drag-preview .ui-file-tree-row {
+  width: 100%;
+  background-color: transparent;
+}
+
 .ui-file-explorer-sidebar .ui-icon-action {
   border-color: color-mix(in srgb, var(--on-surface) 10%, transparent);
   background-color: color-mix(in srgb, var(--on-surface) 7%, transparent);
