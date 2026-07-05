@@ -276,6 +276,7 @@ function normalizeTokenTrend(raw: unknown): HistoryTokenTrendPoint[] {
         cache_read_tokens: cacheRead,
         cache_creation_tokens: cacheCreation,
         total_tokens: total,
+        model: asString(rec.model ?? "") || null,
       };
     })
     .filter((item) => item.total_tokens > 0);

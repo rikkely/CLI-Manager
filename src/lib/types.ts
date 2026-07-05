@@ -246,6 +246,7 @@ export interface HistoryTokenTrendPoint {
   cache_read_tokens: number;
   cache_creation_tokens: number;
   total_tokens: number;
+  model?: string | null;
 }
 
 export interface HistorySessionUsage {

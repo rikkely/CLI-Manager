@@ -75,6 +75,7 @@ interface HistoryTokenTrendPoint {
   cache_read_tokens: number;
   cache_creation_tokens: number;
   total_tokens: number;
+  model?: string | null;
 }
 
 interface HistorySessionUsage {
@@ -115,6 +116,7 @@ interface TerminalSession {
 - Codex rollout token usage comes from `event_msg.payload.info.total_token_usage`, which is a **cumulative** session counter. Per-turn usage = adjacent diff; a shrinking cumulative value means session reset (take current value as the delta). Do not sum `last_token_usage` (duplicate events inflate it 2-5%).
 - For `history_get_session` message details, Codex `response_item` messages must inherit an outer wrapper timestamp when the inner payload has none, and deduped Codex `token_count` deltas should backfill the latest assistant message that has no token fields. This keeps transcript bubbles able to show `MM/DD HH:mm  in N / out N / cache N` without changing aggregate totals.
 - `HistorySessionUsage.token_trend` exposes per-usage **delta** points after the same dedup/diff rules used for totals. Skip zero-token points. Do not synthesize frontend trend points from final totals.
+- `HistorySessionUsage.token_trend[].model` should carry the model attributed to that usage delta when known. Realtime Token Trend can use it for per-segment coloring and tooltip model names. Missing model normalizes to `null` and must fall back to the default trend color.
 - Codex `input_tokens` **includes** `cached_input_tokens`. Extraction normalizes to non-cached input + `cache_read_tokens` (Claude semantics), so pricing applies uniformly with no source-specific input deduction.
 - Usage lines without a model (e.g. Codex `token_count` events) attribute to the most recent model seen in the session (e.g. from `turn_context.payload.model`).
 - `HistorySessionUsage.dominant_model` is an aggregate model signal and must not be reused as the realtime "current model". `HistorySessionUsage.current_model` tracks the latest non-synthetic model seen in the session; realtime model/context display should prefer it so same-session model switches update context-limit fallback and remaining-space calculation without changing historical model distribution semantics.
@@ -155,6 +157,7 @@ interface TerminalSession {
 | Tool output is very large | Return a bounded summary, not the full unbounded output. |
 | Session has no token trend points | Return an empty `token_trend`; UI renders an explicit empty state. |
 | Session has exactly one token trend point | Keep the single point; UI renders a single-point state instead of a misleading line chart. |
+| Token trend point has no model attribution | Return/normalize `model: null`; UI keeps the default trend color and omits or blanks the model-specific hint. |
 | CLI hook session id present but not yet in history | Keep the terminal's own loading/empty state; never show another session. |
 | No session id, but a hook already bound a CLI session this run | Show an explicit awaiting-identification empty state for the CLI terminal; do not borrow project latest. |
 | No session id and no hook ever bound (no-hook environment) | Fall back to project latest-session lookup; do not blank the realtime stats panel. |
@@ -178,6 +181,7 @@ interface TerminalSession {
 - Good: a Claude session with input/output/cache usage and known model produces complete totals, cost, model distribution, daily trend, and per-session message token fields.
 - Good: a Codex session with multiple cumulative `token_count` events returns `token_trend` as adjacent deltas, and two Codex windows in the same project show different realtime session details after their hook `sessionId` values arrive.
 - Good: a Codex `response_item` assistant message followed by a `token_count` event returns the assistant `HistoryMessage` with inherited timestamp and normalized per-turn `input_tokens` / `output_tokens` / `cache_read_tokens`.
+- Good: realtime Token Trend receives per-point model attribution and renders one continuous line with segment colors by model; hover tooltip shows the hovered point model.
 - Good: a history detail payload exposes `cwd` when the JSONL contains session metadata, allowing the frontend to create a resume terminal in the original project directory.
 - Good: a history detail payload includes `tool_events` for Claude `tool_use` and Codex `function_call` rows; missing per-call duration remains `null` and the frontend says no duration data is available.
 - Good: a Codex rollout file with `session_meta.payload.id` returns that UUID as `session_id`, allowing realtime stats strict binding to match the hook session id; a Claude file with a similar metadata id still keeps its original file-stem identity.
@@ -201,6 +205,7 @@ interface TerminalSession {
   - Claude streamed duplicate usage lines produce one total and one matching `token_trend` point.
   - Codex cumulative `token_count` events produce delta totals and matching `token_trend` points.
   - Codex detail messages inherit outer `response_item` timestamps and receive the matching `token_count` delta on the latest assistant message for transcript metadata display.
+  - Token trend points preserve model attribution for same-session model switches and aggregate-subtask merged trends.
   - History stats bucket cross-day session usage by usage event timestamp while counting the session once for range totals.
   - Tool event extraction returns bounded diagnostic rows for Claude `tool_use`, Codex `function_call`, `function_call_output`, and MCP end/error events without changing aggregate tool counts.
   - Claude explicit context-window fields populate `SessionStatsScan.context_window`; Claude usage without those fields keeps it `None`.

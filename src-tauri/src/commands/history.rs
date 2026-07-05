@@ -441,6 +441,7 @@ pub struct HistoryTokenTrendPoint {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub total_tokens: u64,
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -2813,6 +2814,7 @@ fn merge_session_detail_parts(
             cache_read_tokens: event.usage.cache_read_tokens,
             cache_creation_tokens: event.usage.cache_creation_tokens,
             total_tokens: usage_stats_total_tokens(event.usage),
+            model: event.model.clone(),
         })
         .filter(|point| point.total_tokens > 0)
         .collect();
@@ -3894,14 +3896,14 @@ fn scan_session_inner(
                 );
             }
         }
-        token_trend.push(usage_trend_point(usage));
+        let attributed_model = line_model.or_else(|| current_model.clone());
+        token_trend.push(usage_trend_point(usage, attributed_model.clone()));
 
         input_tokens = input_tokens.saturating_add(usage.input_tokens);
         output_tokens = output_tokens.saturating_add(usage.output_tokens);
         cache_read_tokens = cache_read_tokens.saturating_add(usage.cache_read_tokens);
         cache_creation_tokens = cache_creation_tokens.saturating_add(usage.cache_creation_tokens);
 
-        let attributed_model = line_model.or_else(|| current_model.clone());
         let cost = calculate_usage_cost(attributed_model.as_deref(), usage);
         total_cost_usd += cost.total_cost_usd;
         unpriced_tokens = unpriced_tokens.saturating_add(cost.unpriced_tokens);
@@ -5429,13 +5431,14 @@ fn usage_stats_total_tokens(usage: UsageStatsScan) -> u64 {
         .saturating_add(usage.cache_creation_tokens)
 }
 
-fn usage_trend_point(usage: UsageTokenScan) -> HistoryTokenTrendPoint {
+fn usage_trend_point(usage: UsageTokenScan, model: Option<String>) -> HistoryTokenTrendPoint {
     HistoryTokenTrendPoint {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cache_read_tokens: usage.cache_read_tokens,
         cache_creation_tokens: usage.cache_creation_tokens,
         total_tokens: usage_total_tokens(usage),
+        model,
     }
 }
 
@@ -6555,13 +6558,16 @@ mod tests {
                     context_window: None,
                     last_context_tokens: None,
                     reasoning_effort: None,
-                    token_trend: vec![usage_trend_point(UsageTokenScan {
-                        input_tokens: usage.input_tokens,
-                        output_tokens: usage.output_tokens,
-                        cache_read_tokens: usage.cache_read_tokens,
-                        cache_creation_tokens: usage.cache_creation_tokens,
-                        explicit_cost_usd: None,
-                    })],
+                    token_trend: vec![usage_trend_point(
+                        UsageTokenScan {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            cache_read_tokens: usage.cache_read_tokens,
+                            cache_creation_tokens: usage.cache_creation_tokens,
+                            explicit_cost_usd: None,
+                        },
+                        Some("priced-model".to_string()),
+                    )],
                     usage_events: vec![SessionUsageEventScan {
                         timestamp_ms: Some(DAY_MS),
                         model: Some("priced-model".to_string()),
@@ -7057,6 +7063,10 @@ mod tests {
         assert_eq!(stats.current_model.as_deref(), Some("claude-new"));
         assert_eq!(stats.context_window, Some(300_000));
         assert_eq!(stats.last_context_tokens, Some(12));
+        assert_eq!(stats.token_trend.len(), 3);
+        assert_eq!(stats.token_trend[0].model.as_deref(), Some("claude-old"));
+        assert_eq!(stats.token_trend[1].model.as_deref(), Some("claude-old"));
+        assert_eq!(stats.token_trend[2].model.as_deref(), Some("claude-new"));
     }
 
     #[test]
