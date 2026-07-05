@@ -64,7 +64,7 @@ export function withCodexLightTuiTheme(command?: string): string | undefined {
 }
 
 export function resolveProjectStartupCommand(
-  project: Pick<Project, "cli_tool" | "startup_cmd" | "provider_overrides" | "shell">,
+  project: Pick<Project, "cli_tool" | "cli_args" | "startup_cmd" | "provider_overrides" | "shell">,
   options: { includeCodexProviderProfile?: boolean } = {}
 ): string | undefined {
   const startupCmd = project.startup_cmd.trim();
@@ -73,7 +73,10 @@ export function resolveProjectStartupCommand(
   const cliTool = project.cli_tool.trim();
   if (!cliTool) return undefined;
 
-  let command = cliTool;
+  // 先拼用户维护的 CLI 附加参数，再做供应商覆盖追加：
+  // hasProfileArg / hasClaudeSettingsArg 对整条 command 检测，用户手写过的参数天然去重。
+  const cliArgs = project.cli_args.trim();
+  let command = cliArgs ? `${cliTool} ${cliArgs}` : cliTool;
   if (options.includeCodexProviderProfile !== false && isExactCodexProject(project)) {
     const override = getCodexProviderOverride(project);
     if (override && !hasProfileArg(command)) {

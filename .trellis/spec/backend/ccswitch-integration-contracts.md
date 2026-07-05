@@ -134,6 +134,11 @@ pub async fn ccswitch_probe_projects(
   `--settings <settingsPath>` when `provider_overrides.claude` exists. If
   `startup_cmd` is non-empty, do not rewrite it; surface a UI warning that the user
   must manually add `--settings <settingsPath>`.
+- **CLI extra args (`cli_args`, projects v13 column)**: with empty `startup_cmd`, the
+  resolved command is `cli_tool` + `cli_args` + auto-appended override args, in that
+  order. The `--settings` duplicate check (`hasClaudeSettingsArg`) runs against the
+  whole command including `cli_args`, so a user-written `--settings` in `cli_args`
+  suppresses auto-append. `cli_args` never applies when `startup_cmd` is non-empty.
 - **WSL launch path**: when the project shell resolves to WSL/Bash on Windows,
   `--settings` must use `/mnt/<drive>/...`, not a Windows `C:\...` path.
 - **Reset**: resetting Claude to global removes the `claude` object from
@@ -297,6 +302,11 @@ env_key = "CLI_MANAGER_CODEX_PROVIDER_<hash>_API_KEY"
   generated startup command appends `--profile <profileName>` and preserves
   `--no-alt-screen`. If `startup_cmd` is non-empty, do not rewrite it; surface a
   UI warning that the user must manually add `--profile <profileName>`.
+- **CLI extra args (`cli_args`, projects v13 column)**: with empty `startup_cmd`, the
+  resolved command is `cli_tool` + `cli_args` + auto-appended override args. The
+  `--profile` duplicate check (`hasProfileArg`) runs against the whole command
+  including `cli_args`, so a user-written `--profile` in `cli_args` suppresses
+  auto-append. `cli_args` never applies when `startup_cmd` is non-empty.
 - **Reset**: resetting Codex to global removes the `codex` object from
   `provider_overrides`; cleanup may delete unused CLI-Manager-generated profiles
   but must not delete user-owned profiles.

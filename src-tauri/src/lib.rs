@@ -223,6 +223,12 @@ fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE projects ADD COLUMN provider_overrides TEXT NOT NULL DEFAULT '{}';",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "add_cli_args_to_projects",
+            sql: "ALTER TABLE projects ADD COLUMN cli_args TEXT NOT NULL DEFAULT '';",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

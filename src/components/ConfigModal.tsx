@@ -48,6 +48,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
     cloneFrom?.group_id ?? project?.group_id ?? defaultGroupId ?? null
   );
   const [cliTool, setCliTool] = useState(cloneFrom?.cli_tool ?? project?.cli_tool ?? "");
+  const [cliArgs, setCliArgs] = useState(cloneFrom?.cli_args ?? project?.cli_args ?? "");
   const [startupCmd, setStartupCmd] = useState(cloneFrom?.startup_cmd ?? project?.startup_cmd ?? "");
   const [shell, setShell] = useState(cloneFrom?.shell ?? project?.shell ?? "");
   const [envVarsText, setEnvVarsText] = useState(cloneFrom?.env_vars ?? project?.env_vars ?? "{}");
@@ -175,6 +176,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
           path: path.trim(),
           group_id: groupId,
           cli_tool: cliTool.trim(),
+          cli_args: cliArgs.trim(),
           startup_cmd: startupCmd.trim(),
           env_vars: envVarsText.trim(),
           shell,
@@ -186,6 +188,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
           path: path.trim(),
           group_id: groupId,
           cli_tool: cliTool.trim() || undefined,
+          cli_args: cliArgs.trim() || undefined,
           startup_cmd: startupCmd.trim() || undefined,
           env_vars: envVarsText.trim() || undefined,
           shell,
@@ -283,6 +286,13 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
                 <label className="mb-1 block text-xs text-text-muted">CLI 工具</label>
                 <CliToolCombobox value={cliTool} onChange={setCliTool} />
               </div>
+
+              <Field
+                label="CLI 启动参数"
+                value={cliArgs}
+                onChange={setCliArgs}
+                placeholder="--permission-mode bypassPermissions"
+              />
 
               <div>
                 <label className="mb-1 block text-xs text-text-muted">Shell</label>

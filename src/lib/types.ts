@@ -14,6 +14,8 @@ export interface Project {
   group_id: string | null;
   sort_order: number;
   cli_tool: string;
+  /** CLI 附加启动参数（自由文本，整串透传），仅 cli_tool 分支生效 */
+  cli_args: string;
   startup_cmd: string;
   env_vars: string;
   shell: string;
@@ -28,6 +30,7 @@ export interface CreateProjectInput {
   group_id?: string | null;
   group_name?: string;
   cli_tool?: string;
+  cli_args?: string;
   startup_cmd?: string;
   env_vars?: string;
   shell?: string;
@@ -41,6 +44,7 @@ export interface UpdateProjectInput {
   group_name?: string;
   sort_order?: number;
   cli_tool?: string;
+  cli_args?: string;
   startup_cmd?: string;
   env_vars?: string;
   shell?: string;

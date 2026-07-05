@@ -7,6 +7,14 @@
 - **Hook 弹框样式统一**：应用内 Hook 弹框改为右下角轻量白底通知样式，并按完成、失败、审批、注意等含义显示不同图标。
 
 ## [V1.2.5] - 2026-07-03
+### Git 面板
+
+- **嵌套 git 子仓库扫描兼容**：主仓库下存在嵌套 git 子仓库时，变更列表不再把子仓库目录当作未跟踪文件展示，点击未跟踪条目也不会再出现"读取文件失败：文件名、目录名或卷标语法不正确 (os error 123)"等原始系统错误；目录条目改为返回友好提示。[#85](https://github.com/dark-hxx/CLI-Manager/issues/85)
+
+### 项目维护
+
+- **CLI 启动参数配置**：项目维护弹窗在「CLI 工具」下新增「CLI 启动参数」输入框（如 `--permission-mode bypassPermissions`），整串透传拼接到 CLI 工具后；与项目级供应商切换兼容，`--profile` / `--settings` 仍自动追加且用户手写时不重复；`startup_cmd` 非空时行为保持不变（整条覆盖，CLI 启动参数不参与）。[#84](https://github.com/dark-hxx/CLI-Manager/issues/84)
+
 ### macOS 兼容性
 
 - **Codex 手动输入回车修复**：移除内置终端对手动 direct `codex` 回车的特殊重发/清屏覆盖，Windows、Linux 与 macOS 统一直接提交用户已输入的原始命令，修复输入 `codex` 后可能被重复拼接成 `codexcodex` 的问题。

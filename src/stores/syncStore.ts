@@ -323,7 +323,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       const db = await getDb();
 
       const projects = await db.select<Record<string, unknown>[]>(
-        "SELECT id, name, path, group_id, sort_order, cli_tool, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
+        "SELECT id, name, path, group_id, sort_order, cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
       );
       const groups = await db.select<Record<string, unknown>[]>(
         "SELECT id, name, parent_id, sort_order FROM groups ORDER BY sort_order"
@@ -381,7 +381,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       const db = await getDb();
 
       const localProjects = await db.select<Record<string, unknown>[]>(
-        "SELECT id, name, path, group_id, sort_order, cli_tool, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
+        "SELECT id, name, path, group_id, sort_order, cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
       );
       const localGroups = await db.select<Record<string, unknown>[]>(
         "SELECT id, name, parent_id, sort_order FROM groups ORDER BY sort_order"
@@ -559,7 +559,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     try {
       const db = await getDb();
       const projects = await db.select<Record<string, unknown>[]>(
-        "SELECT id, name, path, group_id, sort_order, cli_tool, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
+        "SELECT id, name, path, group_id, sort_order, cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
       );
       const groups = await db.select<Record<string, unknown>[]>(
         "SELECT id, name, parent_id, sort_order FROM groups ORDER BY sort_order"
@@ -630,7 +630,7 @@ async function collectLocalSyncData(
   lastModified: string,
 ): Promise<SyncData> {
   const projects = await db.select<Record<string, unknown>[]>(
-    "SELECT id, name, path, group_id, sort_order, cli_tool, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
+    "SELECT id, name, path, group_id, sort_order, cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides FROM projects ORDER BY sort_order"
   );
   const groups = await db.select<Record<string, unknown>[]>(
     "SELECT id, name, parent_id, sort_order FROM groups ORDER BY sort_order"
@@ -717,7 +717,7 @@ async function applySyncData(
     await batchInsert(
       db,
       "projects",
-      ["id", "name", "path", "group_id", "sort_order", "cli_tool", "startup_cmd", "env_vars", "shell", "provider_overrides", "created_at", "updated_at"],
+      ["id", "name", "path", "group_id", "sort_order", "cli_tool", "cli_args", "startup_cmd", "env_vars", "shell", "provider_overrides", "created_at", "updated_at"],
       projects,
       (project) => {
         const groupId = typeof project.group_id === "string" && validGroupIds.has(project.group_id) ? project.group_id : null;
@@ -732,6 +732,7 @@ async function applySyncData(
           groupId,
           project.sort_order as number,
           (project.cli_tool as string) ?? "",
+          (project.cli_args as string) ?? "",
           (project.startup_cmd as string) ?? "",
           (project.env_vars as string) ?? "{}",
           shell,
