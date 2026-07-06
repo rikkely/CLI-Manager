@@ -12,7 +12,7 @@
 
 - `TerminalSession` 位于 `src/lib/types.ts`，已有 `projectId/cwd/shell/envVars/startupCmd`，可新增 `worktreeId` 用于 Tab 徽标、实时统计标注和完成任务入口。
 - `terminalStore.createSession(projectId, cwd, title, startupCmd, envVars, shell, paneId)` 已支持显式 cwd，worktree 只需传入 worktree path。
-- `terminalStore` 的 Tab 状态模型：`TabNotificationState = none | running | attention | done | failed`，`TAB_STATUS_PRIORITY` 合并 hook 与 shell 两个来源。并行风险检测应看同项目其他会话的 `tabNotifications[session.id] === "running"`，而不是仅看 PTY 进程状态。
+- `terminalStore` 的 Tab 状态模型：`TabNotificationState = none | running | attention | done | failed`，`TAB_STATUS_PRIORITY` 合并 hook 与 shell 两个来源，仅用于 UI 展示。按最新规则，prompt/autoParallel 的并行风险检测改为：项目已配置 CLI 工具 + 已有打开的同项目 PTY 会话；不再看 visible running、`npm run dev` 或 shell 运行状态。
 - `TerminalTabs.tsx` 的 tab 右键菜单已有菜单扩展点，适合给 worktree 会话添加「查看改动 / 完成任务 / 安装依赖 / 丢弃」。
 
 ## Git 后端现状

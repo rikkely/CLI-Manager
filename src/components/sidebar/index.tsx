@@ -2,24 +2,35 @@
 import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { invoke } from "@tauri-apps/api/core";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
 import { isProjectFileDirty, useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { useHistoryStore } from "../../stores/historyStore";
 import { useSettingsStore } from "../../stores/settingsStore";
+import {
+  createDefaultWorktreeTaskName,
+  sanitizeWorktreeTaskName,
+  validateWorktreeTaskName,
+  useWorktreeStore,
+} from "../../stores/worktreeStore";
 import { useExternalSessionSyncStore } from "../../stores/externalSessionSyncStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
-import type { HistorySourceFilter, Project, TreeNode as TNode, Group } from "../../lib/types";
+import type { HistorySourceFilter, Project, TreeNode as TNode, Group, WorktreeRecord } from "../../lib/types";
 import { ConfigModal } from "../ConfigModal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProviderSwitchModal } from "../ProviderSwitchModal";
+import { WorktreeFinishDialog } from "../worktree/WorktreeFinishDialog";
 import { openWindowsTerminal } from "../../lib/externalTerminal";
 import { resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
 import { appendSyncedHistoryContextArg } from "../../lib/syncedHistoryContext";
-import { TreeContext, type TreeActions } from "./TreeContext";
+import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
 import { Portal } from "../ui/Portal";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../ui/dialog";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { toast } from "sonner";
 import { logError } from "../../lib/logger";
 import { SidebarHeader } from "./SidebarHeader";
@@ -42,6 +53,7 @@ import {
   SquareSplitVertical,
   TerminalSquare,
   Trash2,
+  X,
 } from "../icons";
 import type { SettingsTab } from "../SettingsModal";
 import { useI18n } from "../../lib/i18n";
@@ -209,6 +221,7 @@ export function Sidebar({
   const reorderItems = useProjectStore((s) => s.reorderItems);
   const moveGroupToParent = useProjectStore((s) => s.moveGroupToParent);
   const moveProjectToGroup = useProjectStore((s) => s.moveProjectToGroup);
+  const updateProject = useProjectStore((s) => s.updateProject);
   const createSession = useTerminalStore((s) => s.createSession);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
   const closeSession = useTerminalStore((s) => s.closeSession);
@@ -216,6 +229,12 @@ export function Sidebar({
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const setActiveSession = useTerminalStore((s) => s.setActive);
   const sessionStatuses = useTerminalStore((s) => s.sessionStatuses);
+  const createWorktreeForProject = useWorktreeStore((s) => s.createWorktreeForProject);
+  const shouldIsolateNewSession = useWorktreeStore((s) => s.shouldIsolateNewSession);
+  const validateProjectGit = useWorktreeStore((s) => s.validateProjectGit);
+  const checkWorktreeDeps = useWorktreeStore((s) => s.checkDeps);
+  const dismissWorktreeDepsPrompt = useWorktreeStore((s) => s.dismissDepsPrompt);
+  const removeWorktree = useWorktreeStore((s) => s.removeWorktree);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
   const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
@@ -264,32 +283,69 @@ export function Sidebar({
     | { kind: "delete-project"; project: Project }
     | { kind: "delete-group"; groupId: string; groupName: string }
   >(null);
+  const [worktreePrompt, setWorktreePrompt] = useState<{
+    project: Project;
+    targetPaneId?: string;
+    direction?: TerminalPaneSplitDirection;
+    taskName: string;
+  } | null>(null);
+  const [depsPrompt, setDepsPrompt] = useState<{
+    project: Project;
+    worktree: WorktreeRecord;
+    command: string;
+  } | null>(null);
+  const depsPromptingWorktreeIdsRef = useRef(new Set<string>());
+  const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
+  const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
 
-  const activeSessionProjectId = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId)?.projectId ?? null,
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessions]
   );
+  const activeSessionProjectId = activeSession?.projectId ?? null;
+  const activeSessionWorktreeId = activeSession?.worktreeId ?? null;
 
   useEffect(() => {
     if (projectScopedTerminalViewEnabled) return;
     if (!activeSessionProjectId) return;
-    setSelectedId(activeSessionProjectId);
+    setSelectedId(activeSessionWorktreeId ?? activeSessionProjectId);
     setSelectedProjectIds((prev) => {
+      if (activeSessionWorktreeId) return prev.size === 0 ? prev : new Set();
       if (prev.size === 1 && prev.has(activeSessionProjectId)) return prev;
       return new Set([activeSessionProjectId]);
     });
-  }, [activeSessionProjectId, projectScopedTerminalViewEnabled]);
+  }, [activeSessionProjectId, activeSessionWorktreeId, projectScopedTerminalViewEnabled]);
 
   useEffect(() => {
     if (!projectScopedTerminalViewEnabled) return;
-    setSelectedId(terminalScopeProjectId);
-    selectionAnchorRef.current = terminalScopeProjectId;
+    const activeSessionInScope =
+      activeSessionProjectId !== null &&
+      (terminalScopeProjectId === null || activeSessionProjectId === terminalScopeProjectId);
+    const scopedWorktreeId = activeSessionInScope ? activeSessionWorktreeId : null;
+    const scopedProjectId = activeSessionInScope ? activeSessionProjectId : terminalScopeProjectId;
+    const nextSelectedId = activeSessionInScope
+      ? scopedWorktreeId ?? scopedProjectId
+      : terminalScopeProjectId;
+    setSelectedId(nextSelectedId);
+    selectionAnchorRef.current = scopedWorktreeId ? scopedProjectId : terminalScopeProjectId;
     setSelectedProjectIds((prev) => {
-      if (!terminalScopeProjectId) return prev.size === 0 ? prev : new Set();
-      if (prev.size === 1 && prev.has(terminalScopeProjectId)) return prev;
-      return new Set([terminalScopeProjectId]);
+      if (scopedWorktreeId) return prev.size === 0 ? prev : new Set();
+      if (!scopedProjectId) return prev.size === 0 ? prev : new Set();
+      if (prev.size === 1 && prev.has(scopedProjectId)) return prev;
+      return new Set([scopedProjectId]);
     });
-  }, [projectScopedTerminalViewEnabled, terminalScopeProjectId]);
+  }, [activeSessionProjectId, activeSessionWorktreeId, projectScopedTerminalViewEnabled, terminalScopeProjectId]);
+
+  useEffect(() => {
+    if (!activeSessionProjectId || !activeSessionWorktreeId) return;
+    const collapseKey = worktreeListCollapseId(activeSessionProjectId);
+    setCollapsedIds((prev) => {
+      if (!prev.has(collapseKey)) return prev;
+      const next = new Set(prev);
+      next.delete(collapseKey);
+      return next;
+    });
+  }, [activeSessionProjectId, activeSessionWorktreeId]);
 
   useEffect(() => {
     if (!projectScopedTerminalViewEnabled) return;
@@ -309,7 +365,7 @@ export function Sidebar({
       for (const node of nodes) {
         if (node.type === "group") {
           if (!collapsedIds.has(node.group.id)) walk(node.children);
-        } else {
+        } else if (node.type === "project") {
           ids.push(node.project.id);
         }
       }
@@ -330,9 +386,22 @@ export function Sidebar({
     [activeSessionId, sessions, setActiveSession]
   );
 
+  const activateFirstWorktreeSession = useCallback(
+    (worktreeId: string): boolean => {
+      const session = sessions.find((item) => item.worktreeId === worktreeId && (item.kind ?? "pty") === "pty");
+      if (!session) return false;
+      if (session.id !== activeSessionId) {
+        setActiveSession(session.id);
+      }
+      return true;
+    },
+    [activeSessionId, sessions, setActiveSession]
+  );
+
   const [contextMenu, setContextMenu] = useState<
     | null
     | { kind: "project"; project: Project; x: number; y: number }
+    | { kind: "worktree"; project: Project; worktree: WorktreeRecord; x: number; y: number }
     | { kind: "group"; groupId: string; groupName: string; x: number; y: number }
   >(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -705,16 +774,19 @@ export function Sidebar({
     void updateSetting("collapsedGroupIds", Array.from(collapsedIds));
   }, [collapsedIds, updateSetting]);
 
-  // 自愈清理：分组被删除（含级联）或同步覆盖后，移除已不存在分组的折叠记录。
-  // groups 为空可能是尚未加载完成，此时不清理，避免误清全部记录。
+  // 自愈清理：分组/项目被删除或同步覆盖后，移除已不存在节点的折叠记录。
+  // groups/projects 都为空可能是尚未加载完成，此时不清理，避免误清全部记录。
   useEffect(() => {
-    if (groups.length === 0) return;
-    const valid = new Set(groups.map((g) => g.id));
+    if (groups.length === 0 && projects.length === 0) return;
+    const valid = new Set([
+      ...groups.map((g) => g.id),
+      ...projects.map((project) => worktreeListCollapseId(project.id)),
+    ]);
     setCollapsedIds((prev) => {
       const next = new Set([...prev].filter((id) => valid.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [groups]);
+  }, [groups, projects]);
 
   const openProjectExternally = useCallback(async (items: Project[]) => {
     if (items.length === 0) return;
@@ -739,9 +811,8 @@ export function Sidebar({
     closeHistory();
   }, [closeHistory]);
 
-  const openProjectInternal = async (project: Project, targetPaneId?: string) => {
+  const openProjectDirect = async (project: Project, targetPaneId?: string) => {
     const options = await buildSyncedAwareProjectSplitOptions(project);
-
     await createSession(
       options.projectId,
       options.cwd,
@@ -752,6 +823,105 @@ export function Sidebar({
       targetPaneId
     );
     closeHistory();
+  };
+
+  const openWorktreeSession = async (project: Project, worktree: WorktreeRecord, targetPaneId?: string, startupCmd?: string, title?: string) => {
+    const options = await buildSyncedAwareProjectSplitOptions(project);
+    await createSession(
+      options.projectId,
+      worktree.path,
+      title ?? `${project.name} · ${worktree.name}`,
+      startupCmd ?? options.startupCmd,
+      options.envVars,
+      options.shell,
+      targetPaneId,
+      worktree.id,
+    );
+    closeHistory();
+  };
+
+  const maybePromptWorktreeDeps = async (project: Project, worktree: WorktreeRecord) => {
+    if (worktree.deps_prompt_dismissed || depsPromptingWorktreeIdsRef.current.has(worktree.id)) return;
+    depsPromptingWorktreeIdsRef.current.add(worktree.id);
+    try {
+      const deps = await checkWorktreeDeps(worktree);
+      if (deps.needsInstall && deps.command) {
+        setDepsPrompt({ project, worktree, command: deps.command });
+        return;
+      }
+      depsPromptingWorktreeIdsRef.current.delete(worktree.id);
+    } catch (err) {
+      depsPromptingWorktreeIdsRef.current.delete(worktree.id);
+      logError("Failed to check worktree dependencies", err);
+    }
+  };
+
+  const handleInstallWorktreeDeps = (project: Project, worktree: WorktreeRecord) => {
+    void checkWorktreeDeps(worktree)
+      .then((deps) => {
+        if (!deps.needsInstall || !deps.command) {
+          toast.info(t("worktree.deps.notNeeded"));
+          return;
+        }
+        const options = buildProjectSplitOptions(project);
+        void dismissWorktreeDepsPrompt(worktree.id);
+        return createSession(
+          options.projectId,
+          worktree.path,
+          t("worktree.deps.installTitle", { name: worktree.name }),
+          deps.command,
+          options.envVars,
+          options.shell,
+          undefined,
+          worktree.id,
+        ).then(() => closeHistory());
+      })
+      .catch((err) => toast.error(t("worktree.deps.checkFailed"), { description: String(err) }));
+  };
+
+  const createAndOpenWorktree = async (project: Project, targetPaneId?: string, taskName?: string) => {
+    const worktree = await createWorktreeForProject(project, taskName);
+    await openWorktreeSession(project, worktree, targetPaneId);
+    toast.success(t("worktree.toast.created"), { description: worktree.path });
+    void maybePromptWorktreeDeps(project, worktree);
+  };
+
+  const createAndSplitWorktree = async (project: Project, direction: TerminalPaneSplitDirection, taskName?: string) => {
+    if (!activeSessionId) return;
+    const worktree = await createWorktreeForProject(project, taskName);
+    const options = await buildSyncedAwareProjectSplitOptions(project);
+    await splitTerminal(activeSessionId, direction, {
+      ...options,
+      cwd: worktree.path,
+      title: `${project.name} · ${worktree.name}`,
+      worktreeId: worktree.id,
+    });
+    closeHistory();
+    toast.success(t("worktree.toast.created"), { description: worktree.path });
+    void maybePromptWorktreeDeps(project, worktree);
+  };
+
+  const openProjectInternal = async (project: Project, targetPaneId?: string) => {
+    const decision = shouldIsolateNewSession(project, sessions);
+    if (decision === "none") {
+      await openProjectDirect(project, targetPaneId);
+      return;
+    }
+
+    const validGitProject = await validateProjectGit(project);
+    if (!validGitProject) {
+      await openProjectDirect(project, targetPaneId);
+      return;
+    }
+    if (decision === "auto") {
+      await createAndOpenWorktree(project, targetPaneId);
+      return;
+    }
+    setWorktreePrompt({
+      project,
+      targetPaneId,
+      taskName: createDefaultWorktreeTaskName(project.id),
+    });
   };
 
   const openProjects = async (items: Project[]) => {
@@ -776,10 +946,43 @@ export function Sidebar({
   const handleSplitProject = useCallback(
     async (project: Project, direction: TerminalPaneSplitDirection) => {
       if (!activeSessionId || compactMode || useExternalTerminal) return;
-      await splitTerminal(activeSessionId, direction, await buildSyncedAwareProjectSplitOptions(project));
-      closeHistory();
+      const splitDirect = async () => {
+        await splitTerminal(activeSessionId, direction, await buildSyncedAwareProjectSplitOptions(project));
+        closeHistory();
+      };
+
+      const decision = shouldIsolateNewSession(project, sessions);
+      if (decision === "none") {
+        await splitDirect();
+        return;
+      }
+
+      const validGitProject = await validateProjectGit(project);
+      if (!validGitProject) {
+        await splitDirect();
+        return;
+      }
+      if (decision === "auto") {
+        await createAndSplitWorktree(project, direction);
+        return;
+      }
+      setWorktreePrompt({
+        project,
+        direction,
+        taskName: createDefaultWorktreeTaskName(project.id),
+      });
     },
-    [activeSessionId, closeHistory, compactMode, splitTerminal, useExternalTerminal]
+    [
+      activeSessionId,
+      closeHistory,
+      compactMode,
+      createAndSplitWorktree,
+      sessions,
+      shouldIsolateNewSession,
+      splitTerminal,
+      useExternalTerminal,
+      validateProjectGit,
+    ]
   );
 
   const handleCloneProject = useCallback((project: Project) => {
@@ -794,6 +997,31 @@ export function Sidebar({
       toast.error(t("sidebar.toast.openDirectoryFailed"), { description: String(err) });
     }
   }, [t]);
+
+  const handleOpenWorktreeDirectory = useCallback(async (worktree: WorktreeRecord) => {
+    try {
+      await openPath(worktree.path);
+    } catch (err) {
+      logError("Failed to open worktree directory", err);
+      toast.error(t("sidebar.toast.openDirectoryFailed"), { description: String(err) });
+    }
+  }, [t]);
+
+  const handleSelectWorktree = useCallback((worktree: WorktreeRecord) => {
+    setSelectedId(worktree.id);
+    setSelectedProjectIds(new Set());
+    selectionAnchorRef.current = worktree.project_id;
+    if (projectScopedTerminalViewEnabled) {
+      onTerminalScopeChange?.(worktree.project_id);
+    }
+    if (activateFirstWorktreeSession(worktree.id)) {
+      closeHistory();
+    }
+  }, [activateFirstWorktreeSession, closeHistory, onTerminalScopeChange, projectScopedTerminalViewEnabled]);
+
+  const handleOpenWorktree = useCallback((project: Project, worktree: WorktreeRecord) => {
+    void openWorktreeSession(project, worktree);
+  }, []);
 
   const handleOpenProjectFiles = useCallback(async (project: Project) => {
     try {
@@ -948,6 +1176,14 @@ export function Sidebar({
     setContextMenu({ kind: "project", project, x: e.clientX, y: e.clientY });
   }, []);
 
+  const handleContextMenuWorktree = useCallback((e: ReactMouseEvent, project: Project, worktree: WorktreeRecord) => {
+    e.preventDefault();
+    e.stopPropagation();
+    contextMenuOpenedAtRef.current = Date.now();
+    setSelectedId(worktree.id);
+    setContextMenu({ kind: "worktree", project, worktree, x: e.clientX, y: e.clientY });
+  }, []);
+
   const handleContextMenuGroup = useCallback((e: ReactMouseEvent, groupId: string, groupName: string) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1023,6 +1259,9 @@ export function Sidebar({
       onRenameConfirm: handleRenameConfirm,
       onCancelRename: () => setRenamingGroupId(null),
       onContextMenuProject: handleContextMenuProject,
+      onSelectWorktree: handleSelectWorktree,
+      onOpenWorktree: handleOpenWorktree,
+      onContextMenuWorktree: handleContextMenuWorktree,
       onContextMenuGroup: handleContextMenuGroup,
       onCreateGroup: handleCreateGroup,
       onCancelNewGroup: handleCancelNewGroup,
@@ -1047,6 +1286,9 @@ export function Sidebar({
       handleRequestDeleteGroup,
       handleRenameConfirm,
       handleContextMenuProject,
+      handleSelectWorktree,
+      handleOpenWorktree,
+      handleContextMenuWorktree,
       handleContextMenuGroup,
       handleCreateGroup,
       handleCancelNewGroup,
@@ -1376,6 +1618,66 @@ export function Sidebar({
                 </button>
               </>
             )}
+            {contextMenu.kind === "worktree" && (
+              <>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    handleOpenWorktree(contextMenu.project, contextMenu.worktree);
+                    setContextMenu(null);
+                  }}
+                >
+                  <Play size={14} strokeWidth={1.5} />
+                  {t("worktree.menu.open")}
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setFinishTarget({ project: contextMenu.project, worktree: contextMenu.worktree });
+                    setContextMenu(null);
+                  }}
+                >
+                  <Check size={14} strokeWidth={1.5} />
+                  {t("worktree.menu.finish")}
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    handleInstallWorktreeDeps(contextMenu.project, contextMenu.worktree);
+                    setContextMenu(null);
+                  }}
+                >
+                  <TerminalSquare size={14} strokeWidth={1.5} />
+                  {t("worktree.menu.installDeps")}
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    void handleOpenWorktreeDirectory(contextMenu.worktree);
+                    setContextMenu(null);
+                  }}
+                >
+                  <FolderOpen size={14} strokeWidth={1.5} />
+                  {t("worktree.menu.openDirectory")}
+                </button>
+                <div className="context-menu-separator" role="separator" />
+                <button
+                  className="context-menu-item danger"
+                  role="menuitem"
+                  onClick={() => {
+                    setDiscardTarget({ project: contextMenu.project, worktree: contextMenu.worktree });
+                    setContextMenu(null);
+                  }}
+                >
+                  <Trash2 size={14} strokeWidth={1.5} />
+                  {t("worktree.menu.discard")}
+                </button>
+              </>
+            )}
             {contextMenu.kind === "group" && (
               <>
                 <button
@@ -1442,6 +1744,162 @@ export function Sidebar({
           </div>
         </Portal>
       )}
+
+      <Dialog open={!!worktreePrompt} onOpenChange={(next) => { if (!next) setWorktreePrompt(null); }}>
+        <DialogContent className="ui-worktree-prompt-dialog max-w-[440px]" showCloseButton={false}>
+          <button
+            type="button"
+            className="ui-worktree-prompt-close"
+            aria-label={t("common.close")}
+            onClick={() => setWorktreePrompt(null)}
+          >
+            <X size={15} strokeWidth={2} />
+          </button>
+          <div className="pr-10">
+            <DialogTitle>{t("worktree.prompt.title")}</DialogTitle>
+            <DialogDescription className="mt-2">
+              {worktreePrompt ? t("worktree.prompt.description", { name: worktreePrompt.project.name }) : ""}
+            </DialogDescription>
+          </div>
+          <div className="mt-4">
+            <label className="mb-1 block text-xs text-text-muted">{t("worktree.prompt.taskName")}</label>
+            <Input
+              value={worktreePrompt?.taskName ?? ""}
+              onChange={(event) => setWorktreePrompt((current) => current ? { ...current, taskName: sanitizeWorktreeTaskName(event.currentTarget.value) } : current)}
+              className="text-sm"
+            />
+            {worktreePrompt && !validateWorktreeTaskName(worktreePrompt.taskName) && (
+              <p className="mt-1 text-[11px] text-danger">{t("worktree.prompt.invalidName")}</p>
+            )}
+          </div>
+          <DialogFooter className="ui-worktree-prompt-footer">
+            <Button
+              variant="outline"
+              className="ui-worktree-prompt-action ui-worktree-prompt-action-neutral"
+              onClick={() => {
+                if (worktreePrompt?.direction && activeSessionId) {
+                  void buildSyncedAwareProjectSplitOptions(worktreePrompt.project)
+                    .then((options) => splitTerminal(activeSessionId, worktreePrompt.direction!, options))
+                    .then(() => closeHistory());
+                } else if (worktreePrompt) {
+                  void openProjectDirect(worktreePrompt.project, worktreePrompt.targetPaneId);
+                }
+                setWorktreePrompt(null);
+              }}
+            >
+              {t("worktree.prompt.direct")}
+            </Button>
+            <Button
+              variant="outline"
+              className="ui-worktree-prompt-action ui-worktree-prompt-action-accent"
+              onClick={() => {
+                if (worktreePrompt) {
+                  void updateProject(worktreePrompt.project.id, { worktree_strategy: "autoParallel" }).then(() => {
+                    if (worktreePrompt.direction) {
+                      return createAndSplitWorktree(worktreePrompt.project, worktreePrompt.direction, worktreePrompt.taskName);
+                    }
+                    return createAndOpenWorktree(worktreePrompt.project, worktreePrompt.targetPaneId, worktreePrompt.taskName);
+                  });
+                }
+                setWorktreePrompt(null);
+              }}
+              disabled={!worktreePrompt || !validateWorktreeTaskName(worktreePrompt.taskName)}
+            >
+              {t("worktree.prompt.autoParallel")}
+            </Button>
+            <Button
+              className="ui-worktree-prompt-action ui-worktree-prompt-action-primary"
+              onClick={() => {
+                if (worktreePrompt?.direction) {
+                  void createAndSplitWorktree(worktreePrompt.project, worktreePrompt.direction, worktreePrompt.taskName);
+                } else if (worktreePrompt) {
+                  void createAndOpenWorktree(worktreePrompt.project, worktreePrompt.targetPaneId, worktreePrompt.taskName);
+                }
+                setWorktreePrompt(null);
+              }}
+              disabled={!worktreePrompt || !validateWorktreeTaskName(worktreePrompt.taskName)}
+            >
+              {t("worktree.prompt.isolate")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!depsPrompt}
+        onOpenChange={(next) => {
+          if (next) return;
+          if (depsPrompt) {
+            depsPromptingWorktreeIdsRef.current.delete(depsPrompt.worktree.id);
+            void dismissWorktreeDepsPrompt(depsPrompt.worktree.id);
+          }
+          setDepsPrompt(null);
+        }}
+      >
+        <DialogContent className="max-w-[420px]" showCloseButton={false}>
+          <DialogTitle>{t("worktree.deps.title")}</DialogTitle>
+          <DialogDescription className="mt-2">
+            {depsPrompt ? t("worktree.deps.description", { name: depsPrompt.worktree.name, command: depsPrompt.command }) : ""}
+          </DialogDescription>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (depsPrompt) {
+                  depsPromptingWorktreeIdsRef.current.delete(depsPrompt.worktree.id);
+                  void dismissWorktreeDepsPrompt(depsPrompt.worktree.id);
+                }
+                setDepsPrompt(null);
+              }}
+            >
+              {t("worktree.deps.skip")}
+            </Button>
+            <Button
+              onClick={() => {
+                if (depsPrompt) {
+                  depsPromptingWorktreeIdsRef.current.delete(depsPrompt.worktree.id);
+                  void dismissWorktreeDepsPrompt(depsPrompt.worktree.id);
+                  void openWorktreeSession(
+                    depsPrompt.project,
+                    depsPrompt.worktree,
+                    undefined,
+                    depsPrompt.command,
+                    t("worktree.deps.installTitle", { name: depsPrompt.worktree.name }),
+                  );
+                }
+                setDepsPrompt(null);
+              }}
+            >
+              {t("worktree.deps.install")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <WorktreeFinishDialog
+        open={!!finishTarget}
+        project={finishTarget?.project ?? null}
+        worktree={finishTarget?.worktree ?? null}
+        onClose={() => setFinishTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={!!discardTarget}
+        title={t("worktree.discard.title", { name: discardTarget?.worktree.name ?? "" })}
+        message={t("worktree.discard.message", { branch: discardTarget?.worktree.branch ?? "" })}
+        confirmText={t("worktree.discard.confirm")}
+        cancelText={t("common.cancel")}
+        danger
+        onConfirm={() => {
+          if (discardTarget) {
+            void removeWorktree(discardTarget.worktree, true).catch((err) => {
+              toast.error(t("worktree.toast.discardFailed"), { description: String(err) });
+            });
+          }
+          setDiscardTarget(null);
+        }}
+        onClose={() => setDiscardTarget(null)}
+      />
 
       {showAdd && (
         <ConfigModal

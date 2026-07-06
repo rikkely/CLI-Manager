@@ -253,3 +253,77 @@ setExitPhase("closing");
 await invoke("pty_close_all").catch(logWarn);
 await getCurrentWindow().destroy();
 ```
+
+## Scenario: SQLite migration checksum drift repair
+
+### 1. Scope / Trigger
+
+- Trigger: modifying `src-tauri/src/lib.rs::migrations()`, adding SQLite migrations, or changing startup database loading in `src/lib/db.ts`.
+- SQLx validates `_sqlx_migrations.checksum` by migration version. A released migration version must never be reused for different SQL.
+
+### 2. Signatures
+
+- Backend migrations: `src-tauri/src/lib.rs::migrations() -> Vec<Migration>`.
+- Backend repair command: `db_repair_known_migration_drift() -> Result<DbMigrationRepairResult, String>`.
+- Frontend entry: `src/lib/db.ts::getDb() -> Promise<Database>`.
+- SQLite bookkeeping table: `_sqlx_migrations(version, description, success, checksum, execution_time)`.
+
+### 3. Contracts
+
+- `getDb()` must call `db_repair_known_migration_drift` before the first `Database.load(...)`.
+- The repair command must only use `app_paths::db_path()`; do not accept an arbitrary frontend path.
+- Repair is limited to known migration drift versions `13..=15`.
+- Repair rewrites only `_sqlx_migrations` rows for known complete schema states; it must not delete user data tables or rerun unsafe `ALTER TABLE` statements.
+- Current migration SQL strings shared with repair code must live in one source of truth, not duplicated with separate literals.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| DB file missing | Return `repaired=false`, let Tauri SQL create and migrate normally. |
+| `_sqlx_migrations` missing | Return `repaired=false`, let Tauri SQL initialize migrations normally. |
+| Old `13=cli_args` only | Move applied record to current `14=cli_args`; SQLx later applies missing `13` and `15`. |
+| Old `13=cli_args`, `14=worktree`, `15=favorite` | Rewrite records to current `13=favorite`, `14=cli_args`, `15=worktree`. |
+| Current records already match | No-op. |
+| Partial feature schema | Return explicit `migration_repair_partial_*` error; do not rewrite records. |
+| Unknown migration drift outside `13..=15` | Leave it to SQLx to fail loudly. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an install that previously applied the worktree branch migrations can still start after merging master migration order.
+- Base: a clean database runs normal SQLx migrations with no repair.
+- Bad: deleting all `_sqlx_migrations` rows. That causes `ALTER TABLE` migrations to rerun and can corrupt startup.
+- Bad: changing SQL for an already released migration version without a compatibility repair and regression tests.
+
+### 6. Tests Required
+
+- Rust unit tests for each supported old lineage and for partial-schema rejection.
+- `cargo check --manifest-path src-tauri/Cargo.toml`.
+- `cargo test --manifest-path src-tauri/Cargo.toml db_repair`.
+- `npx tsc --noEmit --pretty false` after touching `src/lib/db.ts`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+Migration {
+    version: 13,
+    description: "new_meaning",
+    sql: "ALTER TABLE projects ADD COLUMN something_else TEXT;",
+    kind: MigrationKind::Up,
+}
+```
+
+#### Correct
+
+```rust
+pub(crate) const MIGRATION_NEW_FEATURE_VERSION: i64 = 16;
+
+Migration {
+    version: MIGRATION_NEW_FEATURE_VERSION,
+    description: "new_feature",
+    sql: MIGRATION_NEW_FEATURE_SQL,
+    kind: MigrationKind::Up,
+}
+```

@@ -174,7 +174,10 @@ mod tests {
     fn nested_git_index_and_head_relevant() {
         assert!(is_relevant(ROOT, Path::new("F:/proj/sub/.git/index")));
         assert!(is_relevant(ROOT, Path::new("F:/proj/sub/.git/HEAD")));
-        assert!(is_relevant(ROOT, Path::new("F:/proj/tools/sub-c/.git/index")));
+        assert!(is_relevant(
+            ROOT,
+            Path::new("F:/proj/tools/sub-c/.git/index")
+        ));
     }
 
     #[test]

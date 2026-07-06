@@ -342,15 +342,9 @@ fn extract_jsonish_key(text: &str, keys: &[&str]) -> Option<String> {
         let value = if trimmed.starts_with('"') || trimmed.starts_with('\'') {
             let quote = trimmed.chars().next()?;
             let inner = &trimmed[quote.len_utf8()..];
-            inner
-                .find(quote)
-                .map(|end| &inner[..end])
-                .unwrap_or(inner)
+            inner.find(quote).map(|end| &inner[..end]).unwrap_or(inner)
         } else {
-            trimmed
-                .split([',', '}', ']'])
-                .next()
-                .unwrap_or(trimmed)
+            trimmed.split([',', '}', ']']).next().unwrap_or(trimmed)
         };
         let value = compact_text(value.trim_matches(|ch: char| {
             ch.is_whitespace() || matches!(ch, '"' | '\'' | ':' | '.' | '=' | '(' | ')')
@@ -369,31 +363,37 @@ fn extract_jsonish_key(text: &str, keys: &[&str]) -> Option<String> {
 /// 副作用：无；这里不记录原文，避免把密钥或过长请求标识带到前端提示里。
 fn summarize_model_error(status: u16, body: &str) -> String {
     let cleaned = remove_request_id(&body.replace("\\\"", "\""));
-    let from_json = serde_json::from_str::<Value>(&cleaned).ok().and_then(|value| {
-        let code = json_string_at(&value, &["error", "code"])
-            .or_else(|| json_string_at(&value, &["error", "type"]))
-            .or_else(|| json_string_at(&value, &["code"]))
-            .or_else(|| json_string_at(&value, &["type"]));
-        let message = json_string_at(&value, &["error", "message"])
-            .or_else(|| json_string_at(&value, &["message"]))
-            .or_else(|| json_string_at(&value, &["msg"]))
-            .or_else(|| json_string_at(&value, &["detail"]));
-        match (code, message) {
-            (Some(code), Some(message)) if code != message => {
-                Some(format!("{code} - {}", model_channel_hint(message).unwrap_or_else(|| message.to_string())))
+    let from_json = serde_json::from_str::<Value>(&cleaned)
+        .ok()
+        .and_then(|value| {
+            let code = json_string_at(&value, &["error", "code"])
+                .or_else(|| json_string_at(&value, &["error", "type"]))
+                .or_else(|| json_string_at(&value, &["code"]))
+                .or_else(|| json_string_at(&value, &["type"]));
+            let message = json_string_at(&value, &["error", "message"])
+                .or_else(|| json_string_at(&value, &["message"]))
+                .or_else(|| json_string_at(&value, &["msg"]))
+                .or_else(|| json_string_at(&value, &["detail"]));
+            match (code, message) {
+                (Some(code), Some(message)) if code != message => Some(format!(
+                    "{code} - {}",
+                    model_channel_hint(message).unwrap_or_else(|| message.to_string())
+                )),
+                (_, Some(message)) => {
+                    Some(model_channel_hint(message).unwrap_or_else(|| message.to_string()))
+                }
+                (Some(code), None) => Some(code.to_string()),
+                _ => None,
             }
-            (_, Some(message)) => Some(model_channel_hint(message).unwrap_or_else(|| message.to_string())),
-            (Some(code), None) => Some(code.to_string()),
-            _ => None,
-        }
-    });
+        });
     let summary = from_json.or_else(|| {
         let code = extract_jsonish_key(&cleaned, &["code", "type"]);
         let message = extract_jsonish_key(&cleaned, &["message", "mesage", "msg", "detail"]);
         match (code, message) {
-            (Some(code), Some(message)) if code != message => {
-                Some(format!("{code} - {}", model_channel_hint(&message).unwrap_or(message)))
-            }
+            (Some(code), Some(message)) if code != message => Some(format!(
+                "{code} - {}",
+                model_channel_hint(&message).unwrap_or(message)
+            )),
             (_, Some(message)) => Some(model_channel_hint(&message).unwrap_or(message)),
             (Some(code), None) => Some(code),
             _ => model_channel_hint(&cleaned).or_else(|| (!cleaned.is_empty()).then_some(cleaned)),
@@ -480,15 +480,21 @@ fn map_model_test_error(err: reqwest::Error) -> String {
 /// 后置结果：返回 base_url、鉴权 token、模型名；任一缺失都返回明确错误码。
 /// 副作用：无；这里只做解析，不触网、不读取数据库。
 fn claude_model_test_config(settings_config: &str) -> Result<(String, String, String), String> {
-    let parsed: Value = serde_json::from_str(settings_config)
-        .map_err(|_| "provider_config_invalid".to_string())?;
+    let parsed: Value =
+        serde_json::from_str(settings_config).map_err(|_| "provider_config_invalid".to_string())?;
     let env = env_object(&parsed);
     let base_url = env
         .and_then(|env| env_text(env, "ANTHROPIC_BASE_URL").and_then(non_empty_text))
         .or_else(|| {
             find_text_by_key_patterns(
                 &parsed,
-                &["ANTHROPIC_BASE_URL", "base_url", "api_base", "endpoint", "url"],
+                &[
+                    "ANTHROPIC_BASE_URL",
+                    "base_url",
+                    "api_base",
+                    "endpoint",
+                    "url",
+                ],
                 &["_BASE_URL", "_API_BASE", "_ENDPOINT"],
             )
             .and_then(non_empty_text)
@@ -496,11 +502,18 @@ fn claude_model_test_config(settings_config: &str) -> Result<(String, String, St
         .ok_or_else(|| "provider_config_invalid: missing_claude_base_url".to_string())?;
     let token = env
         .and_then(|env| env_text(env, "ANTHROPIC_API_KEY").and_then(non_empty_text))
-        .or_else(|| env.and_then(|env| env_text(env, "ANTHROPIC_AUTH_TOKEN").and_then(non_empty_text)))
+        .or_else(|| {
+            env.and_then(|env| env_text(env, "ANTHROPIC_AUTH_TOKEN").and_then(non_empty_text))
+        })
         .or_else(|| {
             find_text_by_key_patterns(
                 &parsed,
-                &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "api_key", "auth_token"],
+                &[
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "api_key",
+                    "auth_token",
+                ],
                 &["_API_KEY", "_AUTH_TOKEN", "_ACCESS_TOKEN", "_TOKEN"],
             )
             .and_then(non_empty_text)
@@ -508,7 +521,9 @@ fn claude_model_test_config(settings_config: &str) -> Result<(String, String, St
         .ok_or_else(|| "provider_config_invalid: missing_claude_api_key".to_string())?;
     let model = env
         .and_then(|env| env_text(env, "ANTHROPIC_MODEL").and_then(non_empty_text))
-        .or_else(|| env.and_then(|env| env_text(env, "ANTHROPIC_SMALL_FAST_MODEL").and_then(non_empty_text)))
+        .or_else(|| {
+            env.and_then(|env| env_text(env, "ANTHROPIC_SMALL_FAST_MODEL").and_then(non_empty_text))
+        })
         .or_else(|| {
             find_text_by_key_patterns(
                 &parsed,
@@ -619,14 +634,13 @@ pub async fn ccswitch_test_provider_model(
     let provider_id = provider_id.trim();
     let path = resolve_db_path(&app, db_path)?;
     let mut conn = open_db_readonly(&path).await?;
-    let row = sqlx::query(
-        "SELECT name, settings_config FROM providers WHERE id = ?1 AND app_type = ?2",
-    )
-    .bind(provider_id)
-    .bind(&app_type)
-    .fetch_optional(&mut conn)
-    .await
-    .map_err(|err| format!("db_query_failed: {err}"))?;
+    let row =
+        sqlx::query("SELECT name, settings_config FROM providers WHERE id = ?1 AND app_type = ?2")
+            .bind(provider_id)
+            .bind(&app_type)
+            .fetch_optional(&mut conn)
+            .await
+            .map_err(|err| format!("db_query_failed: {err}"))?;
     let _ = conn.close().await;
     let row = row.ok_or_else(|| "provider_not_found".to_string())?;
     let name: String = row
@@ -1421,8 +1435,9 @@ fn codex_runtime_from_provider(
             config_text
                 .and_then(|config| find_toml_value_by_key_patterns(config, &["model"], &["_MODEL"]))
         });
-    let wire_api = find_text_by_key_patterns(&parsed, &["wire_api"], &[])
-        .or_else(|| config_text.and_then(|config| find_toml_value_by_key_patterns(config, &["wire_api"], &[])));
+    let wire_api = find_text_by_key_patterns(&parsed, &["wire_api"], &[]).or_else(|| {
+        config_text.and_then(|config| find_toml_value_by_key_patterns(config, &["wire_api"], &[]))
+    });
     let secret_value = env
         .and_then(find_codex_secret_value)
         .or_else(|| auth.and_then(find_codex_secret_value))

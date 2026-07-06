@@ -25,7 +25,7 @@ ALTER TABLE projects ADD COLUMN worktree_root TEXT NOT NULL DEFAULT '';
 TypeScript：
 
 ```ts
-export type WorktreeIsolationStrategy = "prompt" | "autoParallel" | "always";
+export type WorktreeIsolationStrategy = "prompt" | "disabled" | "autoParallel" | "always";
 
 interface Project {
   // ...现有字段
@@ -36,9 +36,10 @@ interface Project {
 
 含义：
 
-- `prompt`：默认。检测到同项目已有 running 任务时弹窗提醒。
-- `autoParallel`：同项目第 2+ 个会话静默创建 worktree。
-- `always`：每个从项目打开的新会话都创建 worktree。
+- `prompt`：默认。项目已配置 CLI 工具且已有同项目终端会话时弹窗提醒；不依赖 running 状态。
+- `disabled`：不处理。无论是否已有同项目终端、CLI 工具是否已配置，都按普通终端打开；不弹提醒、不自动创建 worktree。
+- `autoParallel`：项目已配置 CLI 工具且已有同项目终端会话时，第 2+ 个会话静默创建 worktree。
+- `always`：每个从项目打开的新会话都创建 worktree；仍只对支持 Git worktree 的本地 Git 项目生效。
 - `worktree_root`：空字符串表示使用默认根目录；非空为用户自定义 worktree 根目录。
 
 ### 新表 worktrees（migration v14）
@@ -192,7 +193,7 @@ interface WorktreeStore {
   worktrees: WorktreeRecord[];
   loadWorktrees: () => Promise<void>;
   createWorktreeForProject: (project: Project, name?: string) => Promise<WorktreeRecord>;
-  shouldIsolateNewSession: (project: Project, sessions: TerminalSession[], tabNotifications: Record<string, TabNotificationState>) => "prompt" | "auto" | "none";
+  shouldIsolateNewSession: (project: Project, sessions: TerminalSession[]) => "prompt" | "auto" | "none";
   checkDeps: (worktree: WorktreeRecord) => Promise<GitWorktreeDepsCheckResult>;
   dismissDepsPrompt: (worktreeId: string) => Promise<void>;
   mergeWorktree: (worktree: WorktreeRecord) => Promise<GitWorktreeMergeResult>;
@@ -220,22 +221,24 @@ worktreeId?: string;
 
 1. 读取项目 `worktree_strategy`。
 2. 若非 git 项目或 WSL 项目：不触发，按现状打开。
-3. `always`：自动创建 worktree → cwd = worktree.path → createSession，session.worktreeId = id。
-4. `autoParallel`：若同项目已有 `running` Tab，则自动创建；否则按现状。
-5. `prompt`：若同项目已有 `running` Tab，则弹窗；用户选择：
+3. `disabled`：不做 Git 校验、不弹提醒、不自动创建 worktree，直接按现状打开普通项目终端。
+4. `always`：自动创建 worktree → cwd = worktree.path → createSession，session.worktreeId = id。
+5. `autoParallel`：若项目已配置 CLI 工具且已有打开的同项目 PTY 终端会话，则自动创建；否则按现状。
+6. `prompt`：若项目已配置 CLI 工具且已有打开的同项目 PTY 终端会话，则弹窗；用户选择：
    - 隔离打开：创建 worktree 后打开。
    - 直接打开：按现状。
    - 本项目不再提醒：更新项目 `worktree_strategy = autoParallel` 或新增单独 dismiss 字段？MVP 建议语义改为 `autoParallel` 不合适；应增加本地/项目字段 `worktree_strategy = manual` 会膨胀。更简单：按钮文案改成「并行时自动隔离」，设置为 `autoParallel`。
-6. 创建 worktree 后执行依赖检测：若需要提醒，弹依赖对话框；用户允许则新建安装 Tab 执行安装命令，原 Tab 正常执行 startup_cmd。
+7. 创建 worktree 后执行依赖检测：若需要提醒，弹依赖对话框；用户允许则新建安装 Tab 执行安装命令，原 Tab 正常执行 startup_cmd。
 
 > 注意：依赖安装 Tab 也应带 `worktreeId`，但 title 标为 `安装依赖：<name>`。
+> prompt/autoParallel 不读取 Tab visible running、`npm run dev`、startup_cmd 或 shell 运行状态；没有配置 CLI 工具的普通终端项目不触发这两档策略。
 
 ### UI 入口
 
 - Tab：worktree 会话显示 `wt/<name>` 或 `<name>` 小徽标；徽标/右键菜单提供：查看改动、完成任务、安装依赖、丢弃、在资源管理器中打开。
 - 项目树：worktree 子条目显示在项目下，点击打开该 worktree 终端；右键同样提供完成/丢弃/打开目录。
 - 实时统计面板：只展示会话所属 worktree 标识，不放操作入口。
-- 项目设置：新增「Worktree 隔离策略」三档和「Worktree 根目录」输入。
+- 项目设置：新增「Worktree 隔离策略」四档（提醒/不处理/并行时自动隔离/始终自动隔离）和「Worktree 根目录」输入；默认显示仍为「提醒」。
 
 ### 完成任务向导
 
@@ -254,7 +257,7 @@ MVP 不做三方冲突编辑器。
 
 新增中文/英文 i18n key，避免硬编码：
 
-- worktree.strategy.prompt / autoParallel / always
+- worktree.strategy.prompt / disabled / autoParallel / always
 - worktree.prompt.title / description / isolate / direct / autoParallel
 - worktree.deps.title / install / skip
 - worktree.finish.*

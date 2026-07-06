@@ -235,6 +235,55 @@ splitSessionToPaneEdge(sessionId: string, targetPaneId: string, edge: TerminalPa
 - Assert same-pane single-tab edge split returns `changed: false`.
 - Assert `activePaneId` and `activeSessionId` point to the moved tab when a split succeeds.
 
+### Pattern: Worktree records are project state; worktree sessions are terminal metadata
+
+**Problem**: A Git worktree is a persistent checkout on disk, but an open terminal tab inside it is transient. If worktree identity lives only on `TerminalSession`, app restart loses the project-tree child item; if it lives only in the database, tab badges and finish-task menus cannot tell which checkout a running tab belongs to.
+
+**Solution**: Store durable worktree lifecycle records in `worktreeStore` / the `worktrees` SQLite table, and store only the optional pointer on terminal sessions.
+
+```typescript
+interface WorktreeRecord {
+  id: string;
+  project_id: string;
+  name: string;
+  branch: string;
+  path: string;
+  base_branch: string;
+  deps_prompt_dismissed: number;
+  status: "active" | "missing";
+}
+
+interface TerminalSession {
+  worktreeId?: string;
+}
+```
+
+**Contracts**:
+
+- `worktreeStore.loadWorktrees()` runs during startup before the project tree needs worktree child nodes.
+- `projectStore.buildTree()` may include worktree child nodes, but it must not own Git lifecycle actions.
+- `TerminalSession.worktreeId` is metadata for badges, menus, stats, and install tabs; it is not the source of truth for whether a worktree exists.
+- Sidebar/tree selection uses `TerminalSession.worktreeId` as the tab-to-worktree bridge: activating a worktree tab should select and reveal that worktree node; selecting a worktree node should activate an already-open PTY session for that worktree when one exists.
+- Missing worktree directories remain visible as `status="missing"` until the user cleans the stale record; do not silently hide them from the project tree.
+- Dependency prompt dismissal belongs to the worktree record, not the terminal tab, because multiple tabs may point at the same worktree.
+- `disabled` isolation strategy preserves pre-worktree behavior: always open a normal project terminal, without Git validation, prompt, or automatic worktree creation.
+- `prompt` / `autoParallel` isolation decisions are based on project CLI configuration plus an existing same-project PTY session, not visible tab `running` state, startup commands, or shell process liveness. Projects without a configured CLI tool must not trigger these two strategies for ordinary terminal usage.
+- `always` still creates a worktree for every project launch, but only after Git validation confirms a local project that supports `git worktree`; non-Git and unsupported WSL paths open normally.
+
+**Good/Base/Bad Cases**:
+
+- Good: after app restart, no terminal sessions are restored, but the project tree still shows active/missing worktree records loaded from SQLite.
+- Good: switching from worktree tab A to worktree tab B updates the selected project-tree child from A to B without opening new terminals.
+- Base: an install-dependencies tab and the task tab share the same `worktreeId`, so both display the same worktree badge.
+- Bad: closing the last tab for a worktree deletes the database record. Closing a tab is not equivalent to discarding a checkout.
+- Bad: selecting a worktree row always opens another terminal even when a matching worktree tab is already open.
+
+**Tests Required**:
+
+- Type-check that `TreeNode` handles `worktree` nodes everywhere a project tree is rendered.
+- Manual verification: restart app after creating a worktree; the worktree child row remains even though terminals are not restored.
+- Manual verification: dismissing dependency prompt for one worktree does not affect a different worktree of the same project.
+
 ### Pattern: Project-scoped terminal filtering derives a visible pane tree
 
 **Problem**: A project-only terminal view is a presentation concern. If the UI mutates the real `sessions` array or `paneTree` to hide other projects, background sessions disappear from state, pane operations close the wrong tabs, and leaving scoped mode cannot reconstruct the original layout.

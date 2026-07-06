@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useId, type Ref } from "react
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/projectStore";
-import type { Project, Group } from "../lib/types";
+import type { Project, Group, WorktreeIsolationStrategy } from "../lib/types";
 import { getShellOptions } from "../lib/types";
 import { getOsPlatform, normalizeShellKey } from "../lib/shell";
 import { getConfigModalShellPrefill } from "../lib/configModalShellPrefill";
@@ -23,7 +23,7 @@ import {
 import { Button } from "./ui/button";
 import { toast } from "sonner";
 import { logError, logInfo, logWarn } from "../lib/logger";
-import { useI18n } from "../lib/i18n";
+import { useI18n, type TranslationKey } from "../lib/i18n";
 
 interface Props {
   project?: Project;
@@ -33,10 +33,17 @@ interface Props {
 }
 
 const CLI_TOOL_OPTIONS = ["claude", "codex"] as const;
+const WORKTREE_STRATEGIES: WorktreeIsolationStrategy[] = ["prompt", "disabled", "autoParallel", "always"];
+const WORKTREE_STRATEGY_LABEL_KEYS: Record<WorktreeIsolationStrategy, TranslationKey> = {
+  prompt: "worktree.strategy.prompt",
+  disabled: "worktree.strategy.disabled",
+  autoParallel: "worktree.strategy.autoParallel",
+  always: "worktree.strategy.always",
+};
 
 export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Props) {
-  const { createProject, updateProject, groups } = useProjectStore();
   const { t } = useI18n();
+  const { createProject, updateProject, groups } = useProjectStore();
   const isEdit = !!project;
   const isClone = !!cloneFrom;
   const logInstanceIdRef = useRef(crypto.randomUUID().slice(0, 8));
@@ -65,6 +72,10 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
   const [startupCmd, setStartupCmd] = useState(cloneFrom?.startup_cmd ?? project?.startup_cmd ?? "");
   const [shell, setShell] = useState(cloneFrom?.shell ?? project?.shell ?? "");
   const [envVarsText, setEnvVarsText] = useState(cloneFrom?.env_vars ?? project?.env_vars ?? "{}");
+  const [worktreeStrategy, setWorktreeStrategy] = useState<WorktreeIsolationStrategy>(
+    cloneFrom?.worktree_strategy ?? project?.worktree_strategy ?? "prompt"
+  );
+  const [worktreeRoot, setWorktreeRoot] = useState(cloneFrom?.worktree_root ?? project?.worktree_root ?? "");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showConfirmEdit, setShowConfirmEdit] = useState(false);
@@ -194,6 +205,8 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
           startup_cmd: startupCmd.trim(),
           env_vars: envVarsText.trim(),
           shell,
+          worktree_strategy: worktreeStrategy,
+          worktree_root: worktreeRoot.trim(),
         });
         toast.success("终端修改成功");
       } else {
@@ -206,6 +219,8 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
           startup_cmd: startupCmd.trim() || undefined,
           env_vars: envVarsText.trim() || undefined,
           shell,
+          worktree_strategy: worktreeStrategy,
+          worktree_root: worktreeRoot.trim() || undefined,
         });
         toast.success("终端创建成功");
       }
@@ -250,7 +265,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
         }}
       >
         <DialogContent
-          className="max-w-[420px]"
+          className="w-[calc(100vw-2rem)] max-w-[400px] overflow-hidden p-0"
           showCloseButton={false}
           aria-describedby={dialogDescriptionId}
           onEscapeKeyDown={(event) => {
@@ -270,21 +285,23 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
             previousFocusRef.current?.focus();
           }}
         >
-          <form onSubmit={handleSubmit}>
-            <DialogTitle className="mb-4 text-base font-semibold text-text-primary">
-              {isEdit ? "编辑终端" : isClone ? "复制终端配置" : "新增终端"}
-            </DialogTitle>
-            <DialogDescription id={dialogDescriptionId} className="sr-only">
-              {t("configModal.a11y.dialogDescription")}
-            </DialogDescription>
+          <form onSubmit={handleSubmit} className="flex max-h-[82vh] min-h-0 flex-col">
+            <div className="shrink-0 px-4 pt-4">
+              <DialogTitle className="mb-4 text-base font-semibold text-text-primary">
+                {isEdit ? "编辑终端" : isClone ? "复制终端配置" : "新增终端"}
+              </DialogTitle>
+              <DialogDescription id={dialogDescriptionId} className="sr-only">
+                {t("configModal.a11y.dialogDescription")}
+              </DialogDescription>
 
-            {error && (
-              <div className="mb-3 rounded bg-danger/15 px-2 py-1.5 text-xs text-danger">
-                {error}
-              </div>
-            )}
+              {error && (
+                <div className="mb-3 rounded bg-danger/15 px-2 py-1.5 text-xs text-danger">
+                  {error}
+                </div>
+              )}
+            </div>
 
-            <div className="space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4">
               <Field
                 id={nameFieldId}
                 inputRef={nameInputRef}
@@ -386,9 +403,51 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
                   className="h-16 resize-none text-sm"
                 />
               </div>
+
+              <div className="rounded-xl border border-border/70 bg-bg-secondary/60 p-3">
+                <div className="mb-2 text-xs font-semibold text-text-secondary">{t("worktree.settings.title")}</div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="mb-1 block text-xs text-text-muted">{t("worktree.settings.strategy")}</label>
+                    <Select
+                      value={worktreeStrategy}
+                      onChange={(e) => setWorktreeStrategy(e.target.value as WorktreeIsolationStrategy)}
+                      className="text-sm"
+                    >
+                      {WORKTREE_STRATEGIES.map((strategy) => (
+                        <option key={strategy} value={strategy}>{t(WORKTREE_STRATEGY_LABEL_KEYS[strategy])}</option>
+                      ))}
+                    </Select>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">{t("worktree.settings.strategyDescription")}</p>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-text-muted">{t("worktree.settings.root")}</label>
+                    <div className="flex gap-1">
+                      <Input
+                        type="text"
+                        value={worktreeRoot}
+                        onChange={(e) => setWorktreeRoot(e.target.value)}
+                        placeholder={t("worktree.settings.rootPlaceholder")}
+                        className="flex-1 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const selected = await open({ directory: true, title: t("worktree.settings.chooseRoot") });
+                          if (selected) setWorktreeRoot(selected);
+                        }}
+                        className="shrink-0 rounded border border-border bg-bg-tertiary px-2 py-1.5 text-xs text-text-secondary"
+                      >
+                        {t("common.browse")}
+                      </button>
+                    </div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">{t("worktree.settings.rootDescription")}</p>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="shrink-0 border-t border-border/70 px-4 py-3">
               <Button variant="outline" onClick={onClose}>
                 取消
               </Button>

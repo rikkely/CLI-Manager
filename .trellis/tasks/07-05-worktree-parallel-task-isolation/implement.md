@@ -39,7 +39,7 @@
   - 加载/写入 `worktrees` 表
   - 对账 missing worktree
   - 创建 worktree 并保存 DB 记录
-  - 判断 `prompt/autoParallel/always`
+  - 判断 `prompt/disabled/autoParallel/always`
   - 依赖提醒 dismissed 状态
   - merge/remove action
 - 注意所有 DB 写入参数化；类型不使用 `any`。
@@ -47,7 +47,7 @@
 ### 4. 项目设置
 
 - `ConfigModal.tsx` 增加：
-  - Worktree 隔离策略 select：提醒/并行时自动/始终自动
+  - Worktree 隔离策略 select：提醒（默认）/不处理/并行时自动/始终自动
   - Worktree 根目录输入（可空）
 - `projectStore.createProject/updateProject` 支持新字段。
 - i18n 增加中文/英文文本。
@@ -55,8 +55,9 @@
 ### 5. 打开项目流程接入
 
 - 在 `src/components/sidebar/index.tsx` 的 `openProjectInternal` 前接入 worktree 决策。
-- `prompt` 且同项目有 running tab：弹隔离提醒。
-- `autoParallel/always` 自动创建 worktree。
+- `disabled` 直接普通打开，不做 Git 校验、不弹提醒、不自动创建 worktree。
+- `prompt` 且项目已配置 CLI 工具并已有同项目终端：弹隔离提醒。
+- `autoParallel` 在项目已配置 CLI 工具并已有同项目终端时自动创建 worktree；`always` 每次自动创建 worktree。
 - 创建 worktree 后调用 `createSession`，cwd 指向 worktree.path，session 记录 `worktreeId`。
 - 依赖提醒：若 `checkDeps` 需要安装且未 dismissed，弹窗；允许则新开安装 Tab 执行安装命令，原 Tab 继续执行项目 startup_cmd。
 
@@ -91,8 +92,8 @@
 
 ## 人工验证清单
 
-- 同项目 running 会话下新开终端触发提醒。
-- 三档隔离策略行为正确。
+- 默认提醒模式：项目 CLI 工具已配置且已有同项目 Tab 时，新开终端触发提醒；不要求 `npm run dev` 或 Tab visible running。
+- 四档隔离策略行为正确；`不处理` 始终普通打开；未配置 CLI 工具的项目不因普通启动命令或 shell 状态触发 prompt/autoParallel。
 - worktree Tab 徽标、项目树子节点、右键菜单可见。
 - 依赖提醒只出现一次，允许后新 Tab 安装，原 Tab 继续 startup_cmd。
 - 完成任务：提交、合并、清理闭环。

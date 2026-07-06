@@ -1,13 +1,43 @@
+import { invoke } from "@tauri-apps/api/core";
 import Database from "@tauri-apps/plugin-sql";
 import { getCliManagerDataPaths } from "./appPaths";
 
 let db: Database | null = null;
+let dbLoadPromise: Promise<Database> | null = null;
+let migrationRepairPromise: Promise<void> | null = null;
 let pragmaApplied = false;
+
+async function repairKnownMigrationDrift(): Promise<void> {
+  if (!migrationRepairPromise) {
+    migrationRepairPromise = invoke("db_repair_known_migration_drift")
+      .then(() => undefined)
+      .catch((err) => {
+        migrationRepairPromise = null;
+        throw err;
+      });
+  }
+  await migrationRepairPromise;
+}
+
+async function loadDb(): Promise<Database> {
+  const paths = await getCliManagerDataPaths();
+  await repairKnownMigrationDrift();
+  return Database.load(paths.dbUrl);
+}
 
 export async function getDb(): Promise<Database> {
   if (!db) {
-    const paths = await getCliManagerDataPaths();
-    db = await Database.load(paths.dbUrl);
+    if (!dbLoadPromise) {
+      dbLoadPromise = loadDb()
+        .then((loaded) => {
+          db = loaded;
+          return loaded;
+        })
+        .finally(() => {
+          dbLoadPromise = null;
+        });
+    }
+    db = await dbLoadPromise;
   }
   // SQLite 默认是 DELETE journal + synchronous=FULL，每次写入都 fsync，对批量更新极不友好。
   // 切到 WAL + NORMAL，可显著降低同步、批量重排等场景的 fsync 频率。

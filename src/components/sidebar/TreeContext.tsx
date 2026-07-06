@@ -1,6 +1,6 @@
 import { createContext, useContext, type MouseEvent as ReactMouseEvent } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
-import type { Project } from "../../lib/types";
+import type { Project, WorktreeRecord } from "../../lib/types";
 import type { ProviderBadge } from "../../stores/projectStore";
 import type { SessionStatus } from "../../stores/terminalStore";
 
@@ -20,6 +20,9 @@ export interface TreeActions {
   onRenameConfirm: (id: string, newName: string) => void;
   onCancelRename: () => void;
   onContextMenuProject: (e: ReactMouseEvent, p: Project) => void;
+  onSelectWorktree: (worktree: WorktreeRecord) => void;
+  onOpenWorktree: (project: Project, worktree: WorktreeRecord) => void;
+  onContextMenuWorktree: (e: ReactMouseEvent, project: Project, worktree: WorktreeRecord) => void;
   onContextMenuGroup: (e: ReactMouseEvent, groupId: string, groupName: string) => void;
   onCreateGroup: (parentId: string | null, name: string) => void;
   onCancelNewGroup: () => void;
@@ -31,6 +34,10 @@ export interface TreeActions {
 }
 
 export const TreeContext = createContext<TreeActions | null>(null);
+
+export function worktreeListCollapseId(projectId: string): string {
+  return `project-worktrees:${projectId}`;
+}
 
 export function useTreeActions(): TreeActions {
   const ctx = useContext(TreeContext);

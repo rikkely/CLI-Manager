@@ -1297,6 +1297,15 @@
 }
 
 .ui-tree-chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
 }
 
@@ -1919,6 +1928,179 @@
 
 .ui-btn-outline:hover {
   background-color: var(--interactive-hover-bg);
+}
+
+.ui-worktree-prompt-dialog {
+  border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  box-shadow:
+    0 22px 64px color-mix(in srgb, #000 32%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 5%, transparent);
+}
+
+[data-theme="dark"] .ui-worktree-prompt-dialog {
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 88%, var(--surface-container-high) 12%);
+  border-color: color-mix(in srgb, var(--border) 76%, var(--on-surface) 10%);
+}
+
+.ui-worktree-prompt-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, var(--on-surface) 12%);
+  border-radius: 10px;
+  background-color: color-mix(in srgb, var(--surface-container-high) 86%, var(--on-surface) 8%);
+  color: var(--on-surface);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 4%, transparent);
+  transition:
+    background-color var(--animate-duration-fast),
+    border-color var(--animate-duration-fast),
+    color var(--animate-duration-fast),
+    box-shadow var(--animate-duration-fast),
+    opacity var(--animate-duration-fast);
+}
+
+.ui-worktree-prompt-close:hover {
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--border) 52%);
+  background-color: var(--interactive-hover-bg);
+  color: var(--on-surface);
+  box-shadow: 0 0 0 2px var(--interactive-focus-ring);
+}
+
+.ui-worktree-prompt-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--interactive-focus-ring);
+}
+
+.ui-worktree-prompt-footer {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 18px;
+}
+
+.ui-worktree-prompt-action {
+  min-width: 112px;
+  min-height: 34px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 11px;
+  padding-inline: 12px;
+  color: var(--on-surface);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 5%, transparent);
+  white-space: nowrap;
+}
+
+.ui-worktree-prompt-action-neutral {
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background-color: color-mix(in srgb, var(--surface-container-high) 92%, var(--on-surface) 4%);
+  color: color-mix(in srgb, var(--on-surface) 84%, var(--on-surface-variant) 16%);
+}
+
+.ui-worktree-prompt-action-accent {
+  border-color: color-mix(in srgb, var(--primary) 44%, var(--border) 56%);
+  background-color: color-mix(in srgb, var(--surface-container-highest) 86%, var(--primary) 14%);
+  color: color-mix(in srgb, var(--primary) 70%, var(--on-surface) 30%);
+}
+
+.ui-worktree-prompt-action-primary {
+  border-color: color-mix(in srgb, var(--primary) 82%, var(--on-surface) 10%);
+  background-image: linear-gradient(135deg, var(--primary-gradient-start), var(--primary-gradient-end));
+  color: #fff;
+  box-shadow:
+    0 8px 18px color-mix(in srgb, var(--primary) 22%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
+}
+
+.ui-worktree-prompt-action:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--border) 42%);
+  color: var(--on-surface);
+  box-shadow:
+    0 0 0 2px var(--interactive-focus-ring),
+    inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 6%, transparent);
+}
+
+.ui-worktree-prompt-action-accent:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--primary) 78%, var(--on-surface) 22%);
+}
+
+.ui-worktree-prompt-action-primary:hover:not(:disabled) {
+  color: #fff;
+}
+
+.ui-worktree-prompt-action:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px var(--interactive-focus-ring),
+    inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 6%, transparent);
+}
+
+.ui-worktree-children {
+  position: relative;
+  margin-left: 12px;
+  padding-left: 6px;
+}
+
+.ui-worktree-children::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 6px;
+  left: 6px;
+  width: 1px;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--success) 26%, transparent);
+}
+
+[data-theme="light"] .ui-worktree-children::before {
+  background-color: color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+.ui-worktree-tree-icon {
+  background-color: color-mix(in srgb, var(--success) 10%, var(--surface-container-highest) 90%);
+  color: var(--success);
+}
+
+.ui-worktree-short-chip,
+.ui-worktree-tab-badge {
+  border: 1px solid color-mix(in srgb, var(--success) 38%, transparent);
+  background-color: color-mix(in srgb, var(--success) 10%, var(--surface-container-highest) 90%);
+  color: color-mix(in srgb, var(--success) 72%, var(--on-surface) 28%);
+  white-space: nowrap;
+}
+
+.ui-worktree-tab-badge {
+  max-width: 48px;
+  line-height: 1;
+}
+
+.ui-worktree-tab-badge:hover {
+  border-color: color-mix(in srgb, var(--success) 54%, transparent);
+  background-color: color-mix(in srgb, var(--success) 16%, var(--surface-container-highest) 84%);
+}
+
+[data-theme="dark"] .ui-worktree-tree-icon,
+[data-theme="dark"] .ui-worktree-short-chip,
+[data-theme="dark"] .ui-worktree-tab-badge {
+  border-color: color-mix(in srgb, var(--success) 46%, transparent);
+  background-color: color-mix(in srgb, var(--success) 16%, var(--surface-container-high) 84%);
+  color: color-mix(in srgb, var(--success) 80%, #fff 20%);
+}
+
+@media (max-width: 520px) {
+  .ui-worktree-prompt-footer {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .ui-worktree-prompt-action {
+    width: 100%;
+  }
 }
 
 .ui-btn-ghost {
@@ -4301,6 +4483,12 @@
 
 [data-sonner-toaster][data-y-position="top"]:has(.claude-hook-toast) {
   top: 116px;
+}
+
+[data-sonner-toaster]:has(.claude-hook-toast),
+[data-sonner-toast]:has(.claude-hook-toast) {
+  max-height: none !important;
+  overflow: visible !important;
 }
 
 [data-sonner-toast]:has(.claude-hook-toast) {

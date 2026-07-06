@@ -4,7 +4,7 @@ import { Copy, FolderGit2, GitBranch, RefreshCw, FolderOpen } from "lucide-react
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { createPatch } from "diff";
-import type { HistoryFileChangeSummary, HistorySessionDetail, HistorySource } from "../../lib/types";
+import type { HistoryFileChangeSummary, HistorySessionDetail, HistorySource, WorktreeRecord } from "../../lib/types";
 import {
   fetchLatestProjectSessionDetail,
   fetchTodayProjectStats,
@@ -13,6 +13,7 @@ import {
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useSettingsStore, type TerminalStatsCardKey } from "../../stores/settingsStore";
+import { useWorktreeStore } from "../../stores/worktreeStore";
 import {
   TERM,
   StatCard,
@@ -245,7 +246,7 @@ function useCurrentGitBranch(
   return branch;
 }
 
-function SessionInfoCard({ session, statsSession, projectName, projectPath, currentBranch, shell, sessionId }: {
+function SessionInfoCard({ session, statsSession, projectName, projectPath, currentBranch, shell, sessionId, worktree }: {
   session: HistorySessionDetail;
   statsSession: HistorySessionDetail | null;
   projectName: string;
@@ -253,6 +254,7 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
   currentBranch: string | null;
   shell: string;
   sessionId: string;
+  worktree: WorktreeRecord | null;
 }) {
   const { t } = useI18n();
   // 统计数据（消息/时长/角色分布）只认 hook 绑定的会话，未绑定时置空；
@@ -306,6 +308,15 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
         title={`${projectPath}\n\n${t("termStats.openFolderHint")}`}
         onDoubleClick={handleOpenFolder}
       />
+      {worktree && (
+        <Row
+          icon={<GitBranch size={10} />}
+          label={t("worktree.settings.title")}
+          value={worktree.name}
+          color={TERM.magenta}
+          title={`${worktree.branch}\n${worktree.path}`}
+        />
+      )}
       <Row icon={<TerminalSquare size={10} strokeWidth={1.7} />} label={t("termStats.shell")} value={shell} color={TERM.cyan} title={shell} />
       <Row
         icon={<Copy size={10} />}
@@ -362,6 +373,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const terminalStatsCardOrder = useSettingsStore((state) => state.terminalStatsCardOrder);
   const terminalSessions = useTerminalStore((state) => state.sessions);
   const projects = useProjectStore((state) => state.projects);
+  const worktrees = useWorktreeStore((state) => state.worktrees);
 
   const [latestSession, setLatestSession] = useState<HistorySessionDetail | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -526,6 +538,9 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   if (!panelActive) return null;
 
   const projectName = project?.name || latestSession?.project_key || "—";
+  const activeWorktree = terminalSession?.worktreeId
+    ? worktrees.find((worktree) => worktree.id === terminalSession.worktreeId) ?? null
+    : null;
   const shellLabel = formatStatsShellLabel(terminalSession?.shell ?? project?.shell);
 
   const renderStatsCard = (cardKey: TerminalStatsCardKey) => {
@@ -546,6 +561,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             currentBranch={currentBranch}
             shell={shellLabel || "—"}
             sessionId={terminalSession?.cliSessionId ?? session.session_id}
+            worktree={activeWorktree}
           />
         );
       case "tokenUsage":

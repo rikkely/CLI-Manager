@@ -36,6 +36,7 @@ import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
 import { useModelPricingStore } from "./stores/modelPricingStore";
+import { useWorktreeStore } from "./stores/worktreeStore";
 import { debugConsoleWarn } from "./lib/debugConsole";
 import { createPerfMarker, logWarn } from "./lib/logger";
 import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contrast";
@@ -87,6 +88,7 @@ const EXIT_NOTICE_DISPLAY_MS = 1200;
 const IN_TAURI = isTauri();
 const CLAUDE_HOOK_TOAST_PREFIX = "claude-hook-notification";
 const SYSTEM_NOTIFICATION_ACTION_EVENT = "system-notification-action";
+const MAX_SYSTEM_NOTIFICATION_DETAIL_LENGTH = 72;
 let claudeHookToastSequence = 0;
 type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
 
@@ -214,10 +216,15 @@ function isSystemNotificationEvent(eventType: CliHookPayload["event"]): eventTyp
   );
 }
 
+function truncateSystemNotificationDetail(detail: string): string {
+  if (detail.length <= MAX_SYSTEM_NOTIFICATION_DETAIL_LENGTH) return detail;
+  return `${detail.slice(0, MAX_SYSTEM_NOTIFICATION_DETAIL_LENGTH - 3).trimEnd()}...`;
+}
+
 function getSystemNotificationBody(payload: CliHookPayload, projectName: string): string {
   const sourceName = getCliHookSourceName(payload);
   const detail = payload.message?.trim();
-  const suffix = detail ? `: ${detail}` : "";
+  const suffix = detail ? `: ${truncateSystemNotificationDetail(detail)}` : "";
 
   switch (payload.event) {
     case "Stop":
@@ -701,8 +708,11 @@ function App() {
       void useModelPricingStore.getState().load().catch((err) => {
         logWarn("Failed to preload model pricing", err);
       });
-      // 2. 加载项目列表
+
+      // 2. 加载项目列表与 worktree 记录
       await useProjectStore.getState().fetchAll("startup");
+      await useWorktreeStore.getState().loadWorktrees();
+      await useWorktreeStore.getState().markMissingWorktrees();
 
       // 3. 启动时不恢复历史终端，避免重建 PTY 并重跑 startupCmd。
       await useSessionStore.getState().clear().catch((err) => {

@@ -6,6 +6,23 @@ export interface Group {
   created_at: string;
 }
 
+export type WorktreeIsolationStrategy = "prompt" | "disabled" | "autoParallel" | "always";
+
+export type WorktreeStatus = "active" | "missing";
+
+export interface WorktreeRecord {
+  id: string;
+  project_id: string;
+  name: string;
+  branch: string;
+  path: string;
+  base_branch: string;
+  deps_prompt_dismissed: number;
+  status: WorktreeStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -20,6 +37,8 @@ export interface Project {
   env_vars: string;
   shell: string;
   provider_overrides: string;
+  worktree_strategy: WorktreeIsolationStrategy;
+  worktree_root: string;
   created_at: string;
   updated_at: string;
 }
@@ -35,6 +54,8 @@ export interface CreateProjectInput {
   env_vars?: string;
   shell?: string;
   provider_overrides?: string;
+  worktree_strategy?: WorktreeIsolationStrategy;
+  worktree_root?: string;
 }
 
 export interface UpdateProjectInput {
@@ -49,6 +70,8 @@ export interface UpdateProjectInput {
   env_vars?: string;
   shell?: string;
   provider_overrides?: string;
+  worktree_strategy?: WorktreeIsolationStrategy;
+  worktree_root?: string;
 }
 
 export interface CreateGroupInput {
@@ -58,7 +81,8 @@ export interface CreateGroupInput {
 
 export type TreeNode =
   | { type: "group"; group: Group; children: TreeNode[] }
-  | { type: "project"; project: Project };
+  | { type: "project"; project: Project; worktrees?: WorktreeRecord[] }
+  | { type: "worktree"; project: Project; worktree: WorktreeRecord };
 
 export type TerminalSessionKind = "pty" | "subagent-transcript" | "file-editor" | "synced-history";
 
@@ -87,6 +111,7 @@ export interface SyncedHistoryPaneSession {
 export interface TerminalSession {
   id: string;
   projectId?: string;
+  worktreeId?: string;
   title: string;
   // 重建 PTY 必需参数
   cwd?: string;

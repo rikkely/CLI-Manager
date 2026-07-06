@@ -8,7 +8,7 @@ import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchA
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs } from "../lib/shell";
 import type {
   Project, CreateProjectInput, UpdateProjectInput,
-  Group, CreateGroupInput, TreeNode,
+  Group, CreateGroupInput, TreeNode, WorktreeRecord,
 } from "../lib/types";
 
 let inflightFetchAll: Promise<void> | null = null;
@@ -33,6 +33,7 @@ export interface ProviderBadge {
 interface ProjectStore {
   projects: Project[];
   groups: Group[];
+  worktrees: WorktreeRecord[];
   tree: TreeNode[];
   loaded: boolean;
   searchQuery: string;
@@ -57,19 +58,29 @@ interface ProjectStore {
   moveGroupToParent: (groupId: string, targetParentId: string | null) => Promise<void>;
 }
 
-function buildTree(groups: Group[], projects: Project[], search: string): TreeNode[] {
+function buildTree(groups: Group[], projects: Project[], search: string, worktrees: WorktreeRecord[] = []): TreeNode[] {
   const lowerSearch = search.toLowerCase();
   const matchingProjects = search
     ? projects.filter(
         (p) =>
           p.name.toLowerCase().includes(lowerSearch) ||
-          p.cli_tool.toLowerCase().includes(lowerSearch)
+          p.cli_tool.toLowerCase().includes(lowerSearch) ||
+          worktrees.some((worktree) =>
+            worktree.project_id === p.id &&
+            (worktree.name.toLowerCase().includes(lowerSearch) || worktree.branch.toLowerCase().includes(lowerSearch))
+          )
       )
     : projects;
 
   const groupMap = new Map<string, Group>(groups.map((g) => [g.id, g]));
   const childGroups = new Map<string | null, Group[]>();
   const groupProjects = new Map<string | null, Project[]>();
+  const worktreesByProject = new Map<string, WorktreeRecord[]>();
+  for (const worktree of worktrees) {
+    const arr = worktreesByProject.get(worktree.project_id) ?? [];
+    arr.push(worktree);
+    worktreesByProject.set(worktree.project_id, arr);
+  }
 
   for (const g of groups) {
     const key = g.parent_id;
@@ -115,13 +126,37 @@ function buildTree(groups: Group[], projects: Project[], search: string): TreeNo
       (a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name)
     );
     for (const p of projs) {
-      nodes.push({ type: "project", project: p });
+      const projectWorktrees = (worktreesByProject.get(p.id) ?? []).sort((a, b) => a.name.localeCompare(b.name));
+      nodes.push({ type: "project", project: p, worktrees: projectWorktrees });
     }
 
     return nodes;
   }
 
   return buildLevel(null);
+}
+
+function isMissingWorktreesTableError(err: unknown): boolean {
+  const message = String(err).toLowerCase();
+  if (!message.includes("no such table: worktrees")) return false;
+  return !(
+    message.includes("migration") ||
+    message.includes("checksum") ||
+    message.includes("previously applied") ||
+    message.includes("modified") ||
+    message.includes("initialization") ||
+    message.includes("init failed")
+  );
+}
+
+async function selectWorktreesOrEmpty(db: Awaited<ReturnType<typeof getDb>>): Promise<WorktreeRecord[]> {
+  try {
+    return await db.select<WorktreeRecord[]>("SELECT * FROM worktrees ORDER BY created_at DESC");
+  } catch (err) {
+    if (!isMissingWorktreesTableError(err)) throw err;
+    logWarn("worktree table is not available yet", err);
+    return [];
+  }
 }
 
 function collectActiveCodexProfileNames(projects: Project[]): string[] {
@@ -139,6 +174,7 @@ function collectActiveCodexProfileNames(projects: Project[]): string[] {
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   groups: [],
+  worktrees: [],
   tree: [],
   loaded: false,
   searchQuery: "",
@@ -147,8 +183,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   setSearchQuery: (q) => {
     set({ searchQuery: q });
-    const { groups, projects } = get();
-    set({ tree: buildTree(groups, projects, q) });
+    const { groups, projects, worktrees } = get();
+    set({ tree: buildTree(groups, projects, q, worktrees) });
   },
 
   fetchAll: async (reason = "interactive") => {
@@ -157,9 +193,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       try {
         const policy = resolveProjectFetchPolicy(reason);
         const db = await getDb();
-        const [groups, projects] = await Promise.all([
+        const [groups, projects, worktrees] = await Promise.all([
           db.select<Group[]>("SELECT * FROM groups ORDER BY sort_order, name"),
           db.select<Project[]>("SELECT * FROM projects ORDER BY sort_order, name"),
+          selectWorktreesOrEmpty(db),
         ]);
         // Path health check
         let projectHealth = get().projectHealth;
@@ -173,8 +210,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
           } catch { /* ignore */ }
         }
 
-        const tree = buildTree(groups, projects, get().searchQuery);
-        set({ groups, projects, tree, projectHealth, loaded: true });
+        const tree = buildTree(groups, projects, get().searchQuery, worktrees);
+        set({ groups, projects, worktrees, tree, projectHealth, loaded: true });
         if (policy.refreshProviderBadges) {
           // 供应商徽标刷新不阻塞项目树加载，失败也静默
           void get().refreshProviderBadges();
@@ -295,14 +332,36 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       env_vars: input.env_vars ?? "{}",
       shell,
       provider_overrides: input.provider_overrides ?? "{}",
+      worktree_strategy: input.worktree_strategy ?? "prompt",
+      worktree_root: input.worktree_root ?? "",
       created_at: ts,
       updated_at: ts,
     };
     await db.execute(
-      `INSERT INTO projects (id, name, path, group_name, group_id, sort_order, cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-      [project.id, project.name, project.path, project.group_name, project.group_id, project.sort_order,
-       project.cli_tool, project.cli_args, project.startup_cmd, project.env_vars, project.shell, project.provider_overrides, project.created_at, project.updated_at]
+      `INSERT INTO projects (
+         id, name, path, group_name, group_id, sort_order,
+         cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides,
+         worktree_strategy, worktree_root, created_at, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+      [
+        project.id,
+        project.name,
+        project.path,
+        project.group_name,
+        project.group_id,
+        project.sort_order,
+        project.cli_tool,
+        project.cli_args,
+        project.startup_cmd,
+        project.env_vars,
+        project.shell,
+        project.provider_overrides,
+        project.worktree_strategy,
+        project.worktree_root,
+        project.created_at,
+        project.updated_at,
+      ]
     );
     await get().fetchAll();
     return project;

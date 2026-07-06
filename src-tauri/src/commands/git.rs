@@ -920,7 +920,9 @@ pub async fn git_get_file_diff(
                 let file_full_path = path.join(&file_path);
                 // 兜底守卫：目录条目（如嵌套 Git 仓库）无法按文件读取，返回友好提示而非原始 OS 错误
                 if file_full_path.is_dir() {
-                    return Err("该条目是目录（可能为嵌套 Git 仓库），无法显示文件 diff".to_string());
+                    return Err(
+                        "该条目是目录（可能为嵌套 Git 仓库），无法显示文件 diff".to_string()
+                    );
                 }
                 let content = std::fs::read_to_string(&file_full_path)
                     .map_err(|e| format!("读取文件失败: {}", e))?;
@@ -2361,7 +2363,14 @@ mod tests {
         // node_modules 内的假仓库：命中排除表，不收录
         fs::create_dir_all(root.join("node_modules").join("fake").join(".git")).unwrap();
         // 深度 4 的仓库：超出限深，不收录
-        fs::create_dir_all(root.join("a").join("b").join("c").join("deep4").join(".git")).unwrap();
+        fs::create_dir_all(
+            root.join("a")
+                .join("b")
+                .join("c")
+                .join("deep4")
+                .join(".git"),
+        )
+        .unwrap();
 
         let repos = scan_git_repository_paths(root, 3);
         let rels: Vec<&str> = repos.iter().map(|(rel, _)| rel.as_str()).collect();

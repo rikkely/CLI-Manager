@@ -146,6 +146,7 @@ export interface SplitTerminalOptions {
   startupCmd?: string;
   envVars?: Record<string, string>;
   shell?: string;
+  worktreeId?: string;
 }
 
 interface HookToolStatus {
@@ -176,7 +177,7 @@ interface TerminalStore {
   splits: Record<string, SplitState>;
   hiddenBackgroundSessionIds: Set<string>;
   subagentTranscripts: Record<string, SubagentTranscriptContent>;
-  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string) => Promise<string>;
+  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
   markAttentionInputHandled: (sessionId: string) => void;
@@ -850,7 +851,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   hiddenBackgroundSessionIds: new Set<string>(),
   subagentTranscripts: {},
 
-  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId) => {
+  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId) => {
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(shell, !!projectId, os);
     const launchStartupCmd = prepareStartupCommandForPty(startupCmd, resolvedShell);
@@ -879,6 +880,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const session: TerminalSession = {
       id: sessionId,
       projectId,
+      worktreeId,
       title: title ?? "Terminal",
       cwd,
       shell: resolvedShell,
@@ -1192,6 +1194,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const splitSession: TerminalSession = {
       id: splitSessionId,
       projectId: options?.projectId,
+      worktreeId: options?.worktreeId,
       title: createSplitSessionTitle(options),
       cwd: options?.cwd,
       shell: resolvedShell,

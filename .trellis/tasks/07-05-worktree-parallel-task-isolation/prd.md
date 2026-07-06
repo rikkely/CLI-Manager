@@ -14,7 +14,7 @@
 
 - 所有后端 git 命令以 `project_path` 为参数（`src-tauri/src/commands/git.rs`），传 worktree 路径即可复用 stage/commit/diff 等能力。
 - `terminalStore.createSession(projectId, cwd, ...)` 支持显式 cwd（`src/stores/terminalStore.ts:165`）。
-- Tab 状态（running/attention/done/failed）来自 CLI Hook + Shell OSC 双源合并（`TAB_STATUS_PRIORITY`），可精确判断"项目已有运行中任务"。
+- Tab 状态（running/attention/done/failed）来自 CLI Hook + Shell OSC 双源合并（`TAB_STATUS_PRIORITY`），用于展示运行态；worktree 的 prompt/autoParallel 触发不再依赖该状态。
 - `projects` 表：path/shell/startup_cmd/cli_args/env_vars/provider_overrides/group_id（migrations 当前 v13，新表需 v14+，只增不改）。
 - 现有 `git_get_worktree_snapshot`/`git_fork_worktree_snapshot` 是补丁快照（类 stash），与 git 多工作树机制无关，命名需注意区分。
 - 后端 git2 (libgit2)；git_watcher 递归监听项目根。
@@ -24,8 +24,8 @@
 ## 已确认决策
 
 1. **入口形态**：worktree 挂在项目下（项目树子条目）；主操作入口 = 会话 Tab 分支徽标点击弹菜单（查看改动/完成任务/安装依赖/丢弃）；副入口 = 项目树子条目右键同组操作（覆盖终端已关场景）。实时统计面板仅做展示标注。
-2. **自动识别（核心）**：项目已有运行中任务（Tab 状态 running）时又为同一项目开新终端 → 弹窗「该项目已有任务运行中，是否在隔离的 Worktree 中打开？」[隔离打开] [直接打开] [本项目不再提醒]。
-3. **项目级"隔离策略"三档设置**：`提醒（默认） / 并行时自动隔离（第 2+ 个会话静默进 worktree） / 始终自动隔离（每个会话都进 worktree）`。
+2. **自动识别（核心）**：项目已配置 CLI 工具（非空且非 none/未选择）且已有至少一个打开的同项目终端会话时，再打开同一项目 → 弹窗「是否在隔离的 Worktree 中打开？」[隔离打开] [直接打开] [本项目不再提醒]。不再依赖 Tab visible running、`npm run dev` 或 shell 运行状态。
+3. **项目级"隔离策略"四档设置**：`提醒（默认） / 不处理 / 并行时自动隔离（CLI 工具已配置且已有同项目终端时静默进 worktree） / 始终自动隔离（每次都进 worktree；仅本地 Git 项目生效）`。`不处理` 表示完全保持旧行为，不提醒、不自动创建 worktree。
 4. **代码可见性**：worktree 会话 Tab 常驻分支徽标；项目树 worktree 子条目（含"在资源管理器中打开"）；创建成功提示写明路径。
 5. **依赖初始化**：不往原 Tab 自动输入。触发条件 = 特征文件存在（package.json/Cargo.toml 等）且依赖目录缺失（node_modules/target 等）→ 提醒；允许则**新开 Tab 执行安装命令**，原 Tab 照常跑项目 startup_cmd。防骚扰：条件自愈 + 跳过记入 worktree 元数据（一个 worktree 一生最多弹一次）+ 右键保留手动入口。
 6. **完成任务向导（后端直执行，不往终端输命令）**：
@@ -56,16 +56,17 @@
 
 ## 验收标准
 
-1. 项目 A 有一个 Tab 状态为 running 的会话，再为项目 A 新建终端 → 弹出隔离提醒；选择 [隔离打开] 后：自动创建 `<父目录>/A-worktrees/task-*/` 目录与 `wt/task-*` 分支，新终端 cwd 在该目录，Tab 显示分支徽标。
+1. 项目 A 已配置 CLI 工具（例如 codex）且已有一个打开的同项目终端会话，再为项目 A 新建终端 → 弹出隔离提醒；选择 [隔离打开] 后：自动创建 `<父目录>/A-worktrees/task-*/` 目录与 `wt/task-*` 分支，新终端 cwd 在该目录，Tab 显示分支徽标。
 2. 选择 [直接打开] 行为与现状完全一致；选择 [本项目不再提醒] 后同场景不再弹窗。
-3. 隔离策略设为"并行时自动"：第 2 个会话静默进入新 worktree；设为"始终自动"：第 1 个会话也进 worktree。
+3. 隔离策略设为"不处理"：无论是否已有同项目终端、CLI 工具是否已配置，都直接普通打开；设为"并行时自动"：项目已配置 CLI 工具且已有同项目终端时，第 2 个及以后会话静默进入新 worktree；设为"始终自动"：第 1 个会话也进 worktree，但非 Git/WSL 项目仍普通打开。
 4. worktree 内 package.json 存在且 node_modules 缺失 → 开终端时弹依赖提醒；允许后新开 Tab 执行 npm install，原 Tab 执行 startup_cmd；安装完成后再开终端不再提醒；点跳过后同 worktree 永不再提醒。
 5. 完成任务向导：在 worktree 有未提交改动时走完提交 → 合并 → 清理三步，master 上能看到合并结果，worktree 目录与分支被删除，项目树子条目消失。
 6. 合并冲突场景：主仓库与 worktree 修改同一行 → 合并中止，主仓库无半合并状态（`git status` 干净），弹窗列出冲突文件。
 7. 主工作区脏时点合并 → 被阻止并提示，主工作区无任何变化。
 8. 丢弃：有未合并改动的 worktree 走丢弃 → 出现警告 + 二次确认，确认后目录与分支删除。
-9. 非 git 目录的项目：所有 worktree 入口不出现/置灰，不弹提醒。
-10. `npx tsc --noEmit` 通过；`cd src-tauri && cargo test` 全绿（含 worktree 命令单测）；`CHANGELOG.md` V1.2.5 与 `docs/功能清单.md` 更新。
+9. 未配置 CLI 工具的项目：即使已有普通终端或 startup_cmd 正在运行，也不触发 prompt/autoParallel。
+10. 非 git 目录的项目：所有 worktree 入口不出现/置灰，不弹提醒。
+11. `npx tsc --noEmit` 通过；`cd src-tauri && cargo test` 全绿（含 worktree 命令单测）；`CHANGELOG.md` V1.2.5 与 `docs/功能清单.md` 更新。
 
 ## 开放问题
 
