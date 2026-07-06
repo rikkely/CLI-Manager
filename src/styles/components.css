@@ -1559,7 +1559,7 @@
 
 .ui-split-project-picker .ui-split-project-picker-item {
   border-color: transparent;
-  background-color: color-mix(in srgb, var(--menu-fg) 5%, transparent);
+  background-color: transparent;
   color: color-mix(in srgb, var(--menu-fg) 82%, transparent);
 }
 
