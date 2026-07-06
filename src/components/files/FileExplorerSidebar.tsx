@@ -208,24 +208,6 @@ function splitAutoCollapsedEntries(entries: ProjectFileEntry[], ignoredPaths: Se
   return { normalEntries, collapsedEntries };
 }
 
-function collectAutoCollapsedEntries(entries: ProjectFileEntry[], ignoredPaths: Set<string>): ProjectFileEntry[] {
-  const result: ProjectFileEntry[] = [];
-
-  const walk = (items: ProjectFileEntry[]) => {
-    const { normalEntries, collapsedEntries } = splitAutoCollapsedEntries(items, ignoredPaths);
-    result.push(...collapsedEntries);
-
-    for (const entry of normalEntries) {
-      if (entry.kind === "directory" && entry.children) {
-        walk(entry.children);
-      }
-    }
-  };
-
-  walk(entries);
-  return result;
-}
-
 function parentPath(path: string): string {
   const index = path.lastIndexOf("/");
   return index === -1 ? "" : path.slice(0, index);
@@ -477,7 +459,7 @@ function FileNode({
       onFilePointerCancel={onFilePointerCancel}
       autoCollapseGroups={autoCollapseGroups}
       menuPortalContainer={menuPortalContainer}
-      renderAutoCollapsedGroup={false}
+      renderAutoCollapsedGroup
     />
   ) : null;
 
@@ -691,10 +673,11 @@ function FileTreeRows({
   menuPortalContainer: HTMLDivElement | null;
   renderAutoCollapsedGroup: boolean;
 }) {
-  const { normalEntries } = splitAutoCollapsedEntries(entries, autoCollapseGroups.ignoredPaths);
-  const collapsedEntries = renderAutoCollapsedGroup
-    ? collectAutoCollapsedEntries(entries, autoCollapseGroups.ignoredPaths)
-    : [];
+  const { normalEntries, collapsedEntries: currentLevelCollapsedEntries } = splitAutoCollapsedEntries(
+    entries,
+    autoCollapseGroups.ignoredPaths
+  );
+  const collapsedEntries = renderAutoCollapsedGroup ? currentLevelCollapsedEntries : [];
   const groupOpen = autoCollapseGroups.expandedGroupPaths.has(parentPath);
 
   return (
