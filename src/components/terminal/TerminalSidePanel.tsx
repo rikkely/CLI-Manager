@@ -153,7 +153,8 @@ export function ResizableTerminalPanelFrame({
   return (
     <aside
       ref={panelRef}
-      className="relative flex shrink-0 flex-col overflow-hidden border-l border-border font-mono"
+      className="ui-terminal-side-panel-frame relative flex shrink-0 flex-col overflow-hidden border-l border-border font-mono"
+      data-dragging={dragging ? "true" : undefined}
       style={{
         width,
         minWidth,

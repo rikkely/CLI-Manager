@@ -46,10 +46,8 @@ import { Portal } from "./ui/Portal";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
 import { useProjectStore } from "../stores/projectStore";
 import { formatStartupInputForPty, useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
-import { useSettingsStore, type LightThemePalette, type DarkThemePalette } from "../stores/settingsStore";
+import { TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN, useSettingsStore, type LightThemePalette, type DarkThemePalette } from "../stores/settingsStore";
 
-const FONT_SIZE_MIN = 8;
-const FONT_SIZE_MAX = 32;
 const MIN_TERMINAL_COLS = 40;
 const MIN_TERMINAL_ROWS = 8;
 const ACTIVE_WRITE_FRAME_BUDGET = 64 * 1024;
@@ -2080,7 +2078,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       e.preventDefault();
       e.stopPropagation();
       const current = useSettingsStore.getState().fontSize;
-      const next = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, current + (e.deltaY > 0 ? -1 : 1)));
+      const next = Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, current + (e.deltaY > 0 ? -1 : 1)));
       if (next !== current) {
         void useSettingsStore.getState().update("fontSize", next);
       }

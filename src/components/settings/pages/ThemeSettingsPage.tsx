@@ -31,6 +31,8 @@ import { normalizeShellKey, getOsPlatform } from "../../../lib/shell";
 import type { OsPlatform } from "../../../lib/shell";
 import { getShellOptions } from "../../../lib/types";
 import {
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
   TERMINAL_SCROLLBACK_ROWS_DEFAULT,
   TERMINAL_SCROLLBACK_ROWS_MAX,
   TERMINAL_SCROLLBACK_ROWS_MIN,
@@ -49,8 +51,6 @@ import { FontFamilySelect } from "../FontFamilySelect";
 import { useI18n } from "../../../lib/i18n";
 
 const SWATCH_KEYS = ["background", "foreground", "red", "green", "blue", "cyan"] as const;
-const FONT_SIZE_MIN = 10;
-const FONT_SIZE_MAX = 24;
 const TERMINAL_FONT_FALLBACK = "monospace";
 
 const FONT_FAMILY_OPTIONS: { value: string; label: string; labelEn?: string }[] = [
@@ -98,8 +98,8 @@ const TERMINAL_THEME_GROUP_LABEL_KEYS: Record<TerminalThemeGroupId, {
 };
 
 function clampFontSize(value: number) {
-  if (!Number.isFinite(value)) return FONT_SIZE_MIN;
-  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, value));
+  if (!Number.isFinite(value)) return TERMINAL_FONT_SIZE_MIN;
+  return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, value));
 }
 
 function clampTerminalScrollbackRows(value: number) {
@@ -328,8 +328,8 @@ export function ThemeSettingsPage() {
                   {text("终端字体大小", "Terminal Font Size")}
                 </Text>
                 <NumberInput
-                  min={FONT_SIZE_MIN}
-                  max={FONT_SIZE_MAX}
+                  min={TERMINAL_FONT_SIZE_MIN}
+                  max={TERMINAL_FONT_SIZE_MAX}
                   value={fontSizeDraft}
                   onChange={(value) => setFontSizeDraft(typeof value === "number" ? value : Number(value))}
                   onBlur={() => commitFontSize()}
@@ -342,8 +342,8 @@ export function ThemeSettingsPage() {
                 />
               </Group>
               <Slider
-                min={FONT_SIZE_MIN}
-                max={FONT_SIZE_MAX}
+                min={TERMINAL_FONT_SIZE_MIN}
+                max={TERMINAL_FONT_SIZE_MAX}
                 step={1}
                 value={fontSizeDraft}
                 onChange={setFontSizeDraft}

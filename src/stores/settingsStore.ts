@@ -54,6 +54,9 @@ export type TerminalStatsCardKey =
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
 export const UI_FONT_SIZE_DEFAULT = 13;
+export const TERMINAL_FONT_SIZE_MIN = 8;
+export const TERMINAL_FONT_SIZE_MAX = 32;
+export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_SCROLLBACK_ROWS_MIN = 1000;
 export const TERMINAL_SCROLLBACK_ROWS_MAX = 50000;
 export const TERMINAL_SCROLLBACK_ROWS_DEFAULT = 5000;
@@ -259,7 +262,7 @@ const DEFAULTS: Settings = {
   theme: "system",
   lightThemePalette: "emerald-mist",
   darkThemePalette: "terminal-green",
-  fontSize: 14,
+  fontSize: TERMINAL_FONT_SIZE_DEFAULT,
   terminalScrollbackRows: TERMINAL_SCROLLBACK_ROWS_DEFAULT,
   fontFamily: "Cascadia Code, Consolas, monospace",
   uiFontFamily:
@@ -696,6 +699,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       UI_FONT_SIZE_MIN,
       UI_FONT_SIZE_MAX,
       DEFAULTS.uiFontSize
+    );
+    entries.fontSize = clampNumber(
+      entries.fontSize,
+      TERMINAL_FONT_SIZE_MIN,
+      TERMINAL_FONT_SIZE_MAX,
+      DEFAULTS.fontSize
     );
     entries.terminalScrollbackRows = clampNumber(
       entries.terminalScrollbackRows,

@@ -3510,6 +3510,35 @@
   background-color: color-mix(in srgb, var(--terminal-theme-background, var(--surface)) 82%, var(--terminal-theme-foreground, var(--on-surface)) 18%);
 }
 
+.ui-terminal-split-child {
+  opacity: 1;
+  transform: translateZ(0);
+  transition:
+    left var(--animate-duration-normal) var(--ease-standard),
+    top var(--animate-duration-normal) var(--ease-standard),
+    width var(--animate-duration-normal) var(--ease-standard),
+    height var(--animate-duration-normal) var(--ease-standard),
+    opacity var(--animate-duration-fast) var(--ease-standard),
+    transform var(--animate-duration-fast) var(--ease-standard),
+    visibility var(--animate-duration-fast) var(--ease-standard);
+  will-change: left, top, width, height, opacity, transform;
+}
+
+.ui-terminal-split-node[data-dragging="true"] .ui-terminal-split-child {
+  transition: none;
+}
+
+.ui-terminal-split-child[data-hidden="true"] {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.985);
+}
+
+.ui-terminal-split-child[data-fullscreen="true"] {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--terminal-theme-accent, var(--primary)) 18%, transparent);
+}
+
 .ui-terminal-split-divider::before {
   content: "";
   position: absolute;
@@ -3547,6 +3576,17 @@
 .ui-terminal-split-divider[data-dragging="true"]::before {
   background-color: color-mix(in srgb, var(--terminal-theme-accent, var(--primary)) 72%, var(--terminal-theme-foreground, var(--on-surface)) 28%);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--terminal-theme-accent, var(--primary)) 18%, transparent);
+}
+
+@keyframes terminal-side-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .ui-main-shell {
@@ -3751,6 +3791,10 @@
   background-color: var(--term-panel-bg, color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 96%, var(--terminal-theme-foreground, #f8fafc) 4%));
   color: var(--term-panel-fg, var(--terminal-theme-foreground, #f8fafc));
   box-shadow: inset -1px 0 0 color-mix(in srgb, var(--term-panel-border, var(--terminal-theme-foreground, #f8fafc)) 52%, transparent);
+  transition:
+    width var(--animate-duration-normal) var(--ease-standard),
+    background-color var(--animate-duration-fast) var(--ease-standard),
+    box-shadow var(--animate-duration-fast) var(--ease-standard);
 }
 
 .ui-terminal-action-sidebar::before {
@@ -3773,6 +3817,17 @@
 
 .ui-terminal-action-sort-item {
   touch-action: none;
+}
+
+.ui-terminal-font-zoom-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--term-panel-border, currentColor) 34%, transparent);
 }
 
 .ui-terminal-pane-chrome .ui-terminal-action-sidebar .ui-toolbar-button,
@@ -3806,6 +3861,11 @@
   width: 30px;
   height: 30px;
   border-radius: 9px;
+}
+
+.ui-terminal-action-sidebar .ui-icon-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.36;
 }
 
 .ui-terminal-pane-chrome .ui-terminal-action-sidebar .ui-toolbar-button:hover:not(:disabled),
@@ -3880,6 +3940,32 @@
 
 .ui-action-stats {
   --terminal-action-color: var(--term-panel-green, #3dd68c);
+}
+
+.ui-action-font-size {
+  --terminal-action-color: var(--term-panel-blue, #5b8def);
+}
+
+.ui-action-font-size-reset {
+  --terminal-action-color: var(--term-panel-dim, #9ca0a6);
+}
+
+.ui-terminal-side-panel-frame {
+  transform: translateX(0);
+  animation: terminal-side-panel-enter var(--animate-duration-fast) var(--ease-standard);
+  transition:
+    width var(--animate-duration-normal) var(--ease-standard),
+    min-width var(--animate-duration-normal) var(--ease-standard),
+    max-width var(--animate-duration-normal) var(--ease-standard),
+    border-color var(--animate-duration-fast) var(--ease-standard),
+    box-shadow var(--animate-duration-fast) var(--ease-standard),
+    opacity var(--animate-duration-fast) var(--ease-standard),
+    transform var(--animate-duration-fast) var(--ease-standard);
+}
+
+.ui-terminal-side-panel-frame[data-dragging="true"] {
+  transition: none;
+  animation: none;
 }
 
 .ui-terminal-global-chrome {
