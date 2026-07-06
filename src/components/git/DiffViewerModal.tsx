@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, useCallback, type CSSProperties, type ReactNode } from "react";
+import Editor from "@monaco-editor/react";
+import { useEffect, useMemo, useState, useCallback, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { X, Undo2 } from "../icons";
@@ -7,9 +8,12 @@ import type { ChangeData } from "react-diff-view";
 import { debugConsoleWarn } from "../../lib/debugConsole";
 import { useI18n } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { configureMonaco } from "../../lib/monacoSetup";
 import { refractor, detectLanguage } from "./diffHighlight";
 import "react-diff-view/style/index.css";
 import "./diffViewer.css";
+
+configureMonaco();
 
 interface DiffViewerModalProps {
   open: boolean;
@@ -69,33 +73,21 @@ const TERMINAL_DIFF_TABLE_STYLE = {
   borderColor: "var(--border)",
 } as CSSProperties;
 
-function classifyFallbackLine(line: string): CSSProperties {
-  if (line.startsWith("+") && !line.startsWith("+++")) {
-    return { color: "var(--term-panel-green, #3dd68c)", backgroundColor: "var(--git-diff-insert-bg)" };
-  }
-  if (line.startsWith("-") && !line.startsWith("---")) {
-    return { color: "var(--term-panel-red, #ff6b6b)", backgroundColor: "var(--git-diff-delete-bg)" };
-  }
-  if (
-    line.startsWith("@@") ||
-    line.startsWith("*** ") ||
-    line.startsWith("diff --git ") ||
-    line.startsWith("index ") ||
-    line.startsWith("--- ") ||
-    line.startsWith("+++ ")
-  ) {
-    return { color: "var(--git-diff-hunk-text)" };
-  }
-  return { color: "var(--git-diff-text)" };
-}
-
-function renderFallbackDiffText(diffText: string): ReactNode {
-  return diffText.split("\n").map((line, index) => (
-    <span key={index} className="block min-h-5 px-2" style={classifyFallbackLine(line)}>
-      {line || " "}
-    </span>
-  ));
-}
+const FALLBACK_DIFF_EDITOR_OPTIONS = {
+  automaticLayout: true,
+  readOnly: true,
+  domReadOnly: true,
+  minimap: { enabled: false },
+  scrollBeyondLastLine: false,
+  wordWrap: "off",
+  fontSize: 13,
+  lineNumbersMinChars: 4,
+  renderLineHighlight: "none",
+  scrollbar: {
+    verticalScrollbarSize: 10,
+    horizontalScrollbarSize: 10,
+  },
+} as const;
 
 export function GitDiffViewer({
   projectPath,
@@ -175,6 +167,7 @@ export function GitDiffViewer({
 
   const parsedDiff = parsed?.file ?? null;
   const tokens = parsed?.tokens ?? null;
+  const fallbackEditorTheme = resolvedTheme === "dark" ? "vs-dark" : "vs";
 
   // 切换文件（diffText 变化）时清空行选择。
   useEffect(() => {
@@ -355,12 +348,15 @@ export function GitDiffViewer({
 
           {!loading && !error && diffText && !parsedDiff && (
             <div
-              className="diff-viewer-container rounded-lg border overflow-hidden"
+              className="diff-viewer-container h-full min-h-[320px] rounded-lg border overflow-hidden"
               style={useTerminalTheme ? TERMINAL_DIFF_TABLE_STYLE : { backgroundColor: "var(--surface-container-lowest)", borderColor: "var(--border)" }}
             >
-              <pre className="m-0 overflow-auto py-2 text-xs leading-5" style={{ color: "var(--git-diff-text)" }}>
-                {renderFallbackDiffText(diffText)}
-              </pre>
+              <Editor
+                value={diffText}
+                language="diff"
+                theme={fallbackEditorTheme}
+                options={FALLBACK_DIFF_EDITOR_OPTIONS}
+              />
             </div>
           )}
 
