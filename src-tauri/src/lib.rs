@@ -446,6 +446,7 @@ pub fn run() {
             commands::ccswitch::ccswitch_list_common_configs,
             commands::git::get_current_git_branch,
             commands::git::git_get_changes,
+            commands::git::git_list_repositories,
             commands::git::git_get_file_diff,
             commands::git::git_fork_worktree_snapshot,
             commands::git::git_get_worktree_snapshot,

@@ -1,5 +1,11 @@
 # Changelog
 
+## [TEMP] - Unreleased
+
+### 修复
+
+- **Git 面板子仓库扫描启动修复**：补注册后端 `git_list_repositories` 命令，避免启动后前端枚举项目 Git 仓库时调用失败，并消除对应 Rust 未使用警告。
+
 ## [V1.2.5] - 2026-07-04
 
 ### Codex / Claude 历史同步
