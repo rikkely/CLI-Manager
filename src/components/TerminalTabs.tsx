@@ -90,6 +90,29 @@ const normalizeTabMenuHex = (value: string | undefined, fallback: string) => (
   value && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 );
 
+const TERMINAL_PANEL_SEMANTIC_COLORS = {
+  dark: {
+    fg: "#ECECEC",
+    dim: "#9CA0A6",
+    green: "#3DD68C",
+    yellow: "#E5C453",
+    red: "#F25E5E",
+    magenta: "#C77DBB",
+    cyan: "#5AC8E0",
+    blue: "#5B8DEF",
+  },
+  light: {
+    fg: "#1F2937",
+    dim: "#64748B",
+    green: "#15803D",
+    yellow: "#B45309",
+    red: "#DC2626",
+    magenta: "#9333EA",
+    cyan: "#0891B2",
+    blue: "#2563EB",
+  },
+} as const;
+
 const tabMenuHexToRgba = (value: string | undefined, alpha: number, fallback: string) => {
   const normalized = normalizeTabMenuHex(value, "");
   if (!normalized) return fallback;
@@ -1761,6 +1784,7 @@ export function TerminalTabs({
   const terminalThemeAccent = terminalTheme.blue ?? terminalTheme.cursor ?? terminalThemeForeground;
   const terminalThemeMuted = terminalTheme.brightBlack ?? terminalTheme.white ?? terminalThemeForeground;
   const terminalThemeSelection = terminalTheme.selectionBackground ?? terminalThemeAccent;
+  const terminalPanelSemanticColors = TERMINAL_PANEL_SEMANTIC_COLORS[terminalThemeTone];
   const splitPickerMenuForeground = normalizeTabMenuHex(terminalTheme.foreground, resolvedTheme === "dark" ? "#d8dee9" : "#1e293b");
   const splitPickerMenuBackground = normalizeTabMenuHex(terminalTheme.background, terminalThemeBackground);
   const splitPickerMenuStyle = {
@@ -1776,19 +1800,19 @@ export function TerminalTabs({
     "--terminal-theme-muted": terminalThemeMuted,
     "--terminal-theme-accent": terminalThemeAccent,
     "--terminal-theme-selection": terminalThemeSelection,
-    "--term-panel-bg": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 96%, var(--terminal-theme-foreground, #f8fafc) 4%)",
-    "--term-panel-card": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 91%, var(--terminal-theme-foreground, #f8fafc) 9%)",
-    "--term-panel-card-inner": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 87%, var(--terminal-theme-foreground, #f8fafc) 13%)",
-    "--term-panel-border": "color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 11%, transparent)",
-    "--term-panel-fg": terminalThemeForeground,
-    "--term-panel-dim": "color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 50%, var(--terminal-theme-muted, #64748b) 50%)",
-    "--term-panel-green": terminalTheme.green ?? "#3DD68C",
-    "--term-panel-yellow": terminalTheme.yellow ?? "#E5C453",
-    "--term-panel-red": terminalTheme.red ?? "#F25E5E",
-    "--term-panel-magenta": terminalTheme.magenta ?? "#C77DBB",
-    "--term-panel-cyan": terminalTheme.cyan ?? "#5AC8E0",
-    "--term-panel-blue": terminalTheme.blue ?? "#5B8DEF",
-    "--term-panel-track": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 94%, var(--terminal-theme-foreground, #f8fafc) 6%)",
+    "--term-panel-bg": "var(--terminal-theme-background, #0c0e10)",
+    "--term-panel-card": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 91%, var(--term-panel-fg, #ececec) 9%)",
+    "--term-panel-card-inner": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 87%, var(--term-panel-fg, #ececec) 13%)",
+    "--term-panel-border": "color-mix(in srgb, var(--term-panel-fg, #ececec) 14%, transparent)",
+    "--term-panel-fg": terminalPanelSemanticColors.fg,
+    "--term-panel-dim": terminalPanelSemanticColors.dim,
+    "--term-panel-green": terminalPanelSemanticColors.green,
+    "--term-panel-yellow": terminalPanelSemanticColors.yellow,
+    "--term-panel-red": terminalPanelSemanticColors.red,
+    "--term-panel-magenta": terminalPanelSemanticColors.magenta,
+    "--term-panel-cyan": terminalPanelSemanticColors.cyan,
+    "--term-panel-blue": terminalPanelSemanticColors.blue,
+    "--term-panel-track": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 94%, var(--term-panel-fg, #ececec) 6%)",
   } as CSSProperties;
   const terminalActionSidebarStyle = useMemo(
     () => getTerminalSidePanelSkinStyle(terminalSidePanelSkin),

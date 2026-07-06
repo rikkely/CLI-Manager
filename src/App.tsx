@@ -42,7 +42,7 @@ import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contras
 import { translateCurrent, useI18n } from "./lib/i18n";
 import { getOsPlatform } from "./lib/shell";
 import { normalizeFontFamilyStack } from "./lib/systemFonts";
-import { getTerminalTheme } from "./lib/terminalThemes";
+import { getTerminalTheme, isLightTerminalTheme } from "./lib/terminalThemes";
 import { resolveProjectForSession } from "./lib/terminalProject";
 import "./App.css";
 
@@ -58,6 +58,28 @@ let startupUpdateChecked = false;
 let settingsModalPreloadStarted = false;
 const COMPACT_WINDOW_WIDTH = 350;
 const WINDOW_MIN_HEIGHT = 600;
+const TERMINAL_PANEL_SEMANTIC_COLORS = {
+  dark: {
+    fg: "#ECECEC",
+    dim: "#9CA0A6",
+    green: "#3DD68C",
+    yellow: "#E5C453",
+    red: "#F25E5E",
+    magenta: "#C77DBB",
+    cyan: "#5AC8E0",
+    blue: "#5B8DEF",
+  },
+  light: {
+    fg: "#1F2937",
+    dim: "#64748B",
+    green: "#15803D",
+    yellow: "#B45309",
+    red: "#DC2626",
+    magenta: "#9333EA",
+    cyan: "#0891B2",
+    blue: "#2563EB",
+  },
+} as const;
 // 关闭期自动同步上限：封顶最坏退出时间（WebDAV 客户端本身有 30s HTTP 超时）。
 const CLOSE_SYNC_TIMEOUT_MS = 8000;
 // 退出遮罩上 conflict/error 提示的停留时长，之后继续退出流程。
@@ -731,42 +753,38 @@ function App() {
       terminalTheme.brightBlack ?? terminalTheme.white ?? terminalThemeForeground;
     const terminalThemeSelection =
       terminalTheme.selectionBackground ?? terminalThemeAccent;
+    const terminalPanelSemanticColors =
+      TERMINAL_PANEL_SEMANTIC_COLORS[isLightTerminalTheme(terminalTheme) ? "light" : "dark"];
 
     root.setProperty("--terminal-theme-background", terminalThemeBackground);
     root.setProperty("--terminal-theme-foreground", terminalThemeForeground);
     root.setProperty("--terminal-theme-muted", terminalThemeMuted);
     root.setProperty("--terminal-theme-accent", terminalThemeAccent);
     root.setProperty("--terminal-theme-selection", terminalThemeSelection);
-    root.setProperty(
-      "--term-panel-bg",
-      "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 96%, var(--terminal-theme-foreground, #f8fafc) 4%)"
-    );
+    root.setProperty("--term-panel-bg", "var(--terminal-theme-background, #0c0e10)");
     root.setProperty(
       "--term-panel-card",
-      "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 91%, var(--terminal-theme-foreground, #f8fafc) 9%)"
+      "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 91%, var(--term-panel-fg, #ececec) 9%)"
     );
     root.setProperty(
       "--term-panel-card-inner",
-      "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 87%, var(--terminal-theme-foreground, #f8fafc) 13%)"
+      "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 87%, var(--term-panel-fg, #ececec) 13%)"
     );
     root.setProperty(
       "--term-panel-border",
-      "color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 11%, transparent)"
+      "color-mix(in srgb, var(--term-panel-fg, #ececec) 14%, transparent)"
     );
-    root.setProperty("--term-panel-fg", terminalThemeForeground);
-    root.setProperty(
-      "--term-panel-dim",
-      "color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 50%, var(--terminal-theme-muted, #64748b) 50%)"
-    );
-    root.setProperty("--term-panel-green", terminalTheme.green ?? "#3DD68C");
-    root.setProperty("--term-panel-yellow", terminalTheme.yellow ?? "#E5C453");
-    root.setProperty("--term-panel-red", terminalTheme.red ?? "#F25E5E");
-    root.setProperty("--term-panel-magenta", terminalTheme.magenta ?? "#C77DBB");
-    root.setProperty("--term-panel-cyan", terminalTheme.cyan ?? "#5AC8E0");
-    root.setProperty("--term-panel-blue", terminalTheme.blue ?? "#5B8DEF");
+    root.setProperty("--term-panel-fg", terminalPanelSemanticColors.fg);
+    root.setProperty("--term-panel-dim", terminalPanelSemanticColors.dim);
+    root.setProperty("--term-panel-green", terminalPanelSemanticColors.green);
+    root.setProperty("--term-panel-yellow", terminalPanelSemanticColors.yellow);
+    root.setProperty("--term-panel-red", terminalPanelSemanticColors.red);
+    root.setProperty("--term-panel-magenta", terminalPanelSemanticColors.magenta);
+    root.setProperty("--term-panel-cyan", terminalPanelSemanticColors.cyan);
+    root.setProperty("--term-panel-blue", terminalPanelSemanticColors.blue);
     root.setProperty(
       "--term-panel-track",
-      "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 94%, var(--terminal-theme-foreground, #f8fafc) 6%)"
+      "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 94%, var(--term-panel-fg, #ececec) 6%)"
     );
   }, [
     darkThemePalette,
