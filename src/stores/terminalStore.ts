@@ -14,6 +14,7 @@ import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKe
 import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType, isExactCodexProject, parseProjectEnvVars } from "../lib/providerSwitching";
 import { useProjectStore } from "./projectStore";
 import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
+import { translateCurrent } from "../lib/i18n";
 import {
   addSessionToPaneTree,
   collectPaneLeaves,
@@ -86,6 +87,14 @@ const TAB_STATUS_PRIORITY: Record<TabNotificationState, number> = {
   attention: 4,
 };
 const SUBAGENT_TRANSCRIPT_MAX_CHARS = 4 * 1024 * 1024;
+
+function formatTerminalCreateError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.trim().startsWith("provider_not_found")) {
+    return translateCurrent("terminal.toast.providerNotFound");
+  }
+  return message;
+}
 
 export interface CliHookPayload {
   tabId: string;
@@ -857,8 +866,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd),
       });
     } catch (err) {
-      const description = String(err);
-      toast.error("创建终端失败", { description });
+      const description = formatTerminalCreateError(err);
+      toast.error(translateCurrent("terminal.toast.createFailed"), { description });
       logError("pty_create invoke failed", {
         projectId: projectId ?? null,
         cwd: cwd ?? null,
@@ -1169,8 +1178,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd),
       });
     } catch (err) {
-      const description = String(err);
-      toast.error("创建分屏终端失败", { description });
+      const description = formatTerminalCreateError(err);
+      toast.error(translateCurrent("terminal.toast.splitCreateFailed"), { description });
       logError("pty_create invoke failed for split terminal", {
         sessionId,
         cwd: options?.cwd ?? null,
