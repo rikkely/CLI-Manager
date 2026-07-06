@@ -254,6 +254,29 @@ fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "create_session_favorite_snapshots_table",
+            sql: "
+                CREATE TABLE IF NOT EXISTS session_favorite_snapshots (
+                    session_key   TEXT PRIMARY KEY,
+                    session_id    TEXT NOT NULL,
+                    source        TEXT NOT NULL,
+                    project_key   TEXT NOT NULL,
+                    file_path     TEXT NOT NULL,
+                    title         TEXT NOT NULL,
+                    created_at    INTEGER NOT NULL,
+                    updated_at    INTEGER NOT NULL,
+                    message_count INTEGER NOT NULL,
+                    branch        TEXT,
+                    detail_json   TEXT NOT NULL,
+                    snapshot_at   TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_favorite_snapshots_source ON session_favorite_snapshots(source);
+                CREATE INDEX IF NOT EXISTS idx_session_favorite_snapshots_updated ON session_favorite_snapshots(updated_at DESC);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

@@ -413,6 +413,18 @@ export function GitDiffViewer({
 }
 
 export function DiffViewerModal({ open, onClose, projectPath, filePath, fileName, status, diffText, onRequestDiscard }: DiffViewerModalProps) {
+  // Esc 关闭弹窗（仅 open 时挂载监听；对齐 SettingsModal / HistoryWorkspace 的 keydown 处理模式）。
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
   if (!open) return null;
 
   return (

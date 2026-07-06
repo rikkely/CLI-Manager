@@ -327,6 +327,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       group_id: input.group_id ?? null,
       sort_order: 0,
       cli_tool: input.cli_tool ?? "",
+      cli_args: input.cli_args ?? "",
       startup_cmd: input.startup_cmd ?? "",
       env_vars: input.env_vars ?? "{}",
       shell,
@@ -337,11 +338,30 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       updated_at: ts,
     };
     await db.execute(
-      `INSERT INTO projects (id, name, path, group_name, group_id, sort_order, cli_tool, startup_cmd, env_vars, shell, provider_overrides, worktree_strategy, worktree_root, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-      [project.id, project.name, project.path, project.group_name, project.group_id, project.sort_order,
-       project.cli_tool, project.startup_cmd, project.env_vars, project.shell, project.provider_overrides,
-       project.worktree_strategy, project.worktree_root, project.created_at, project.updated_at]
+      `INSERT INTO projects (
+         id, name, path, group_name, group_id, sort_order,
+         cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides,
+         worktree_strategy, worktree_root, created_at, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+      [
+        project.id,
+        project.name,
+        project.path,
+        project.group_name,
+        project.group_id,
+        project.sort_order,
+        project.cli_tool,
+        project.cli_args,
+        project.startup_cmd,
+        project.env_vars,
+        project.shell,
+        project.provider_overrides,
+        project.worktree_strategy,
+        project.worktree_root,
+        project.created_at,
+        project.updated_at,
+      ]
     );
     await get().fetchAll();
     return project;

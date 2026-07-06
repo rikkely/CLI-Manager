@@ -31,6 +31,8 @@ export interface Project {
   group_id: string | null;
   sort_order: number;
   cli_tool: string;
+  /** CLI 附加启动参数（自由文本，整串透传），仅 cli_tool 分支生效 */
+  cli_args: string;
   startup_cmd: string;
   env_vars: string;
   shell: string;
@@ -47,6 +49,7 @@ export interface CreateProjectInput {
   group_id?: string | null;
   group_name?: string;
   cli_tool?: string;
+  cli_args?: string;
   startup_cmd?: string;
   env_vars?: string;
   shell?: string;
@@ -62,6 +65,7 @@ export interface UpdateProjectInput {
   group_name?: string;
   sort_order?: number;
   cli_tool?: string;
+  cli_args?: string;
   startup_cmd?: string;
   env_vars?: string;
   shell?: string;
@@ -80,7 +84,7 @@ export type TreeNode =
   | { type: "project"; project: Project; worktrees?: WorktreeRecord[] }
   | { type: "worktree"; project: Project; worktree: WorktreeRecord };
 
-export type TerminalSessionKind = "pty" | "subagent-transcript" | "file-editor";
+export type TerminalSessionKind = "pty" | "subagent-transcript" | "file-editor" | "synced-history";
 
 export type SubagentTranscriptSourceKind = "pending" | "child-jsonl" | "parent-jsonl" | "lifecycle-only";
 
@@ -89,6 +93,19 @@ export interface SubagentTranscriptSource {
   transcriptPath?: string;
   parentTranscriptPath?: string;
   reason?: string;
+}
+
+export interface SyncedHistoryPaneSession {
+  key: string;
+  source: HistorySource;
+  sessionId: string;
+  projectKey: string;
+  filePath: string;
+  projectName: string;
+  cwd: string;
+  title: string;
+  startupCmd: string;
+  updatedAt: number;
 }
 
 export interface TerminalSession {
@@ -101,6 +118,10 @@ export interface TerminalSession {
   shell?: string | null;
   envVars?: Record<string, string>;
   startupCmd?: string;
+  /** 终端首次挂载时写入 xterm scrollback 的本地文本，不发送到 PTY。 */
+  initialTerminalOutput?: string;
+  /** true 时启动命令由 XTermTerminal 在 initialTerminalOutput 写完后再发送。 */
+  deferStartupUntilInitialOutput?: boolean;
   cliSessionId?: string;
   /** CLI hook 上报的当前 effort，仅用于实时统计展示，不作为历史解析来源。 */
   cliReasoningEffort?: string;
@@ -120,6 +141,13 @@ export interface TerminalSession {
     projectPath: string;
     projectName: string;
     project: Project;
+  };
+  /** 仅 kind="synced-history" 时存在：同步历史终端（有 PTY、不持久化）。 */
+  syncedHistory?: {
+    key: string;
+    title: string;
+    cwd: string;
+    sessions: SyncedHistoryPaneSession[];
   };
 }
 
@@ -206,6 +234,7 @@ export interface HistorySessionSummary {
   project_key: string;
   title: string;
   file_path: string;
+  cwd?: string | null;
   created_at: number;
   updated_at: number;
   message_count: number;

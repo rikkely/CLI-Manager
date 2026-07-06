@@ -12,6 +12,7 @@ import {
   validateWorktreeTaskName,
   useWorktreeStore,
 } from "../../stores/worktreeStore";
+import { useExternalSessionSyncStore } from "../../stores/externalSessionSyncStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
 import type { HistorySourceFilter, Project, TreeNode as TNode, Group, WorktreeRecord } from "../../lib/types";
 import { ConfigModal } from "../ConfigModal";
@@ -22,6 +23,7 @@ import { openWindowsTerminal } from "../../lib/externalTerminal";
 import { resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
+import { appendSyncedHistoryContextArg } from "../../lib/syncedHistoryContext";
 import { TreeContext, type TreeActions } from "./TreeContext";
 import { Portal } from "../ui/Portal";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../ui/dialog";
@@ -32,6 +34,7 @@ import { logError } from "../../lib/logger";
 import { SidebarHeader } from "./SidebarHeader";
 import { ProjectTree } from "./ProjectTree";
 import { SidebarFooter } from "./SidebarFooter";
+import { groupSyncedExternalSessions } from "../../lib/externalSessionGrouping";
 import { FileExplorerSidebar } from "../files/FileExplorerSidebar";
 import {
   ArrowLeftRight,
@@ -71,6 +74,31 @@ const SIDEBAR_MAX_WIDTH = 500;
 const SIDEBAR_AUTO_COLLAPSE_BREAKPOINT = 900;
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+function preserveSidebarScrollAfterContextMenu(event: ReactMouseEvent, markInternalScroll?: (until: number) => void) {
+  const target = event.currentTarget as HTMLElement | null;
+  const scrollContainer = target?.closest<HTMLElement>(".ui-sidebar-combined-list") ?? null;
+  const scrollTop = scrollContainer?.scrollTop ?? null;
+  const treeItem = target?.closest<HTMLElement>("[data-tree-key]") ?? null;
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement && treeItem?.contains(activeElement)) {
+    activeElement.blur();
+  }
+  if (!scrollContainer || scrollTop === null) return;
+  markInternalScroll?.(Date.now() + 300);
+  const restore = () => {
+    if (scrollContainer.scrollTop !== scrollTop) {
+      scrollContainer.scrollTop = scrollTop;
+    }
+  };
+  window.setTimeout(restore, 0);
+  window.requestAnimationFrame(() => {
+    restore();
+    window.requestAnimationFrame(restore);
+  });
+  window.setTimeout(restore, 50);
+  window.setTimeout(restore, 150);
+}
+
 function isLikelyMacOs() {
   return typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 }
@@ -104,6 +132,58 @@ function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
     envVars,
     shell: project.shell && project.shell !== "powershell" ? project.shell : undefined,
   };
+}
+
+function getSyncedSessionKeysForProject(
+  project: Project,
+  syncedSessions: ReturnType<typeof useExternalSessionSyncStore.getState>["syncedSessions"]
+): string[] {
+  return groupSyncedExternalSessions(syncedSessions, [project])
+    .byProjectId.get(project.id)
+    ?.flatMap((group) => group.sessions.map((session) => session.key)) ?? [];
+}
+
+function getSyncedHistoryGroupForProject(
+  project: Project,
+  syncedSessions: ReturnType<typeof useExternalSessionSyncStore.getState>["syncedSessions"]
+) {
+  const source = getProviderSwitchAppType(project);
+  if (!source) return null;
+  return groupSyncedExternalSessions(syncedSessions, [project])
+    .byProjectId.get(project.id)
+    ?.find((group) => group.sessions[0]?.source === source) ?? null;
+}
+
+async function buildSyncedAwareProjectSplitOptions(project: Project): Promise<SplitTerminalOptions> {
+  const options = buildProjectSplitOptions(project);
+  const source = getProviderSwitchAppType(project) ?? undefined;
+  const syncedGroup = getSyncedHistoryGroupForProject(
+    project,
+    useExternalSessionSyncStore.getState().syncedSessions
+  );
+  return {
+    ...options,
+    startupCmd: await appendSyncedHistoryContextArg(source, options.startupCmd, syncedGroup, options.shell),
+  };
+}
+
+function collectGroupProjectIds(groupId: string, groups: Group[], projects: Project[]): Set<string> {
+  const groupIds = new Set<string>([groupId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const group of groups) {
+      if (group.parent_id && groupIds.has(group.parent_id) && !groupIds.has(group.id)) {
+        groupIds.add(group.id);
+        changed = true;
+      }
+    }
+  }
+  return new Set(
+    projects
+      .filter((project) => project.group_id && groupIds.has(project.group_id))
+      .map((project) => project.id)
+  );
 }
 
 export function Sidebar({
@@ -143,6 +223,7 @@ export function Sidebar({
   const updateProject = useProjectStore((s) => s.updateProject);
   const createSession = useTerminalStore((s) => s.createSession);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
+  const closeSession = useTerminalStore((s) => s.closeSession);
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const setActiveSession = useTerminalStore((s) => s.setActive);
@@ -163,6 +244,7 @@ export function Sidebar({
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const openHistory = useHistoryStore((s) => s.openHistory);
   const triggerGlobalSearchFocus = useHistoryStore((s) => s.triggerGlobalSearchFocus);
+  const removeSyncedSessions = useExternalSessionSyncStore((s) => s.removeSyncedSessions);
 
   const initialSidebarWidth = normalizePersistedSidebarWidth(persistedSidebarWidth);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
@@ -288,6 +370,7 @@ export function Sidebar({
   >(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const contextMenuOpenedAtRef = useRef(0);
+  const contextMenuInternalScrollUntilRef = useRef(0);
   // 菜单真实位置：渲染后按实测尺寸做翻转/钳制，避免写死高度导致溢出遮挡。
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
@@ -537,6 +620,7 @@ export function Sidebar({
     if (!contextMenu) return;
     const handler = (e: Event) => {
       if (Date.now() - contextMenuOpenedAtRef.current < 120) return;
+      if (e.type === "scroll" && Date.now() < contextMenuInternalScrollUntilRef.current) return;
       if (contextMenuRef.current && contextMenuRef.current.contains(e.target as Node)) return;
       setContextMenu(null);
     };
@@ -667,25 +751,43 @@ export function Sidebar({
 
   const openProjectExternally = useCallback(async (items: Project[]) => {
     if (items.length === 0) return;
-    await openWindowsTerminal(
-      items.map((project) => ({
+    const launchItems = await Promise.all(items.map(async (project) => {
+      const source = getProviderSwitchAppType(project) ?? undefined;
+      const startupCmd = await appendSyncedHistoryContextArg(
+        source,
+        resolveProjectStartupCommand(project, { includeCodexProviderProfile: false }),
+        getSyncedHistoryGroupForProject(project, useExternalSessionSyncStore.getState().syncedSessions),
+        project.shell || undefined
+      );
+      return {
         cwd: project.path,
         title: project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name,
-        startupCmd: resolveProjectStartupCommand(project, { includeCodexProviderProfile: false }),
+        startupCmd,
         shell: project.shell || undefined,
-      }))
+      };
+    }));
+    await openWindowsTerminal(
+      launchItems
     );
     closeHistory();
   }, [closeHistory]);
 
   const openProjectDirect = async (project: Project, targetPaneId?: string) => {
-    const options = buildProjectSplitOptions(project);
-    await createSession(options.projectId, options.cwd, options.title, options.startupCmd, options.envVars, options.shell, targetPaneId);
+    const options = await buildSyncedAwareProjectSplitOptions(project);
+    await createSession(
+      options.projectId,
+      options.cwd,
+      options.title,
+      options.startupCmd,
+      options.envVars,
+      options.shell,
+      targetPaneId
+    );
     closeHistory();
   };
 
   const openWorktreeSession = async (project: Project, worktree: WorktreeRecord, targetPaneId?: string, startupCmd?: string, title?: string) => {
-    const options = buildProjectSplitOptions(project);
+    const options = await buildSyncedAwareProjectSplitOptions(project);
     await createSession(
       options.projectId,
       worktree.path,
@@ -725,7 +827,7 @@ export function Sidebar({
   const createAndSplitWorktree = async (project: Project, direction: TerminalPaneSplitDirection, taskName?: string) => {
     if (!activeSessionId) return;
     const worktree = await createWorktreeForProject(project, taskName);
-    const options = buildProjectSplitOptions(project);
+    const options = await buildSyncedAwareProjectSplitOptions(project);
     await splitTerminal(activeSessionId, direction, {
       ...options,
       cwd: worktree.path,
@@ -783,7 +885,7 @@ export function Sidebar({
     async (project: Project, direction: TerminalPaneSplitDirection) => {
       if (!activeSessionId || compactMode || useExternalTerminal) return;
       const splitDirect = async () => {
-        await splitTerminal(activeSessionId, direction, buildProjectSplitOptions(project));
+        await splitTerminal(activeSessionId, direction, await buildSyncedAwareProjectSplitOptions(project));
         closeHistory();
       };
 
@@ -997,8 +1099,10 @@ export function Sidebar({
   const handleContextMenuProject = useCallback((e: ReactMouseEvent, project: Project) => {
     e.preventDefault();
     e.stopPropagation();
+    preserveSidebarScrollAfterContextMenu(e, (until) => {
+      contextMenuInternalScrollUntilRef.current = until;
+    });
     contextMenuOpenedAtRef.current = Date.now();
-    setSelectedId(project.id);
     setContextMenu({ kind: "project", project, x: e.clientX, y: e.clientY });
   }, []);
 
@@ -1013,6 +1117,9 @@ export function Sidebar({
   const handleContextMenuGroup = useCallback((e: ReactMouseEvent, groupId: string, groupName: string) => {
     e.preventDefault();
     e.stopPropagation();
+    preserveSidebarScrollAfterContextMenu(e, (until) => {
+      contextMenuInternalScrollUntilRef.current = until;
+    });
     contextMenuOpenedAtRef.current = Date.now();
     setContextMenu({ kind: "group", groupId, groupName, x: e.clientX, y: e.clientY });
   }, []);
@@ -1133,7 +1240,25 @@ export function Sidebar({
         danger: true,
         onConfirm: async () => {
           try {
+            const syncedKeys = getSyncedSessionKeysForProject(
+              confirmAction.project,
+              useExternalSessionSyncStore.getState().syncedSessions
+            );
+            const projectSessionIds = useTerminalStore
+              .getState()
+              .sessions
+              .filter((session) =>
+                session.projectId === confirmAction.project.id
+                || session.fileEditor?.projectId === confirmAction.project.id
+              )
+              .map((session) => session.id);
+            for (const sessionId of projectSessionIds) {
+              await closeSession(sessionId);
+            }
             await deleteProject(confirmAction.project.id);
+            if (syncedKeys.length > 0) {
+              await removeSyncedSessions(syncedKeys);
+            }
             toast.success(t("sidebar.toast.terminalDeleteSuccess"));
             setConfirmAction(null);
             if (selectedId === confirmAction.project.id) setSelectedId(null);
@@ -1156,16 +1281,43 @@ export function Sidebar({
       danger: true,
       onConfirm: async () => {
         try {
+          const projectIds = collectGroupProjectIds(confirmAction.groupId, groups, projects);
+          const groupProjects = projects.filter((project) => projectIds.has(project.id));
+          const syncedKeys = groupProjects.flatMap((project) =>
+            getSyncedSessionKeysForProject(project, useExternalSessionSyncStore.getState().syncedSessions)
+          );
+          const sessionIds = useTerminalStore
+            .getState()
+            .sessions
+            .filter((session) =>
+              (session.projectId && projectIds.has(session.projectId))
+              || (session.fileEditor?.projectId && projectIds.has(session.fileEditor.projectId))
+            )
+            .map((session) => session.id);
+          for (const sessionId of sessionIds) {
+            await closeSession(sessionId);
+          }
+          for (const project of groupProjects) {
+            await deleteProject(project.id);
+          }
+          if (syncedKeys.length > 0) {
+            await removeSyncedSessions(syncedKeys);
+          }
           await deleteGroup(confirmAction.groupId);
           toast.success(t("sidebar.toast.groupDeleteSuccess"));
           setConfirmAction(null);
+          if (selectedId && projectIds.has(selectedId)) setSelectedId(null);
+          setSelectedProjectIds((prev) => {
+            const next = new Set(prev);
+            projectIds.forEach((id) => next.delete(id));
+            return next;
+          });
         } catch (err) {
           toast.error(t("sidebar.toast.groupDeleteFailed"), { description: String(err) });
         }
       },
     };
   })();
-
   return (
     <aside
       className={`ui-sidebar-shell relative flex select-none flex-col overflow-hidden ${
@@ -1196,29 +1348,31 @@ export function Sidebar({
           <FileExplorerSidebar onBackToProjects={handleBackToProjectTree} />
         ) : (
           <TreeContext.Provider value={treeActions}>
-            <ProjectTree
-              tree={tree}
-              initialLoading={initialLoading}
-              loadError={loadError}
-              collapsed={compactMode ? false : sidebarCollapsed}
-              density={sidebarDensity}
-              newGroupParentId={newGroupParentId}
-              projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
-              terminalScopeProjectId={terminalScopeProjectId}
-              onSelectAllTerminalScope={handleSelectAllTerminalScope}
-              onCreateRootGroup={(name) => handleCreateGroup(null, name)}
-              onCancelRootGroup={handleCancelNewGroup}
-              onQuickAddProject={() => {
-                ensureSidebarExpanded();
-                setAddToGroupId(null);
-                setShowAdd(true);
-              }}
-              onRetry={() => {
-                setInitialLoading(true);
-                void loadProjects();
-              }}
-              onExpandSidebar={expandSidebar}
-            />
+            <div className="ui-sidebar-combined-list h-full min-h-0 overflow-y-auto overflow-x-hidden">
+              <ProjectTree
+                tree={tree}
+                initialLoading={initialLoading}
+                loadError={loadError}
+                collapsed={compactMode ? false : sidebarCollapsed}
+                density={sidebarDensity}
+                newGroupParentId={newGroupParentId}
+                projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
+                terminalScopeProjectId={terminalScopeProjectId}
+                onSelectAllTerminalScope={handleSelectAllTerminalScope}
+                onCreateRootGroup={(name) => handleCreateGroup(null, name)}
+                onCancelRootGroup={handleCancelNewGroup}
+                onQuickAddProject={() => {
+                  ensureSidebarExpanded();
+                  setAddToGroupId(null);
+                  setShowAdd(true);
+                }}
+                onRetry={() => {
+                  setInitialLoading(true);
+                  void loadProjects();
+                }}
+                onExpandSidebar={expandSidebar}
+              />
+            </div>
           </TreeContext.Provider>
         )}
       </div>
@@ -1554,7 +1708,9 @@ export function Sidebar({
               className="ui-worktree-prompt-action ui-worktree-prompt-action-neutral"
               onClick={() => {
                 if (worktreePrompt?.direction && activeSessionId) {
-                  void splitTerminal(activeSessionId, worktreePrompt.direction, buildProjectSplitOptions(worktreePrompt.project)).then(() => closeHistory());
+                  void buildSyncedAwareProjectSplitOptions(worktreePrompt.project)
+                    .then((options) => splitTerminal(activeSessionId, worktreePrompt.direction!, options))
+                    .then(() => closeHistory());
                 } else if (worktreePrompt) {
                   void openProjectDirect(worktreePrompt.project, worktreePrompt.targetPaneId);
                 }

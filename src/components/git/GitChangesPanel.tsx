@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-import { RefreshCw, GitBranch, Undo2, Files, FilePen, FilePlus, FileMinus, GitCommitHorizontal, ArrowUp, ArrowDown, Upload, Download, ChevronDown, GitMerge, Check, X, FolderTree, Layers } from "lucide-react";
+import { RefreshCw, GitBranch, Undo2, Files, FilePen, FilePlus, FileMinus, GitCommitHorizontal, ArrowUp, ArrowDown, Upload, Download, ChevronDown, GitMerge, Check, X, FolderTree, FolderGit2, Layers } from "lucide-react";
 import { useGitStore } from "../../stores/gitStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -99,6 +99,10 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
     clearUntrackedSelection,
     deselectedAdded,
     setAddedDeselection,
+    repositories,
+    activeRepoPath,
+    setActiveRepo,
+    fetchRepositories,
   } = useGitStore();
   const { gitGroupBy, update: updateSettings } = useSettingsStore();
   const openFileProject = useFileExplorerStore((state) => state.openProject);
@@ -111,18 +115,25 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
   const [commitMsg, setCommitMsg] = useState("");
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
   const [groupByMenuOpen, setGroupByMenuOpen] = useState(false);
+  const [repoMenuOpen, setRepoMenuOpen] = useState(false);
   const [hideFilterLabels, setHideFilterLabels] = useState(false);
   const filterRowRef = useRef<HTMLDivElement | null>(null);
   const panelActive = open && visible;
   const project = useMemo(() => findProjectByPath(projects, projectPath), [projectPath, projects]);
+  // 多仓库切换：根仓库显示项目目录名（取不到时回落「根仓库」文案），子仓库显示相对路径。
+  const rootRepoLabel = projectPath?.split(/[\\/]/).filter(Boolean).pop() || t("git.repo.root");
+  const activeRepo = activeRepoPath ? repositories.find((repo) => repo.absolutePath === activeRepoPath) : null;
+  const activeRepoLabel = activeRepo?.relativePath || rootRepoLabel;
 
   useEffect(() => {
     if (panelActive && projectPath) {
       fetchChanges(projectPath);
+      // 枚举项目根下的多仓库（面板打开 / 项目切换时刷新；fetchChanges 已先设定 currentProjectPath）。
+      void fetchRepositories(projectPath);
     } else if (!open) {
       reset();
     }
-  }, [panelActive, open, projectPath, fetchChanges, reset]);
+  }, [panelActive, open, projectPath, fetchChanges, fetchRepositories, reset]);
 
   useEffect(() => {
     const filterRow = filterRowRef.current;
@@ -535,6 +546,74 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
         </span>
       </div>
 
+      {/* 仓库切换：项目下检测到多个 Git 仓库时展示下拉（单仓库零 UI 变化） */}
+      {repositories.length > 1 && (
+        <div className="relative shrink-0 border-b px-2 py-1.5" style={{ borderColor: TERM.dim }}>
+          <button
+            type="button"
+            onClick={() => setRepoMenuOpen(!repoMenuOpen)}
+            className="ui-focus-ring flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors"
+            style={{ color: TERM.cyan, backgroundColor: panelColorTint(TERM.cyan, 7) }}
+            title={t("git.repo.switch")}
+            aria-label={t("git.repo.switch")}
+            aria-haspopup="menu"
+            aria-expanded={repoMenuOpen}
+          >
+            <FolderGit2 size={10} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-left">{activeRepoLabel}</span>
+            <ChevronDown size={8} className="shrink-0" />
+          </button>
+          {repoMenuOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setRepoMenuOpen(false)}
+                aria-hidden="true"
+              />
+              <div
+                className="ui-thin-scroll absolute left-2 right-2 top-full z-20 mt-1 flex max-h-[240px] flex-col overflow-y-auto rounded border py-1 shadow-lg"
+                style={{ backgroundColor: TERM.bg, borderColor: TERM.dim }}
+                role="menu"
+              >
+                {repositories.map((repo) => {
+                  const isRoot = repo.relativePath === "";
+                  const selected = isRoot ? activeRepoPath === null : activeRepoPath === repo.absolutePath;
+                  const label = isRoot ? rootRepoLabel : repo.relativePath;
+                  return (
+                    <button
+                      key={repo.absolutePath}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setRepoMenuOpen(false);
+                        setActiveRepo(isRoot ? null : repo.absolutePath);
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors"
+                      style={{
+                        color: selected ? TERM.cyan : TERM.fg,
+                        backgroundColor: selected ? panelColorTint(TERM.cyan, 13) : "transparent",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!selected) e.currentTarget.style.backgroundColor = panelColorTint(TERM.cyan, 6);
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!selected) e.currentTarget.style.backgroundColor = "transparent";
+                      }}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{label}</span>
+                      {repo.branch && (
+                        <span className="shrink-0 text-[9px]" style={{ color: TERM.dim }}>{repo.branch}</span>
+                      )}
+                      {selected && <Check size={11} className="shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Filter */}
       {changes.length > 0 && (
         <div ref={filterRowRef} className="flex w-full shrink-0 gap-1 border-b px-2 py-1.5" style={{ borderColor: TERM.dim }}>
@@ -652,13 +731,14 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
       {/* 分支状态行：分支名 + ↑ahead ↓behind + 推送/拉取按钮。提交后即使无变更也展示，便于推送已有提交。 */}
       {projectPath && branchStatus && (branchStatus.branch || branchStatus.detached) && (() => {
         const { branch, ahead, behind, hasUpstream, detached } = branchStatus;
+        const branchLabel = !detached && branch ? `${activeRepoLabel}/${branch}` : branch;
         const canPush = !detached && !!branch && (ahead > 0 || !hasUpstream);
         const showPull = !detached && hasUpstream && behind > 0;
         return (
           <div className="flex shrink-0 items-center justify-between gap-2 border-t px-2 py-1.5" style={{ borderColor: TERM.dim }}>
             <span className="flex min-w-0 items-center gap-1.5 text-[11px]" style={{ color: TERM.fg }}>
               <GitBranch size={12} strokeWidth={2} style={{ color: TERM.dim }} className="shrink-0" />
-              <span className="truncate">{detached ? "detached HEAD" : branch}</span>
+              <span className="truncate">{detached ? "detached HEAD" : branchLabel}</span>
               {!detached && hasUpstream && (
                 <span className="flex shrink-0 items-center gap-1.5" style={{ color: TERM.dim }}>
                   <span className="flex items-center" style={{ color: ahead > 0 ? TERM.fg : TERM.dim }}>
@@ -831,12 +911,12 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
         </div>
       )}
 
-      {/* Diff Modal */}
+      {/* Diff Modal：diff 请求指向生效仓库（激活的子仓库或项目根） */}
       {selectedFile && projectPath && (
         <DiffViewerModal
           open={diffModalOpen}
           onClose={() => setDiffModalOpen(false)}
-          projectPath={projectPath}
+          projectPath={activeRepoPath ?? projectPath}
           filePath={selectedFile.path}
           fileName={selectedFile.name}
           status={selectedFile.status}

@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/shallow";
 import { useSyncStore } from "../../stores/syncStore";
 import { Cloud } from "../icons";
 import type { SettingsTab } from "../SettingsModal";
@@ -10,7 +11,10 @@ interface SyncStatusIndicatorProps {
 
 export function SyncStatusIndicator({ collapsed, onOpenSettings }: SyncStatusIndicatorProps) {
   const { language, t } = useI18n();
-  const { status, lastSyncAt, hasPassword } = useSyncStore();
+  // 常驻侧边栏组件：只订阅展示所需字段，避免 syncStore 其他变化触发重渲染。
+  const { status, lastSyncAt, hasPassword } = useSyncStore(
+    useShallow((s) => ({ status: s.status, lastSyncAt: s.lastSyncAt, hasPassword: s.hasPassword }))
+  );
 
   const openSyncSettings = () => onOpenSettings?.("sync");
 

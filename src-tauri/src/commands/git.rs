@@ -247,6 +247,11 @@ pub async fn git_get_changes(project_path: String) -> Result<Vec<GitFileChange>,
                 continue;
             }
 
+            // 跳过嵌套 Git 仓库目录条目，避免前端请求目录 diff 报原始 OS 错误（见 issue #85）
+            if is_nested_repo_entry(&repo, &file_path) {
+                continue;
+            }
+
             // 解析状态
             let (status_char, staged) = parse_git2_status(status);
 
@@ -311,6 +316,14 @@ fn git_get_changes_wsl(
     })?;
     let mut changes = parse_wsl_git_status(&status_stdout);
 
+    // 过滤嵌套子仓库目录条目（与 libgit2 链路 is_nested_repo_entry 语义一致）：
+    // 尾部 '/' 且 <UNC根>/<路径>/.git 存在（目录或 gitlink 文件均命中）→ 跳过。
+    // fs 检查经 UNC 路径进行，保持 parse_wsl_git_status 为纯函数（见 issue #85）。
+    let unc_root = Path::new(project_path);
+    changes.retain(|change| {
+        !change.path.ends_with('/') || !unc_root.join(&change.path).join(".git").exists()
+    });
+
     log::info!(
         "[git_get_changes:wsl] 获取到 {} 个状态条目 status_elapsed_ms={}",
         changes.len(),
@@ -352,6 +365,129 @@ fn git_get_changes_wsl(
         started_at.elapsed().as_millis()
     );
     Ok(changes)
+}
+
+/// 子仓库扫描时跳过的目录名（常见大目录 / 构建产物，防止面板首开被拖慢）。
+const REPO_SCAN_EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    ".next",
+    ".venv",
+    "vendor",
+];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRepoInfo {
+    /// 相对项目根路径：根仓库为空串，子仓库如 "sub-repo-a"、"tools/sub-repo-c"（'/' 分隔）。
+    relative_path: String,
+    absolute_path: String,
+    branch: Option<String>,
+}
+
+/// 纯 fs 扫描：枚举 root 下含 `.git`（目录或 gitlink 文件）的仓库路径。
+///
+/// 根自身是仓库时为首条（相对路径空串）；子仓库按相对路径排序。
+/// 找到 `.git` 的目录不再向其内部递归；深度按相对根计（一级子目录为 1）。
+fn scan_git_repository_paths(root: &Path, max_depth: usize) -> Vec<(String, std::path::PathBuf)> {
+    let mut repos = Vec::new();
+    if root.join(".git").exists() {
+        repos.push((String::new(), root.to_path_buf()));
+    }
+
+    let mut sub_repos = Vec::new();
+    scan_sub_repositories(root, "", 1, max_depth, &mut sub_repos);
+    sub_repos.sort_by(|a, b| a.0.cmp(&b.0));
+    repos.extend(sub_repos);
+    repos
+}
+
+fn scan_sub_repositories(
+    dir: &Path,
+    rel_prefix: &str,
+    depth: usize,
+    max_depth: usize,
+    out: &mut Vec<(String, std::path::PathBuf)>,
+) {
+    if depth > max_depth {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // 跳过符号链接目录，避免循环与越界扫描；file_type() 不跟随符号链接。
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if REPO_SCAN_EXCLUDED_DIRS
+            .iter()
+            .any(|excluded| excluded.eq_ignore_ascii_case(&name))
+        {
+            continue;
+        }
+        let child = entry.path();
+        let rel = if rel_prefix.is_empty() {
+            name
+        } else {
+            format!("{rel_prefix}/{name}")
+        };
+        if child.join(".git").exists() {
+            // 子仓库：收录后不再向其内部递归。
+            out.push((rel, child));
+        } else {
+            scan_sub_repositories(&child, &rel, depth + 1, max_depth, out);
+        }
+    }
+}
+
+/// 枚举项目根目录下的 Git 仓库（根仓库 + 限深子仓库），供 Git 面板切换监控目标。
+///
+/// 分支查询失败不报错（返回 None）；WSL UNC 路径经 Plan 9 访问较慢，限深 2 防卡顿。
+#[tauri::command]
+pub async fn git_list_repositories(project_path: String) -> Result<Vec<GitRepoInfo>, String> {
+    tokio::task::spawn_blocking(move || {
+        if project_path.is_empty() {
+            return Err("路径不存在: (空)".to_string());
+        }
+        let root = Path::new(&project_path);
+        if !root.exists() {
+            return Err(format!("路径不存在: {project_path}"));
+        }
+        if !root.is_dir() {
+            return Err(format!("路径不是目录: {project_path}"));
+        }
+
+        let max_depth = if crate::wsl::parse_wsl_unc_path(&project_path).is_some() {
+            2
+        } else {
+            3
+        };
+        let repos = scan_git_repository_paths(root, max_depth)
+            .into_iter()
+            .map(|(relative_path, absolute_path)| {
+                let branch = open_git_repo(&absolute_path)
+                    .ok()
+                    .and_then(|repo| repo_branch_name(&repo));
+                GitRepoInfo {
+                    relative_path,
+                    absolute_path: absolute_path.to_string_lossy().to_string(),
+                    branch,
+                }
+            })
+            .collect();
+        Ok(repos)
+    })
+    .await
+    .map_err(|e| format!("Git 仓库扫描任务失败: {e}"))?
 }
 
 fn run_wsl_git(distro: &str, linux_path: &str, git_args: &[&str]) -> Result<Vec<u8>, String> {
@@ -514,6 +650,21 @@ fn repo_branch_name(repo: &Repository) -> Option<String> {
         .and_then(|head| head.shorthand().map(|value| value.to_string()))
 }
 
+/// 判断 status 条目是否为嵌套 Git 仓库目录（尾部 '/' 且目录内存在 .git）。
+///
+/// 嵌套 git 仓库（非 submodule）会以带尾部斜杠的目录条目出现；
+/// recurse_untracked_dirs(true) 已展开普通未跟踪目录，只有嵌套仓库才保留目录形式。
+/// submodule/worktree 的 .git 是文件，目录/文件均算命中。
+/// 跳过此类条目可避免前端把目录当普通文件请求 diff 导致原始 OS 错误（见 issue #85）。
+fn is_nested_repo_entry(repo: &Repository, file_path: &str) -> bool {
+    if !file_path.ends_with('/') {
+        return false;
+    }
+    repo.workdir()
+        .map(|workdir| workdir.join(file_path).join(".git").exists())
+        .unwrap_or(false)
+}
+
 fn collect_git_changes_from_repo(repo: &Repository) -> Result<Vec<GitFileChange>, String> {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true);
@@ -533,6 +684,9 @@ fn collect_git_changes_from_repo(repo: &Repository) -> Result<Vec<GitFileChange>
     for entry in statuses.iter() {
         let file_path = entry.path().unwrap_or("").to_string();
         if file_path.is_empty() {
+            continue;
+        }
+        if is_nested_repo_entry(repo, &file_path) {
             continue;
         }
         let (status_char, staged) = parse_git2_status(entry.status());
@@ -764,6 +918,10 @@ pub async fn git_get_file_diff(
             "U" | "??" => {
                 // 未跟踪文件：直接读取内容作为全新增
                 let file_full_path = path.join(&file_path);
+                // 兜底守卫：目录条目（如嵌套 Git 仓库）无法按文件读取，返回友好提示而非原始 OS 错误
+                if file_full_path.is_dir() {
+                    return Err("该条目是目录（可能为嵌套 Git 仓库），无法显示文件 diff".to_string());
+                }
                 let content = std::fs::read_to_string(&file_full_path)
                     .map_err(|e| format!("读取文件失败: {}", e))?;
 
@@ -2141,8 +2299,9 @@ pub async fn git_watch_stop(bridge: State<'_, GitWatcherBridge>) -> Result<(), S
 mod tests {
     use super::{
         build_reverse_hunk_patch, build_reverse_lines_patch, build_worktree_snapshot,
-        git_fork_worktree_snapshot, git_restore_worktree_snapshot, parse_wsl_git_status,
-        parse_wsl_numstat, remove_untracked_snapshot_file, should_skip_diff_line_stats,
+        collect_git_changes_from_repo, git_fork_worktree_snapshot, git_restore_worktree_snapshot,
+        is_nested_repo_entry, parse_wsl_git_status, parse_wsl_numstat,
+        remove_untracked_snapshot_file, scan_git_repository_paths, should_skip_diff_line_stats,
         validate_repo_relative_path, validate_snapshot_branch_name,
         GIT_DIFF_LINE_STATS_STATUS_LIMIT,
     };
@@ -2187,6 +2346,73 @@ mod tests {
         let repo = Repository::open(repo_path).unwrap();
         let head = repo.head().unwrap();
         head.shorthand().unwrap().to_string()
+    }
+
+    #[test]
+    fn scan_git_repository_paths_respects_depth_and_exclusions() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        // 根仓库（扫描只检查 .git 存在性，直接建目录即可）
+        fs::create_dir_all(root.join(".git")).unwrap();
+        // 一级子仓库
+        fs::create_dir_all(root.join("sub-repo-a").join(".git")).unwrap();
+        // 二级子仓库
+        fs::create_dir_all(root.join("tools").join("sub-repo-c").join(".git")).unwrap();
+        // node_modules 内的假仓库：命中排除表，不收录
+        fs::create_dir_all(root.join("node_modules").join("fake").join(".git")).unwrap();
+        // 深度 4 的仓库：超出限深，不收录
+        fs::create_dir_all(root.join("a").join("b").join("c").join("deep4").join(".git")).unwrap();
+
+        let repos = scan_git_repository_paths(root, 3);
+        let rels: Vec<&str> = repos.iter().map(|(rel, _)| rel.as_str()).collect();
+
+        assert_eq!(rels.first(), Some(&""), "根仓库应为首条（相对路径空串）");
+        assert!(rels.contains(&"sub-repo-a"));
+        assert!(rels.contains(&"tools/sub-repo-c"));
+        assert!(!rels.iter().any(|r| r.contains("node_modules")));
+        assert!(!rels.iter().any(|r| r.contains("deep4")));
+        assert_eq!(rels.len(), 3);
+    }
+
+    #[test]
+    fn collect_git_changes_skips_nested_repo_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(temp.path()).unwrap();
+
+        // 普通未跟踪文件：应出现在变更列表中
+        fs::write(temp.path().join("untracked.txt"), "hello\n").unwrap();
+
+        // 嵌套子仓库（非 submodule）：目录条目应被跳过
+        let nested = temp.path().join("sub-repo-a");
+        fs::create_dir_all(&nested).unwrap();
+        Repository::init(&nested).unwrap();
+        fs::write(nested.join("inner.txt"), "inner\n").unwrap();
+
+        let changes = collect_git_changes_from_repo(&repo).unwrap();
+        let paths: Vec<&str> = changes.iter().map(|c| c.path.as_str()).collect();
+
+        assert!(paths.contains(&"untracked.txt"));
+        assert!(!paths.iter().any(|p| p.starts_with("sub-repo-a")));
+    }
+
+    #[test]
+    fn is_nested_repo_entry_detects_nested_repo_dir_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(temp.path()).unwrap();
+
+        // 嵌套子仓库目录（尾部 '/' 且含 .git）→ true
+        let nested = temp.path().join("sub-repo-a");
+        fs::create_dir_all(&nested).unwrap();
+        Repository::init(&nested).unwrap();
+        assert!(is_nested_repo_entry(&repo, "sub-repo-a/"));
+
+        // 普通文件路径 → false
+        fs::write(temp.path().join("untracked.txt"), "hello\n").unwrap();
+        assert!(!is_nested_repo_entry(&repo, "untracked.txt"));
+
+        // 无 .git 的普通目录路径 → false
+        fs::create_dir_all(temp.path().join("plain-dir")).unwrap();
+        assert!(!is_nested_repo_entry(&repo, "plain-dir/"));
     }
 
     #[test]

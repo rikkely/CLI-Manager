@@ -7,11 +7,7 @@ const CLAUDE_SETTINGS_ARG = "--settings";
 const CODEX_LIGHT_TUI_THEME_ARG = "-c theme=catppuccin-latte";
 const DIRECT_CODEX_COMMAND_PATTERN = /^(\s*codex(?:\.(?:cmd|exe|ps1))?)(?=\s|$)/i;
 
-export function isCodexStartupCommand(command: string): boolean {
-  return /\bcodex(?:\.(?:cmd|exe|ps1))?\b/i.test(command);
-}
-
-export function isDirectCodexStartupCommand(command?: string): boolean {
+export function isDirectCodexStartupCommand(command?: string | null): boolean {
   const trimmed = command?.trim();
   return Boolean(trimmed && DIRECT_CODEX_COMMAND_PATTERN.test(trimmed));
 }
@@ -47,6 +43,10 @@ function hasCodexThemeConfigArg(command: string): boolean {
   return /(^|\s)(?:-c|--config)(?:\s+|=)["']?(?:tui\.)?theme\s*=/i.test(command);
 }
 
+export function isCodexStartupCommand(command?: string | null): boolean {
+  return isDirectCodexStartupCommand(command);
+}
+
 export function normalizeDirectCodexStartupCommand(command?: string): string | undefined {
   const trimmed = command?.trim();
   if (!trimmed) return undefined;
@@ -64,7 +64,7 @@ export function withCodexLightTuiTheme(command?: string): string | undefined {
 }
 
 export function resolveProjectStartupCommand(
-  project: Pick<Project, "cli_tool" | "startup_cmd" | "provider_overrides" | "shell">,
+  project: Pick<Project, "cli_tool" | "cli_args" | "startup_cmd" | "provider_overrides" | "shell">,
   options: { includeCodexProviderProfile?: boolean } = {}
 ): string | undefined {
   const startupCmd = project.startup_cmd.trim();
@@ -73,7 +73,10 @@ export function resolveProjectStartupCommand(
   const cliTool = project.cli_tool.trim();
   if (!cliTool) return undefined;
 
-  let command = cliTool;
+  // 先拼用户维护的 CLI 附加参数，再做供应商覆盖追加：
+  // hasProfileArg / hasClaudeSettingsArg 对整条 command 检测，用户手写过的参数天然去重。
+  const cliArgs = project.cli_args.trim();
+  let command = cliArgs ? `${cliTool} ${cliArgs}` : cliTool;
   if (options.includeCodexProviderProfile !== false && isExactCodexProject(project)) {
     const override = getCodexProviderOverride(project);
     if (override && !hasProfileArg(command)) {

@@ -2,7 +2,8 @@ import http from "node:http";
 import { createServer } from "vite";
 
 const DEV_PORT = 1420;
-const DEV_URL = `http://localhost:${DEV_PORT}`;
+const DEV_HOST = "127.0.0.1";
+const DEV_URL = `http://${DEV_HOST}:${DEV_PORT}`;
 
 const requestIndex = () =>
   new Promise((resolve) => {
@@ -67,7 +68,13 @@ if (currentServer.available) {
   process.exit(1);
 }
 
-const server = await createServer();
+const server = await createServer({
+  server: {
+    host: DEV_HOST,
+    port: DEV_PORT,
+    strictPort: true,
+  },
+});
 await server.listen();
 server.printUrls();
 server.bindCLIShortcuts({ print: true });

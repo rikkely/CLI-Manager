@@ -6,6 +6,14 @@ import { useSettingsStore } from "./settingsStore";
 
 type GitStatusFilter = "all" | "M" | "A" | "D" | "U";
 
+/** 项目根下枚举出的 Git 仓库（后端 git_list_repositories 返回）。 */
+export interface GitRepoInfo {
+  /** 相对项目根路径：根仓库为空串，子仓库如 "sub-repo-a"、"tools/sub-repo-c"（'/' 分隔）。 */
+  relativePath: string;
+  absolutePath: string;
+  branch: string | null;
+}
+
 // 判断已跟踪文件是否匹配当前筛选。未跟踪(U/??)单独成组展示，不参与此处筛选。
 function matchTrackedFilter(status: string, filter: GitStatusFilter): boolean {
   if (filter === "all" || filter === "U") return true;
@@ -34,9 +42,17 @@ interface GitStore {
   error: string | null;
   currentProjectPath: string | null;
   statusFilter: GitStatusFilter;
+  /** 项目根下枚举出的全部 Git 仓库（根仓库在首位）。 */
+  repositories: GitRepoInfo[];
+  /** 当前激活的子仓库绝对路径；null 表示项目根仓库。 */
+  activeRepoPath: string | null;
 
   fetchChanges: (projectPath: string, silent?: boolean) => Promise<void>;
   fetchBranchStatus: (projectPath: string) => Promise<void>;
+  /** 枚举项目根下的 Git 仓库列表；项目切换时清空旧的激活态与列表再拉取。 */
+  fetchRepositories: (projectPath: string) => Promise<void>;
+  /** 切换生效仓库（null = 项目根），并立刻刷新变更列表与分支状态。 */
+  setActiveRepo: (absolutePath: string | null) => void;
   discardFile: (filePath: string, status: string) => Promise<void>;
   discardAll: () => Promise<void>;
   revertHunk: (diffText: string, hunkIndex: number) => Promise<void>;
@@ -185,6 +201,16 @@ function collectDirectoryPaths(nodes: GitTreeNode[], treeId: string): string[] {
 const inFlightChangeRequests = new Map<string, Promise<GitFileChange[]>>();
 const inFlightBranchStatusRequests = new Map<string, Promise<GitBranchStatus>>();
 
+/**
+ * 生效仓库路径：激活子仓库时指向子仓库，否则项目根（null = 无项目）。
+ * 所有 git invoke 的 projectPath 参数统一走此处；currentProjectPath 仍保留项目根身份，
+ * 用于竞态守卫与 git-changed 事件过滤。
+ */
+function effectiveRepoPath(): string | null {
+  const { activeRepoPath, currentProjectPath } = useGitStore.getState();
+  return activeRepoPath ?? currentProjectPath;
+}
+
 function invokeGitChanges(projectPath: string): Promise<GitFileChange[]> {
   const existing = inFlightChangeRequests.get(projectPath);
   if (existing) return existing;
@@ -227,19 +253,27 @@ export const useGitStore = create<GitStore>((set, get) => ({
   error: null,
   currentProjectPath: null,
   statusFilter: "all",
+  repositories: [],
+  activeRepoPath: null,
 
   fetchChanges: async (projectPath: string, silent = false) => {
+    // 项目切换：清空子仓库激活态与列表，避免带着上个项目的 activeRepoPath 查错仓库。
+    const projectChanged = get().currentProjectPath !== projectPath;
+    const switchPatch = projectChanged ? { activeRepoPath: null, repositories: [] as GitRepoInfo[] } : {};
     // silent 模式用于聚焦轮询：不 set loading，避免每次刷新闪烁 spinner。
     if (silent) {
-      set({ currentProjectPath: projectPath });
+      set({ currentProjectPath: projectPath, ...switchPatch });
     } else {
       debugConsoleLog(`[GitStore] 开始获取 Git 变更, projectPath: "${projectPath}"`);
-      set({ loading: true, error: null, currentProjectPath: projectPath });
+      set({ loading: true, error: null, currentProjectPath: projectPath, ...switchPatch });
     }
 
+    const repoPath = get().activeRepoPath ?? projectPath;
     try {
-      const changes = await invokeGitChanges(projectPath);
+      const changes = await invokeGitChanges(repoPath);
       if (get().currentProjectPath !== projectPath) return;
+      // 等待期间切换了子仓库 → 丢弃过期结果（新一轮 fetchChanges 已在路上）。
+      if ((get().activeRepoPath ?? projectPath) !== repoPath) return;
 
       // 应用筛选并拆分已跟踪 / 未跟踪两棵树，使用当前分组模式
       const { statusFilter } = get();
@@ -259,6 +293,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
       console.error(`[GitStore] 获取 Git 变更失败:`, err);
       // silent 失败（轮询）不清空已有数据、不弹错，避免打扰；仅非静默时显式报错。
       if (get().currentProjectPath !== projectPath) return;
+      if ((get().activeRepoPath ?? projectPath) !== repoPath) return;
       if (silent) {
         set({ loading: false });
       } else {
@@ -273,18 +308,53 @@ export const useGitStore = create<GitStore>((set, get) => ({
   },
 
   fetchBranchStatus: async (projectPath: string) => {
+    const repoPath = get().activeRepoPath ?? projectPath;
     try {
-      const branchStatus = await invokeGitBranchStatus(projectPath);
-      // 仅当仍是当前项目时写入，避免切换项目时的竞态覆盖。
-      if (get().currentProjectPath === projectPath) {
+      const branchStatus = await invokeGitBranchStatus(repoPath);
+      // 仅当仍是当前项目且生效仓库未变时写入，避免切换项目/子仓库时的竞态覆盖。
+      if (get().currentProjectPath === projectPath && (get().activeRepoPath ?? projectPath) === repoPath) {
         set({ branchStatus });
       }
     } catch (err) {
       debugConsoleWarn(`[GitStore] 获取分支状态失败:`, err);
-      if (get().currentProjectPath === projectPath) {
+      // 与成功路径同守卫：stale 请求（项目/子仓库已切换）失败时不得清掉新仓库的有效状态。
+      if (get().currentProjectPath === projectPath && (get().activeRepoPath ?? projectPath) === repoPath) {
         set({ branchStatus: null });
       }
     }
+  },
+
+  fetchRepositories: async (projectPath: string) => {
+    // 项目切换（currentProjectPath 尚未指向本项目）：先清空旧激活态与列表。
+    if (get().currentProjectPath !== projectPath) {
+      set({ repositories: [], activeRepoPath: null });
+    }
+    try {
+      const repositories = await invoke<GitRepoInfo[]>("git_list_repositories", { projectPath });
+      // 竞态守卫：仅当仍是当前项目时写入（面板总是先 fetchChanges 再 fetchRepositories）。
+      if (get().currentProjectPath !== projectPath) return;
+      const { activeRepoPath } = get();
+      // 激活的子仓库已不在列表（被删除等）→ 回落到根仓库。
+      const activeStillExists =
+        activeRepoPath === null || repositories.some((repo) => repo.absolutePath === activeRepoPath);
+      set(activeStillExists ? { repositories } : { repositories, activeRepoPath: null });
+    } catch (err) {
+      debugConsoleWarn(`[GitStore] 枚举 Git 仓库失败:`, err);
+      if (get().currentProjectPath === projectPath) {
+        set({ repositories: [] });
+      }
+    }
+  },
+
+  setActiveRepo: (absolutePath: string | null) => {
+    const { currentProjectPath, activeRepoPath } = get();
+    // 根仓库归一化为 null，保证「未激活子仓库 = 项目根」单一表示。
+    const next = absolutePath === currentProjectPath ? null : absolutePath;
+    if (next === activeRepoPath) return;
+    // 未跟踪选中 / A 文件取消勾选集合与各自仓库的相对路径绑定，切换时清空。
+    set({ activeRepoPath: next, selectedUntracked: new Set(), deselectedAdded: new Set() });
+    // 立刻刷新变更列表与分支状态（fetchChanges 内部会解析生效仓库路径并联动分支状态）。
+    if (currentProjectPath) void get().fetchChanges(currentProjectPath);
   },
 
   discardFile: async (filePath: string, status: string) => {
@@ -292,7 +362,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     if (!currentProjectPath) return;
     set({ discarding: true, error: null });
     try {
-      await invoke("git_discard_file", { projectPath: currentProjectPath, filePath, status });
+      await invoke("git_discard_file", { projectPath: effectiveRepoPath(), filePath, status });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -314,7 +384,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     try {
       for (const c of trackable) {
         await invoke("git_discard_file", {
-          projectPath: currentProjectPath,
+          projectPath: effectiveRepoPath(),
           filePath: c.path,
           status: c.status,
         });
@@ -335,7 +405,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     if (!currentProjectPath) return;
     set({ discarding: true, error: null });
     try {
-      await invoke("git_revert_hunk", { projectPath: currentProjectPath, diffText, hunkIndex });
+      await invoke("git_revert_hunk", { projectPath: effectiveRepoPath(), diffText, hunkIndex });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -352,7 +422,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     if (!currentProjectPath) return;
     set({ discarding: true, error: null });
     try {
-      await invoke("git_revert_lines", { projectPath: currentProjectPath, diffText, selectedLines });
+      await invoke("git_revert_lines", { projectPath: effectiveRepoPath(), diffText, selectedLines });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -368,7 +438,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     const { currentProjectPath } = get();
     if (!currentProjectPath) return;
     try {
-      await invoke("git_stage_file", { projectPath: currentProjectPath, filePath });
+      await invoke("git_stage_file", { projectPath: effectiveRepoPath(), filePath });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -382,7 +452,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     const { currentProjectPath } = get();
     if (!currentProjectPath) return;
     try {
-      await invoke("git_unstage_file", { projectPath: currentProjectPath, filePath });
+      await invoke("git_unstage_file", { projectPath: effectiveRepoPath(), filePath });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -396,7 +466,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     const { currentProjectPath } = get();
     if (!currentProjectPath) return;
     try {
-      await invoke("git_stage_all", { projectPath: currentProjectPath });
+      await invoke("git_stage_all", { projectPath: effectiveRepoPath() });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -410,7 +480,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     const { currentProjectPath } = get();
     if (!currentProjectPath || paths.length === 0) return;
     try {
-      await invoke("git_stage_paths", { projectPath: currentProjectPath, paths });
+      await invoke("git_stage_paths", { projectPath: effectiveRepoPath(), paths });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -424,7 +494,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     const { currentProjectPath } = get();
     if (!currentProjectPath || paths.length === 0) return;
     try {
-      await invoke("git_unstage_paths", { projectPath: currentProjectPath, paths });
+      await invoke("git_unstage_paths", { projectPath: effectiveRepoPath(), paths });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -438,7 +508,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     const { currentProjectPath } = get();
     if (!currentProjectPath) return;
     try {
-      await invoke("git_unstage_all", { projectPath: currentProjectPath });
+      await invoke("git_unstage_all", { projectPath: effectiveRepoPath() });
       await get().fetchChanges(currentProjectPath, true);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -500,13 +570,13 @@ export const useGitStore = create<GitStore>((set, get) => ({
       // 提交前先 add 选中的未跟踪文件（延迟到此刻才真正 git add）。
       const toAdd = [...selectedUntracked];
       if (toAdd.length > 0) {
-        await invoke("git_stage_paths", { projectPath: currentProjectPath, paths: toAdd });
+        await invoke("git_stage_paths", { projectPath: effectiveRepoPath(), paths: toAdd });
       }
 
       let shortId: string;
       if (deselectedAdded.size === 0) {
         // 无「取消勾选的 A 文件」→ 走整库索引提交（保持既有语义）。
-        shortId = await invoke<string>("git_commit", { projectPath: currentProjectPath, message });
+        shortId = await invoke<string>("git_commit", { projectPath: effectiveRepoPath(), message });
       } else {
         // 有取消勾选的 A 文件 → 仅提交选中的路径（pathspec），被取消勾选者保持暂存不提交。
         const includedStaged = changes
@@ -515,7 +585,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
         const commitPaths = [...new Set([...includedStaged, ...toAdd])];
         if (commitPaths.length === 0) throw new Error("nothing_staged");
         shortId = await invoke<string>("git_commit_paths", {
-          projectPath: currentProjectPath,
+          projectPath: effectiveRepoPath(),
           message,
           paths: commitPaths,
         });
@@ -546,7 +616,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     set({ pushing: true, error: null });
     try {
       const out = await invoke<string>("git_push", {
-        projectPath: currentProjectPath,
+        projectPath: effectiveRepoPath(),
         setUpstream,
         branch: setUpstream ? branch : null,
       });
@@ -569,7 +639,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     if (!currentProjectPath) throw new Error("no_project");
     set({ pulling: true, error: null });
     try {
-      const out = await invoke<string>("git_pull", { projectPath: currentProjectPath, strategy });
+      const out = await invoke<string>("git_pull", { projectPath: effectiveRepoPath(), strategy });
       // 拉取改动工作区与提交，需同时刷新变更列表与分支状态。
       await get().fetchChanges(currentProjectPath, true);
       await get().fetchBranchStatus(currentProjectPath);
@@ -592,7 +662,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     if (!currentProjectPath) throw new Error("no_project");
     set({ pulling: true, error: null });
     try {
-      await invoke<string>("git_pull_abort", { projectPath: currentProjectPath });
+      await invoke<string>("git_pull_abort", { projectPath: effectiveRepoPath() });
       await get().fetchChanges(currentProjectPath, true);
       await get().fetchBranchStatus(currentProjectPath);
     } catch (err) {
@@ -610,7 +680,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     if (!currentProjectPath) throw new Error("no_project");
     set({ pulling: true, error: null });
     try {
-      const out = await invoke<string>("git_rebase_continue", { projectPath: currentProjectPath });
+      const out = await invoke<string>("git_rebase_continue", { projectPath: effectiveRepoPath() });
       await get().fetchChanges(currentProjectPath, true);
       await get().fetchBranchStatus(currentProjectPath);
       return out;
@@ -676,6 +746,8 @@ export const useGitStore = create<GitStore>((set, get) => ({
       error: null,
       currentProjectPath: null,
       statusFilter: "all",
+      repositories: [],
+      activeRepoPath: null,
     });
   },
 }));

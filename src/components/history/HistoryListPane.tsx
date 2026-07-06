@@ -581,41 +581,29 @@ export function HistoryListPane({
     >
       <div className="ui-history-sidebar-top p-3">
         <div className="flex items-center gap-2">
-          <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-xl border border-border/60 bg-surface-container-lowest p-1">
+          <div className="grid min-w-0 flex-1 grid-cols-[0.7fr_1.3fr_1fr] gap-1 rounded-xl border border-border/60 bg-surface-container-lowest p-1">
             {SOURCE_FILTER_OPTIONS.map((option) => {
               const active = sourceFilter === option.value;
+              const label = option.labelKey ? t(option.labelKey) : option.label ?? "";
               return (
                 <button
                   key={option.value}
                   type="button"
                   onClick={() => onSourceFilterChange(option.value)}
-                  className="ui-focus-ring rounded-lg px-1.5 py-1 text-[11px] font-semibold transition-colors"
+                  className="ui-focus-ring flex h-8 min-w-0 items-center justify-center rounded-lg px-1 text-[11px] font-semibold leading-none transition-colors"
                   style={{
                     backgroundColor: active ? "var(--interactive-selected-bg)" : "transparent",
                     color: active ? "var(--on-surface)" : "var(--text-muted)",
                   }}
                   aria-pressed={active}
+                  title={label}
                 >
-                  {option.labelKey ? t(option.labelKey) : option.label}
+                  <span className="min-w-0 truncate whitespace-nowrap">{label}</span>
                 </button>
               );
             })}
           </div>
 
-          <button
-            type="button"
-            onClick={() => onFavoriteOnlyChange(!favoriteOnly)}
-            aria-label={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
-            aria-pressed={favoriteOnly}
-            className="ui-flat-action ui-toolbar-button-compact ui-history-list-action h-8 w-8 shrink-0 px-0"
-            title={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
-            style={{
-              color: favoriteOnly ? "var(--warning)" : undefined,
-              backgroundColor: favoriteOnly ? "color-mix(in srgb, var(--warning) 12%, transparent)" : undefined,
-            }}
-          >
-            <Star size={12} fill={favoriteOnly ? "currentColor" : "none"} />
-          </button>
           <button
             onClick={onRefresh}
             aria-label={t("history.refreshList")}
@@ -753,7 +741,21 @@ export function HistoryListPane({
             </div>
           </div>
         ) : (
-          <div className="mt-2 flex justify-end">
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => onFavoriteOnlyChange(!favoriteOnly)}
+              aria-label={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
+              aria-pressed={favoriteOnly}
+              className="ui-flat-action h-8 px-2 text-[11px]"
+              title={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
+              style={{
+                color: favoriteOnly ? "var(--warning)" : undefined,
+                backgroundColor: favoriteOnly ? "color-mix(in srgb, var(--warning) 12%, transparent)" : undefined,
+              }}
+            >
+              <Star size={12} fill={favoriteOnly ? "currentColor" : "none"} />
+            </button>
             <button
               type="button"
               onClick={onEnterSelectionMode}

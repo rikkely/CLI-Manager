@@ -115,8 +115,8 @@ impl GitWatcherBridge {
 
 /// 事件路径是否值得触发刷新（噪声过滤，纯函数便于单测）：
 /// - 工作区文件变化：相关（排除 `*.lock` 临时锁文件）。
-/// - `.git/index`、`.git/HEAD`：相关（暂存/提交/切分支）。
-/// - `.git/` 下其它（objects/logs/refs 锁等）：忽略。
+/// - 任意层级的 `.git/index`、`.git/HEAD`：相关（根仓库或嵌套子仓库的暂存/提交/切分支）。
+/// - `.git/` 下其它（objects/logs/refs 锁等）：忽略，避免子仓库对象写入触发刷新风暴。
 fn is_relevant(root: &str, path: &Path) -> bool {
     let path_str = path.to_string_lossy().replace('\\', "/");
     let root_norm = root.replace('\\', "/");
@@ -125,12 +125,18 @@ fn is_relevant(root: &str, path: &Path) -> bool {
         .unwrap_or(&path_str)
         .trim_start_matches('/');
 
-    // .git 内部：仅顶层 index / HEAD 相关，其余（含 index.lock、objects、logs）忽略。
-    if rel == ".git" {
+    // 任意层级的 .git 目录本身：忽略。
+    if rel == ".git" || rel.ends_with("/.git") {
         return false;
     }
-    if let Some(git_rel) = rel.strip_prefix(".git/") {
-        return git_rel == "index" || git_rel == "HEAD";
+
+    // 任意层级 .git/ 内部：仅当紧跟的剩余路径恰为 index / HEAD 时相关，
+    // 其余（含 index.lock、objects、logs）忽略。
+    let git_inner = rel
+        .strip_prefix(".git/")
+        .or_else(|| rel.find("/.git/").map(|idx| &rel[idx + "/.git/".len()..]));
+    if let Some(inner) = git_inner {
+        return inner == "index" || inner == "HEAD";
     }
 
     // 工作区文件：排除锁文件噪声。
@@ -162,6 +168,21 @@ mod tests {
         assert!(!is_relevant(ROOT, Path::new("F:/proj/.git/objects/ab/cd")));
         assert!(!is_relevant(ROOT, Path::new("F:/proj/.git/logs/HEAD")));
         assert!(!is_relevant(ROOT, Path::new("F:/proj/.git")));
+    }
+
+    #[test]
+    fn nested_git_index_and_head_relevant() {
+        assert!(is_relevant(ROOT, Path::new("F:/proj/sub/.git/index")));
+        assert!(is_relevant(ROOT, Path::new("F:/proj/sub/.git/HEAD")));
+        assert!(is_relevant(ROOT, Path::new("F:/proj/tools/sub-c/.git/index")));
+    }
+
+    #[test]
+    fn nested_git_noise_ignored() {
+        assert!(!is_relevant(ROOT, Path::new("F:/proj/sub/.git/objects/ab")));
+        assert!(!is_relevant(ROOT, Path::new("F:/proj/sub/.git/index.lock")));
+        assert!(!is_relevant(ROOT, Path::new("F:/proj/sub/.git/logs/HEAD")));
+        assert!(!is_relevant(ROOT, Path::new("F:/proj/sub/.git")));
     }
 
     #[test]

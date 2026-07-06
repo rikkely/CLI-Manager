@@ -4,14 +4,16 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import type { SubagentTranscriptSource, TerminalSession, Project } from "../lib/types";
 import { debugConsoleWarn } from "../lib/debugConsole";
+import { sourceTool, type SyncedHistoryGroup } from "../lib/externalSessionGrouping";
 import { logError, logInfo, logWarn } from "../lib/logger";
 import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey, type OsPlatform, type ShellKey } from "../lib/shell";
-import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType, isExactCodexProject } from "../lib/providerSwitching";
+import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType, isExactCodexProject, parseProjectEnvVars } from "../lib/providerSwitching";
 import { useProjectStore } from "./projectStore";
+import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import {
   addSessionToPaneTree,
   collectPaneLeaves,
@@ -113,6 +115,8 @@ export interface SubagentTranscriptContent {
   ended: boolean;
   source: SubagentTranscriptSource;
   truncatedBytes?: number;
+  /** 重置序号：reset 或前部裁剪时自增；序号不变 ⇒ content 相对上次为纯尾部追加，消费方可增量解析。 */
+  resetSeq: number;
 }
 
 interface SubagentTranscriptSubscribeResult {
@@ -176,6 +180,7 @@ interface TerminalStore {
   renameSession: (id: string, title: string) => void;
   splitTerminal: (sessionId: string, direction: TerminalPaneSplitDirection, options?: SplitTerminalOptions) => Promise<string | null>;
   openFileEditorPane: (project: Project) => string;
+  openSyncedHistoryPane: (group: SyncedHistoryGroup, project?: Project) => Promise<string>;
   /** Split the current pane into two, creating a new empty leaf (no sessions). Used by batch launch to create panes for different root groups. */
   splitPaneEmpty: (paneId: string, direction: TerminalPaneSplitDirection) => void;
   unsplitTerminal: (sessionId: string) => Promise<void>;
@@ -216,7 +221,7 @@ function createFileEditorSessionId(projectId: string): string {
 }
 
 function isPersistableSession(session: TerminalSession | undefined): boolean {
-  return !!session && session.kind !== "subagent-transcript" && session.kind !== "file-editor";
+  return !!session && session.kind !== "subagent-transcript" && session.kind !== "file-editor" && session.kind !== "synced-history";
 }
 
 function createSplitSessionTitle(options?: SplitTerminalOptions) {
@@ -445,7 +450,7 @@ function startSubagentDiscovery(
                   subagentTranscripts: {
                     ...state.subagentTranscripts,
                     [existingSession.id]: {
-                      ...(state.subagentTranscripts[existingSession.id] ?? { content: "", ended: false }),
+                      ...(state.subagentTranscripts[existingSession.id] ?? { content: "", ended: false, resetSeq: 0 }),
                       source: childSource,
                     },
                   },
@@ -669,6 +674,20 @@ export function formatManualDirectCodexInputForPty(command: string, shell?: Shel
   return formatStartupInputForPty(command, shell ?? null);
 }
 
+export interface DetachedPtyLaunchOptions {
+  projectId?: string;
+  cwd?: string | null;
+  startupCmd?: string | null;
+  envVars?: Record<string, string> | null;
+  shell?: string | null;
+}
+
+export interface DetachedPtyLaunchResult {
+  sessionId: string;
+  shell: ShellKey | null;
+  startupCmd?: string;
+}
+
 // hook running 超时回退：Stop/StopFailure 丢失（hook 脚本失败、bridge 不可达）
 // 时 Tab 会永久停留 running，超时后回退为 none（未知）。阈值取宽（Claude 长任务
 // 可合法运行很久），只兜底明显异常的滞留。
@@ -752,6 +771,35 @@ function getClaudeProviderLaunchConfig(projectId?: string) {
     providerId: override.providerId,
     dbPath: settings.ccSwitchDbPath ?? undefined,
   };
+}
+
+export async function createDetachedPtyProcess(options: DetachedPtyLaunchOptions): Promise<DetachedPtyLaunchResult> {
+  const os = await getOsPlatform();
+  const resolvedShell = resolveShellForPty(options.shell, !!options.projectId, os);
+  const launchStartupCmd = prepareStartupCommandForPty(options.startupCmd ?? undefined, resolvedShell);
+  const sessionId = await invoke<string>("pty_create", {
+    cwd: options.cwd ?? null,
+    envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
+    shell: resolvedShell,
+    hookEnvEnabled: await shouldEnableHookEnv(),
+    claudeProvider: getClaudeProviderLaunchConfig(options.projectId),
+    codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd),
+  });
+
+  return {
+    sessionId,
+    shell: resolvedShell,
+    startupCmd: launchStartupCmd,
+  };
+}
+
+function isCliManagerSyncArtifactText(value: string): boolean {
+  const text = value.toLowerCase();
+  return (
+    text.includes("cli-manager 同步聚合会话")
+    || text.includes(".cli-manager/synced-history/")
+    || text.includes("同步记录已加载")
+  );
 }
 
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
@@ -1201,6 +1249,90 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     return editorSessionId;
   },
 
+  openSyncedHistoryPane: async (group, project) => {
+    const firstSession = group.sessions[0];
+    if (!firstSession) {
+      throw new Error("同步记录为空。");
+    }
+    const label = firstSession?.source === "codex" ? "Codex" : "Claude";
+    const existing = get().sessions.find(
+      (session) => session.kind === "synced-history" && session.syncedHistory?.key === group.key && get().sessionStatuses[session.id]
+    );
+    if (existing) {
+      const paneResult = setPaneActiveSession(get().paneTree, existing.id);
+      set({
+        activeSessionId: existing.id,
+        activePaneId: paneResult.activePaneId ?? get().activePaneId,
+        paneTree: paneResult.tree,
+      });
+      scheduleSaveActiveId(existing.id);
+      return existing.id;
+    }
+
+    const sortedSessions = [...group.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+    const latestSession = sortedSessions[0];
+    const cwd = latestSession?.cwd || group.cwd || project?.path;
+    const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
+    const startupCmd = await appendSyncedHistoryContextArg(sourceTool(firstSession.source), sourceTool(firstSession.source), group, shell);
+    const envVars = project ? parseProjectEnvVars(project) : undefined;
+    const launch = await createDetachedPtyProcess({
+      projectId: project?.id,
+      cwd,
+      startupCmd,
+      envVars,
+      shell,
+    });
+    const historySession: TerminalSession = {
+      id: launch.sessionId,
+      projectId: project?.id,
+      title: `${group.name} · ${label} 同步终端`,
+      cwd,
+      shell: launch.shell,
+      envVars,
+      startupCmd: launch.startupCmd ?? startupCmd,
+      kind: "synced-history",
+      syncedHistory: {
+        key: group.key,
+        title: group.name,
+        cwd: group.cwd || project?.path || "",
+        sessions: group.sessions.map((session) => ({
+          key: session.key,
+          source: session.source,
+          sessionId: session.sessionId,
+          projectKey: session.projectKey,
+          filePath: session.filePath,
+          projectName: session.projectName,
+          cwd: session.cwd,
+          title: session.title,
+          startupCmd: session.startupCmd,
+          updatedAt: session.updatedAt,
+        })),
+      },
+    };
+    const unlisten = await listen<PtyStatusPayload>(`pty-status-${launch.sessionId}`, (event) => {
+      const status = event.payload.status as SessionStatus;
+      logTerminalExitStatus(historySession, event.payload);
+      set((state) => ({
+        sessionStatuses: { ...state.sessionStatuses, [launch.sessionId]: status },
+      }));
+    });
+    const sessions = [...get().sessions, historySession];
+    const paneResult = addSessionToPaneTree(get().paneTree, get().activePaneId, launch.sessionId, createPaneId);
+
+    set({
+      sessions,
+      activeSessionId: launch.sessionId,
+      activePaneId: paneResult.activePaneId,
+      paneTree: paneResult.tree,
+      sessionStatuses: { ...get().sessionStatuses, [launch.sessionId]: "running" },
+      statusListeners: { ...get().statusListeners, [launch.sessionId]: unlisten },
+      splits: {},
+    });
+    void useSessionStore.getState().saveSessions(sessions).catch(() => {});
+    void useSessionStore.getState().saveActiveSessionId(null).catch(() => {});
+    return launch.sessionId;
+  },
+
   unsplitTerminal: async (sessionId) => {
     const pane = findPaneLeafBySession(get().paneTree, sessionId);
     if (!pane) return;
@@ -1217,7 +1349,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         .filter((s) => closedSessionIds.includes(s.id) && s.kind === "file-editor")
         .map((s) => s.id)
     );
-
     for (const closedSessionId of closedSessionIds) {
       get().statusListeners[closedSessionId]?.();
     }
@@ -1311,6 +1442,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const os = await getOsPlatform();
     for (let i = 0; i < persistedSessions.length; i++) {
       const ps = persistedSessions[i];
+      if (isCliManagerSyncArtifactText(ps.title ?? "") || isCliManagerSyncArtifactText(ps.startupCmd ?? "")) {
+        skippedSessions.push(ps.title ?? `会话 ${i + 1}`);
+        continue;
+      }
 
       // 检查项目是否存在
       if (ps.projectId) {
@@ -1579,7 +1714,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           subagentTranscripts: {
             ...state.subagentTranscripts,
             [pseudoId]: {
-              ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false }),
+              ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }),
               source: childSource,
             },
           },
@@ -1667,7 +1802,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           subagentTranscripts: {
             ...state.subagentTranscripts,
             [pseudoId]: {
-              ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false }),
+              ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }),
               source: childSource,
             },
           },
@@ -1726,7 +1861,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         ),
         subagentTranscripts: {
           ...state.subagentTranscripts,
-          [pseudoId]: { ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false }), ended: false, source },
+          [pseudoId]: { ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }), ended: false, source },
         },
       }));
       if (shouldSubscribe) await subscribeChild();
@@ -1800,7 +1935,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set((state) => ({
       sessions: newSessions,
       paneTree: nextTree,
-      subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, source } },
+      subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, resetSeq: 0, source } },
     }));
 
     // 持久化（sessionStore 会过滤掉转录伪会话）。
@@ -1915,6 +2050,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
             ...prev,
             content: nextContent,
             truncatedBytes: (reset ? 0 : prev.truncatedBytes ?? 0) + droppedChars,
+            // reset 或前部裁剪都破坏"纯尾部追加"前提，自增序号通知消费方全量重解析。
+            resetSeq: reset || droppedChars > 0 ? (prev.resetSeq ?? 0) + 1 : prev.resetSeq ?? 0,
           },
         },
       };

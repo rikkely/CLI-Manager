@@ -1,6 +1,6 @@
 import { DndContext, DragOverlay, PointerSensor, closestCenter, useSensor, useSensors, type CollisionDetection, type DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Project, TreeNode as TNode } from "../../lib/types";
 import type { SessionStatus } from "../../stores/terminalStore";
 import { SidebarSkeleton } from "../ui/Skeleton";
@@ -27,6 +27,8 @@ interface ProjectTreeProps {
   onQuickAddProject: () => void;
   onRetry: () => void;
   onExpandSidebar: () => void;
+  suppressEmptyState?: boolean;
+  embedded?: boolean;
 }
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
@@ -62,6 +64,12 @@ function nodeKey(node: TNode): string {
 
 function isProjectSearchKey(key: string): boolean {
   return /^[a-z0-9._\\/-]$/i.test(key);
+}
+
+function preventSecondaryPointerFocus(event: ReactPointerEvent<HTMLElement>) {
+  if (event.button !== 2) return;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function matchesProjectQuery(project: Extract<TNode, { type: "project" }>["project"], normalizedQuery: string): boolean {
@@ -237,6 +245,8 @@ export function ProjectTree({
   onQuickAddProject,
   onRetry,
   onExpandSidebar,
+  suppressEmptyState = false,
+  embedded = false,
 }: ProjectTreeProps) {
   const { t } = useI18n();
   const actions = useTreeActions();
@@ -561,7 +571,7 @@ export function ProjectTree({
   }
 
   return (
-    <div className={`h-full overflow-y-auto overflow-x-hidden ${density === "compact" ? "px-1 pb-1.5 pt-0.5" : "px-1.5 pb-2 pt-1"}`}>
+    <div className={`${embedded ? "" : "h-full overflow-y-auto"} overflow-x-hidden ${density === "compact" ? "px-1 pb-1.5 pt-0.5" : "px-1.5 pb-2 pt-1"}`}>
       {newGroupParentId === "__root__" && (
         <div className={`flex items-center px-2 ${density === "compact" ? "gap-1 py-1" : "gap-1.5 py-1.5"}`}>
           <span className="shrink-0 text-accent">
@@ -647,6 +657,7 @@ export function ProjectTree({
             className="min-h-full outline-none"
             onKeyDown={handleTreeKeyDown}
             onMouseDown={(event) => {
+              if (event.button === 2) return;
               const target = event.target as HTMLElement | null;
               if (!target) return;
               if (target.closest("button, input, textarea, select, a, [contenteditable='true']")) return;
@@ -714,7 +725,7 @@ export function ProjectTree({
         />
       )}
 
-      {tree.length === 0 && !loadError && !searchActive && (
+      {tree.length === 0 && !loadError && !searchActive && !suppressEmptyState && (
         <EmptyState
           icon={<Terminal size={40} strokeWidth={1} />}
           title={t("sidebar.tree.welcome")}
@@ -741,6 +752,7 @@ function CollapsedProjectButton({ node, sizeClass }: { node: TNode; sizeClass: s
       data-selected={selected ? "true" : "false"}
       title={p.name}
       aria-label={t("sidebar.tree.openProject", { name: p.name })}
+      onPointerDownCapture={preventSecondaryPointerFocus}
       onClick={() => actions.onOpenProject(p)}
       onContextMenu={(e) => actions.onContextMenuProject(e, p)}
     >
@@ -810,6 +822,7 @@ function CollapsedGroupButton({
           aria-label={t("sidebar.tree.directoryProjectCount", { name: g.name, count })}
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
+          onPointerDownCapture={preventSecondaryPointerFocus}
           onClick={handleClick}
           onContextMenu={(e) => actions.onContextMenuGroup(e, g.id, g.name)}
         >
@@ -894,6 +907,7 @@ function renderFlyoutNodes(nodes: TNode[], depth: number, actions: TreeActions, 
         className="ui-collapsed-flyout-item flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[12px] text-on-surface"
         style={{ paddingLeft: padLeft }}
         title={p.name}
+        onPointerDownCapture={preventSecondaryPointerFocus}
         onClick={() => {
           actions.onOpenProject(p);
           onPick();

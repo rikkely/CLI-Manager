@@ -15,7 +15,7 @@
 
 A multi-project terminal manager deeply optimized for **Claude Code / Codex CLI**
 
-[Features](#-core-features) • [Preview](#-preview) • [Quick Start](#-quick-start) • [Tech Stack](#-tech-stack) • [Community](#-community)
+[Features](#-core-features) • [Comparison](#-comparison) • [Preview](#-preview) • [Quick Start](#-quick-start) • [Tech Stack](#-tech-stack) • [Community](#-community)
 
 </div>
 
@@ -279,9 +279,32 @@ When developing across multiple projects, you may run into these problems:
 
 ---
 
-## 🧪 Beta Features
+## 🧭 Comparison
 
-The following features are still being refined. Feedback is welcome.
+This comparison is based on the public README / project positioning of [Orca](https://github.com/stablyai/orca) and [cmux](https://github.com/manaflow-ai/cmux) as of 2026-07-05.
+
+| Area | CLI-Manager | Orca | cmux |
+|---|---|---|---|
+| Core positioning | Claude Code / Codex CLI workflow workspace for multi-project terminals, agent splits, history, analytics, and provider switching | AI Orchestrator / ADE for running multiple agents in isolated worktrees | Native macOS terminal built on Ghostty, focused on tabs, splits, and notifications for AI coding agents |
+| Best fit | Heavy Claude / Codex users who want durable session history, Diff review, token cost tracking, project analytics, and automatic sub-agent visualization | Developers who want to fan one task across multiple agents, compare results, and merge the winner | macOS terminal-first users who want every agent pane, notification, and browser surface in one native workspace |
+| Agent model | Deep Claude / Codex integration with hook events, session binding, live stats, history parsing, and mature automatic sub-agent splitting | Any CLI agent, with parallel git worktree orchestration as the main workflow | Any terminal agent, with Claude Teams / subagents surfaced as native panes and splits |
+| Terminal and splits | Tauri + xterm.js, fully tested on Windows; tab / pane drag, mixed splits, and Chinese IME optimizations | WebGL terminals, infinite splits, and restart-persistent scrollback | Swift / AppKit + libghostty, vertical / horizontal tabs, Ghostty config compatibility, native performance |
+| History and data | Session history, Diff review, search, favorites, Prompt Library, token / cost / project-level analytics | Account switching, usage tracking, notifications, and AI Diff annotation | Session restore, notification panel, workspace metadata, and programmable terminal primitives |
+| Git / worktrees | Git status, Diff, sub-repo panel, and project health checks; project-level worktree task isolation is being productized with parallel-risk detection, isolated directories / branches, commit, merge, and cleanup flow | Parallel worktrees are a core feature, with GitHub / Linear / SSH worktree workflows | Sidebar shows branch, PR, working directory, and ports; supports SSH / tmux with a more composable workflow |
+| Config and providers | Read-only cc-switch parsing, project-level Claude / Codex provider switching, WebDAV sync | Account switching plus usage and rate-limit tracking | Reads Ghostty config and exposes cmux CLI / socket APIs plus hooks / OSC notifications |
+| Platform and license | Windows fully tested, macOS / Linux experimental; AGPL-3.0-or-later + commercial license | macOS / Windows / Linux plus mobile companion; MIT | macOS only for now; GPL-3.0-or-later + commercial license |
+
+**How to choose:**
+
+- Choose **CLI-Manager** if you mainly need long-term Claude / Codex usage management: project terminals, sub-agent splits, historical Diff, token cost analytics, and provider configuration.
+- Choose **Orca** if you mainly need to send one task to multiple agents, isolate them in worktrees, then review and merge the best result.
+- Choose **cmux** if you mainly want a native high-performance macOS terminal with visible multi-agent panes, notifications, and programmable terminal / browser primitives.
+
+---
+
+## 🤖 Agent Parallelism
+
+CLI-Manager treats automatic sub-agent splitting as a stable capability, while project-level worktree isolation is being actively productized.
 
 ### 🤖 Automatic Sub-agent Splitting (cmux-like)
 
@@ -289,7 +312,12 @@ The following features are still being refined. Feedback is welcome.
 - **Session association** - each sub-agent gets an independent terminal with live status sync
 - **Layout optimization** - automatically adjusts split layout based on agent count
 
-> 💡 This feature is in Beta. If you run into issues, please submit an [Issue](https://github.com/dark-hxx/CLI-Manager/issues).
+### 🌿 Git Worktree Task Isolation (in progress)
+
+- **Parallel-risk detection** - when a project already has a running task, opening another terminal will be able to prompt for an isolated worktree
+- **Project-level isolation strategy** - will support prompt, auto-isolate parallel sessions, or always isolate
+- **Dedicated directory and branch** - will create an independent worktree directory and `wt/<task-name>` branch per parallel task
+- **Finish-task wizard** - will guide commit, merge, and cleanup; dirty main workspaces or merge conflicts are blocked before destructive half-states happen
 
 ---
 

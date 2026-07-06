@@ -847,3 +847,69 @@ Add project-level Codex provider switching with generated profiles, cleanup, sid
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Git 多子仓库监控与嵌套仓库兼容
+
+**Date**: 2026-07-05
+**Task**: Git 多子仓库监控与嵌套仓库兼容
+**Branch**: `master`
+
+### Summary
+
+完成 Git 面板多子仓库监控：新增仓库扫描命令与切换 UI，所有 Git 操作作用于当前选中仓库；修复嵌套 git 子仓库被当作未跟踪目录导致 diff 读取失败的问题，补齐 WSL/Replay/面板三链路过滤；Git diff 弹窗支持 Esc 关闭，并沉淀 git status 合约 spec。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0d7ed9c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 27: 性能优化：终端渲染与退出提速
+
+**Date**: 2026-07-05
+**Task**: 性能优化：终端渲染与退出提速
+**Branch**: `feat/performance-optimization-split-lag-exit-memory`
+
+### Summary
+
+优化子 Agent 转录渲染、退出清理和低内存模式：转录增量解析/隐藏门控、退出进度遮罩与 PTY 批量关闭、低内存模式下后台终端延迟释放 WebGL；更新相关规范、CHANGELOG 与功能清单。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8994fa5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

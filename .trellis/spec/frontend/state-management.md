@@ -127,6 +127,33 @@ export function migrateTerminalBackground(value: unknown): TerminalBackgroundSet
 - Each enum field: unknown literal gets default
 - Each compound: type-mismatched sub-field falls back per-field (others survive)
 
+### Pattern: Primitive persisted settings still need explicit load validation
+
+**Problem**: New primitive settings can look too small to migrate. If `load()` spreads raw `settings.json` entries without validating type, old/manual/corrupt values such as `"true"` or `1` can silently enter React components and break boolean guards.
+
+**Solution**: Add every persisted primitive to `Settings`, `DEFAULTS`, and the `load()` validation block. Booleans must use an explicit `typeof value === "boolean" ? value : DEFAULTS.key` fallback before the final `set()`.
+
+```typescript
+interface Settings {
+  lowMemoryMode: boolean;
+}
+
+const DEFAULTS: Settings = {
+  lowMemoryMode: false,
+  // ...
+};
+
+entries.lowMemoryMode =
+  typeof entries.lowMemoryMode === "boolean"
+    ? entries.lowMemoryMode
+    : DEFAULTS.lowMemoryMode;
+```
+
+**Tests Required**:
+
+- Run `npx tsc --noEmit` after adding the setting.
+- Manual smoke: toggle the setting, restart the app, and verify the value persists.
+
 ### Pattern: Legacy key remapping next to the migration
 
 When a field name or enum value changes between releases, keep a `LEGACY_*_MAP` next to its migrator and translate before validating.
@@ -288,6 +315,34 @@ const visiblePanes = collectPaneLeaves(visiblePaneTree);
 
 - Type-check that scoped rendering paths consume `visiblePaneTree` / `visibleSessions` instead of raw `paneTree` / `sessions`.
 - Manual desktop verification: scoped mode on/off restores the same tab layout; project empty state appears when the chosen project has no open terminals; hidden-project tabs survive scoped close operations.
+
+---
+
+### Pattern: Narrow selectors for always-mounted UI
+
+**Problem**: Zustand store actions such as terminal output/status updates and sub-agent transcript appends can fire at high frequency. A component mounted in a persistent toolbar/sidebar that calls a whole-store hook (for example `useTerminalStore()` without a selector) rerenders on every unrelated store change, even when none of the fields it displays changed.
+
+**Solution**: Always-mounted components must subscribe only to the fields they render or invoke. Use `useShallow` when selecting multiple fields, and keep popover/settings screens as the exception only when they are mounted on demand and not on a hot path.
+
+```typescript
+// Good: only rerenders when these fields change.
+const { sessions, activeSessionId } = useTerminalStore(
+  useShallow((s) => ({
+    sessions: s.sessions,
+    activeSessionId: s.activeSessionId,
+  }))
+);
+
+// Bad: rerenders on every terminalStore mutation, including transcript appends.
+const { sessions, activeSessionId } = useTerminalStore();
+```
+
+**Why**: This prevents background transcript/event traffic from stealing the main thread and making terminal typing or tab switching lag.
+
+**Tests Required**:
+
+- Type-check after selector changes.
+- Manual profiling for toolbar/sidebar components during high-frequency terminal or transcript updates; unrelated components should not rerender each tick.
 
 ---
 

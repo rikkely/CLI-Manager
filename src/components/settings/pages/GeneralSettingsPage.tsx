@@ -414,6 +414,7 @@ export function GeneralSettingsPage() {
   const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
+  const lowMemoryMode = useSettingsStore((s) => s.lowMemoryMode);
   const debugMode = useSettingsStore((s) => s.debugMode);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
@@ -901,19 +902,43 @@ export function GeneralSettingsPage() {
       </section>
 
       <section className="ui-surface-card rounded-2xl border border-border p-4">
-        <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-          <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-            <Text size="xs" c="var(--on-surface-variant)">
-              {t("settings.general.debugMode")}
-            </Text>
-            <Switch
-              color="cliPrimary"
-              checked={debugMode}
-              onChange={(event) => void update("debugMode", event.currentTarget.checked)}
-              aria-label={debugMode ? t("settings.general.disableDebugMode") : t("settings.general.enableDebugMode")}
-            />
-          </Group>
-        </Card>
+        <Stack gap="sm">
+          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+              <Box>
+                <Text size="xs" c="var(--on-surface-variant)">
+                  {t("settings.general.lowMemoryMode")}
+                </Text>
+                <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
+                  {t("settings.general.lowMemoryModeDescription")}
+                </Text>
+              </Box>
+              <Switch
+                color="cliPrimary"
+                checked={lowMemoryMode}
+                onChange={(event) => void update("lowMemoryMode", event.currentTarget.checked)}
+                aria-label={
+                  lowMemoryMode
+                    ? t("settings.general.disableLowMemoryMode")
+                    : t("settings.general.enableLowMemoryMode")
+                }
+              />
+            </Group>
+          </Card>
+          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+              <Text size="xs" c="var(--on-surface-variant)">
+                {t("settings.general.debugMode")}
+              </Text>
+              <Switch
+                color="cliPrimary"
+                checked={debugMode}
+                onChange={(event) => void update("debugMode", event.currentTarget.checked)}
+                aria-label={debugMode ? t("settings.general.disableDebugMode") : t("settings.general.enableDebugMode")}
+              />
+            </Group>
+          </Card>
+        </Stack>
       </section>
       <Dialog open={ccusageWslDialogOpen} onOpenChange={setCcusageWslDialogOpen}>
         <DialogContent className="max-w-[680px]">

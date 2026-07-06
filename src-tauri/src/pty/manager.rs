@@ -404,6 +404,40 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         ))
     }
 
+    /// 批量终止多个 PTY 根进程树：taskkill 原生支持多 /PID，单次调用避免
+    /// 退出时逐会话 spawn taskkill 造成的串行等待。仅作用于本应用拥有的 PTY 根 PID。
+    #[cfg(target_os = "windows")]
+    fn kill_process_trees(pids: &[u32]) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        if pids.is_empty() {
+            return Ok(());
+        }
+        let mut command = Command::new("taskkill");
+        for pid in pids {
+            command.arg("/PID").arg(pid.to_string());
+        }
+        let output = command
+            .args(["/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("taskkill start failed for pids {pids:?}: {e}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        Err(format!(
+            "taskkill failed for pids {pids:?}: status={}, detail={}",
+            output.status, detail
+        ))
+    }
+
     fn build_shell_args(
         shell: &str,
         env_vars: Option<&HashMap<String, String>>,
@@ -842,6 +876,68 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         Ok(())
     }
 
+    /// 应用退出路径的批量关闭（Windows）：单次写锁取出全部会话 → 收集 PID 一次性
+    /// taskkill 全部进程树 → 逐会话 child.kill() 兜底并释放 master → 统一 join reader。
+    /// 单会话 `close()`（手动关 Tab 路径）保持不变。
+    #[cfg(target_os = "windows")]
+    pub fn close_all(&self) -> Result<(), String> {
+        let sessions: Vec<(String, Arc<Mutex<PtySession>>)> = {
+            let mut map = self.sessions.write().unwrap();
+            map.drain().collect()
+        };
+        if sessions.is_empty() {
+            self.statuses.lock().unwrap().clear();
+            return Ok(());
+        }
+
+        let pids: Vec<u32> = sessions
+            .iter()
+            .filter_map(|(_, session_arc)| {
+                let session = session_arc.lock().unwrap();
+                let child = session.child.lock().unwrap();
+                child.process_id()
+            })
+            .collect();
+        if let Err(err) = Self::kill_process_trees(&pids) {
+            warn!(
+                "pty batch process tree kill failed, fallback to per-child kill: pids={:?}, error={}",
+                pids, err
+            );
+        }
+
+        // child.kill() 兜底 + 取出 reader handle；drop 最后一个 session Arc 释放 master，
+        // 让 reader 线程观察到 EOF（与单会话 close 的释放语义一致）。
+        let mut reader_handles: Vec<(String, JoinHandle<()>)> = Vec::with_capacity(sessions.len());
+        for (session_id, session_arc) in sessions {
+            let reader_handle = {
+                let mut session = session_arc.lock().unwrap();
+                {
+                    let mut child = session.child.lock().unwrap();
+                    let _ = child.kill();
+                }
+                session.reader_handle.take()
+            };
+            drop(session_arc);
+            if let Some(handle) = reader_handle {
+                reader_handles.push((session_id, handle));
+            } else {
+                info!("pty session killed (close_all): id={}", session_id);
+            }
+        }
+
+        let closed = reader_handles.len();
+        for (session_id, handle) in reader_handles {
+            let _ = handle.join();
+            info!("pty session killed (close_all): id={}", session_id);
+        }
+        info!("pty close_all: batch closed sessions, joined_readers={}", closed);
+
+        self.statuses.lock().unwrap().clear();
+        Ok(())
+    }
+
+    /// 非 Windows：无批量 taskkill 需求，维持逐个 close 的既有行为。
+    #[cfg(not(target_os = "windows"))]
     pub fn close_all(&self) -> Result<(), String> {
         let session_ids: Vec<String> = self.sessions.read().unwrap().keys().cloned().collect();
         for session_id in session_ids {

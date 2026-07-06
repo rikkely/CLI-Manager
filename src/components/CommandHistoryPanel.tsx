@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
 import { useTerminalStore } from "../stores/terminalStore";
@@ -20,7 +21,15 @@ export function CommandHistoryPanel({ compact = false, popoverSide = "bottom", t
   const { t, language } = useI18n();
   const [open, setOpen] = useState(false);
   const [panelLoading, setPanelLoading] = useState(false);
-  const { entries, searchQuery, setSearchQuery, fetchAll } = useCommandHistoryStore();
+  // 常驻终端工具栏组件：收窄订阅到实际用到的字段（action 引用稳定，shallow 比较不触发重渲染）。
+  const { entries, searchQuery, setSearchQuery, fetchAll } = useCommandHistoryStore(
+    useShallow((s) => ({
+      entries: s.entries,
+      searchQuery: s.searchQuery,
+      setSearchQuery: s.setSearchQuery,
+      fetchAll: s.fetchAll,
+    }))
+  );
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
 
   useEffect(() => {

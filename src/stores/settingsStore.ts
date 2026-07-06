@@ -215,6 +215,7 @@ interface Settings {
   shellRuntimeMonitoringEnabled: boolean;
   ccusageAnalyticsEnabled: boolean;
   ccusageUseWsl: boolean;
+  lowMemoryMode: boolean;
   terminalBackground: TerminalBackgroundSettings;
   hookPopupNotificationsEnabled: boolean;
   hookPopupAutoCloseEnabled: boolean;
@@ -312,6 +313,7 @@ const DEFAULTS: Settings = {
   shellRuntimeMonitoringEnabled: false,
   ccusageAnalyticsEnabled: false,
   ccusageUseWsl: false,
+  lowMemoryMode: false,
   terminalBackground: {
     enabled: false,
     imagePath: null,
@@ -740,6 +742,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.ccusageUseWsl === "boolean"
         ? entries.ccusageUseWsl
         : DEFAULTS.ccusageUseWsl;
+    entries.lowMemoryMode =
+      typeof entries.lowMemoryMode === "boolean"
+        ? entries.lowMemoryMode
+        : DEFAULTS.lowMemoryMode;
 
     entries.hookPopupNotificationsEnabled =
       typeof entries.hookPopupNotificationsEnabled === "boolean"

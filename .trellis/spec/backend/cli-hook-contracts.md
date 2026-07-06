@@ -17,6 +17,8 @@ Concrete contracts for Claude/Codex hook integration.
 - Frontend subscribe command: `subagent_transcript_subscribe({ key, transcriptPath, cwd, sessionId, agentId }) -> { path, initialContent }`.
 - Frontend store action on start/update: `openSubagentTranscript(payload)`.
 - Frontend store action on stop: `finishSubagentTranscript(payload)`.
+- Frontend transcript state: `SubagentTranscriptContent { content: string; ended: boolean; source?: SubagentTranscriptSource; truncatedBytes?: number; resetSeq: number }`.
+- Frontend transcript view prop: `SubagentTranscriptView({ sessionId, title, isVisible })`.
 - Agent tool fallback hook names: `AgentToolStart` (from PreToolUse with matcher Agent), `AgentToolStop` (from PostToolUse with matcher Agent).
 
 ### 3. Contracts
@@ -42,6 +44,12 @@ Concrete contracts for Claude/Codex hook integration.
   - `initialContent`: existing complete JSONL lines already present before tail startup. The frontend must append this immediately; the backend tail starts after the consumed offset to avoid duplicate output.
 - `SubagentStart` and `SubagentStop` must be installed/uninstalled together for each source. Claude `PreToolUse`/`PostToolUse` Agent/Task fallback hooks must be installed/uninstalled with the Claude subagent hooks.
 - Stop routing priority: match by `agentId`; if missing, close only when exactly one transcript pane belongs to the parent `tabId`.
+- Transcript rendering performance contract:
+  - Backend transcript tail emits complete JSONL lines only; the frontend may parse appended suffixes incrementally when `resetSeq` is unchanged and `content.length` only grows.
+  - Frontend increments `resetSeq` whenever `reset=true` or content is front-trimmed. A `resetSeq` change is the only signal that consumers must discard parse cache and rebuild from the retained tail.
+  - A hidden transcript pane (`isVisible=false`) must not subscribe to or parse `content`; it may keep rendering its cached snapshot and must catch up once visible again.
+  - The transcript view must cap rendered message rows (currently 300) and display an omitted-count marker rather than rendering an unbounded list.
+  - `MarkdownContent` used for transcript messages must remain memo-safe; do not pass fresh object props that defeat memoization on every append.
 
 ### 4. Validation & Error Matrix
 
@@ -52,6 +60,8 @@ Concrete contracts for Claude/Codex hook integration.
 - WSL derivation requested but `wsl.exe` cannot return `$HOME` -> subscription fails and the frontend keeps the degraded transcript source state.
 - Child transcript already has complete lines at subscribe time -> backend returns them in `initialContent` and starts tailing from that offset; an incomplete final line must wait for completion before emit.
 - Missing or ambiguous stop target -> frontend does nothing; it must not guess and close multiple child panes.
+- `appendSubagentTranscript` receives an unknown key -> ignore it; multi-window broadcasts must not create stray transcript state.
+- Appended transcript content exceeds the retention cap -> retain the latest tail, increment `truncatedBytes`, emit the existing OOM diagnostic, and increment `resetSeq` so view caches rebuild safely.
 
 ### 5. Good/Base/Bad Cases
 
@@ -61,11 +71,14 @@ Concrete contracts for Claude/Codex hook integration.
 - Good: Claude in WSL emits `ToolStop` with `agentId`, parent `transcriptPath`, UNC `cwd`, and no `wslDistroName`; frontend opens/updates a degraded child pane, derives the distro from `cwd`, and backend subscribes to the derived child path without rendering the parent transcript as child output.
 - Base: Claude `SubagentStart` includes `agent_transcript_path`; frontend uses it unchanged.
 - Good: `SubagentStop` includes `agent_id`; frontend marks the pane ended and closes it after the grace delay.
+- Good: a hidden child transcript pane receives 1MB of JSONL append traffic; the store retains content, but the hidden view does not re-parse or re-render until it becomes visible.
+- Good: a child transcript grows past the rendered row cap; the UI renders the newest rows plus an omitted-count marker instead of thousands of DOM nodes.
 - Good: Claude hook stdin includes `effort.level = "high"`; the bridge emits `reasoningEffort: "high"` and the current terminal's stats card shows the effort even when the JSONL history usage lacks `reasoning_effort`.
 - Bad: `SubagentStop` calls `finishSubagentTranscript` before awaiting the late child transcript subscription; the pane can close with empty output.
 - Bad: A new hook event is installed but not added to the bridge whitelist; the hook silently posts but the bridge rejects it.
 - Bad: `SubagentStop` has no `agent_id` while multiple child panes share one parent; frontend must not close all of them.
 - Bad: deriving Claude effort from the model name or global settings when the current hook payload/env has no effort; concurrent sessions can use different `/effort` values.
+- Bad: parsing the full retained transcript and re-rendering every Markdown message on every 250ms tail append; this blocks terminal typing and tab switching.
 
 ### 6. Tests Required
 
@@ -77,6 +90,7 @@ Concrete contracts for Claude/Codex hook integration.
 - Rust compile check must pass after bridge payload or command signature changes.
 - Rust unit test: `hook_client` extracts `reasoningEffort` from Claude `effort.level`.
 - TypeScript type-check must pass after `CliHookPayload` field changes.
+- Frontend regression test or manual profiling: while a child transcript is hidden and appends continue, React render count/CPU for `SubagentTranscriptView` should not grow with append frequency; when shown again, it catches up from retained content.
 
 ### 7. Wrong vs Correct
 
@@ -98,6 +112,24 @@ if (source.kind === "child-jsonl") {
 } else {
   showDegradedSourceState(source.kind, source.reason);
 }
+```
+
+#### Wrong
+
+```tsx
+// Every append reparses the whole retained JSONL and rerenders every Markdown row,
+// including panes hidden by display:none.
+const transcript = useTerminalStore((s) => s.subagentTranscripts[sessionId]);
+const messages = useMemo(() => parseTranscript(transcript.content), [transcript.content]);
+```
+
+#### Correct
+
+```tsx
+// Hidden panes do not subscribe to high-frequency content. Visible panes parse
+// only the appended suffix unless resetSeq changed.
+const transcript = useTerminalStore((s) => (isVisible ? s.subagentTranscripts[sessionId] : undefined));
+const messages = useIncrementalTranscriptCache(transcript?.content, transcript?.resetSeq);
 ```
 
 ## Scenario: System-Level Hook Notifications

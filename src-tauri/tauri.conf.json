@@ -5,7 +5,7 @@
   "identifier": "com.cli-manager.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -20,8 +20,8 @@
         "minWidth": 350,
         "minHeight": 600,
         "backgroundColor": "#1a1b26",
-        "visible": false,
-        "dragDropEnabled": true
+        "visible": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {

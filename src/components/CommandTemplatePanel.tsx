@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { useTemplateStore } from "../stores/templateStore";
 import { useTerminalStore } from "../stores/terminalStore";
@@ -135,7 +136,11 @@ export function CommandTemplatePanel({ popoverSide = "bottom", toneClassName = "
     deleteSessionTemplate,
     pruneSessionTemplates,
   } = useTemplateStore();
-  const { sessions, activeSessionId } = useTerminalStore();
+  // 常驻终端工具栏组件：收窄订阅到实际用到的字段，避免 terminalStore 高频变化
+  // （如子 Agent 转录每 250ms 追加）触发整店订阅重渲染。
+  const { sessions, activeSessionId } = useTerminalStore(
+    useShallow((s) => ({ sessions: s.sessions, activeSessionId: s.activeSessionId }))
+  );
   const { projects } = useProjectStore();
   const [open, setOpen] = useState(false);
   const [showForm, setShowForm] = useState(false);

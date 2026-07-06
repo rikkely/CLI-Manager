@@ -232,7 +232,16 @@ function buildTerminalTabHoverInfo(session: TerminalSession, project?: Project):
       sessionId: session.cliSessionId?.trim() || session.id,
     };
   }
-
+  if (session.kind === "synced-history") {
+    return {
+      name: session.title.trim() || "同步记录",
+      cli: "Synced History",
+      shell: formatShellLabel(session.shell ?? project?.shell),
+      project: project?.name.trim() || session.syncedHistory?.title || "\u672a\u7ed1\u5b9a\u9879\u76ee",
+      path: session.syncedHistory?.cwd || session.cwd?.trim() || project?.path.trim() || "-",
+      sessionId: session.syncedHistory?.key || session.id,
+    };
+  }
   return {
     name: session.title.trim() || "Terminal",
     cli: formatCliToolLabel(project?.cli_tool),
@@ -1297,7 +1306,11 @@ function PaneLeafView({
                 onClose={() => onCloseSessions([session.id])}
               />
             ) : session.kind === "subagent-transcript" ? (
-              <SubagentTranscriptView sessionId={session.id} title={session.title} />
+              <SubagentTranscriptView
+                sessionId={session.id}
+                title={session.title}
+                isVisible={!historyActive && isLayoutVisible && session.id === pane.activeSessionId}
+              />
             ) : (
               <XTermTerminal
                 sessionId={session.id}

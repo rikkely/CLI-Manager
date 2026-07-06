@@ -200,6 +200,43 @@ import ReactMarkdown from "react-markdown";
 
 **Tests**: Run `npx tsc --noEmit` and `npm run build`; manually inspect the Markdown style preview in Settings > About in both default and terminal variants. If the change targets a terminal-only caller such as a transcript or file preview, also verify that scoped caller still matches the active terminal theme while the other `variant="terminal"` callers keep their prior appearance.
 
+### Convention: Hidden terminal WebGL cleanup releases renderer only
+
+**What**: In `XTermTerminal`, low-memory cleanup for hidden terminals may dispose only the `WebglAddon` after the configured hidden delay. It must not dispose the xterm `Terminal`, PTY listener, fit/search addons, scrollback buffer, active write queue, or input state.
+
+**Why**: The goal is to release WebView2 GPU resources while preserving the live terminal session. Disposing the terminal component itself would force replay/recreation, risk lost output/input, and can make tab switching feel like a terminal reload.
+
+**Correct**:
+
+```tsx
+if (!isVisible && lowMemoryMode) {
+  webglDisposeTimerRef.current = window.setTimeout(() => {
+    if (isVisibleRef.current) return;
+    webglAddonRef.current?.dispose();
+    webglAddonRef.current = null;
+    needsViewportRefreshRef.current = true;
+  }, 10_000);
+}
+```
+
+**Wrong**:
+
+```tsx
+// This kills the renderer and the terminal session UI state.
+terminal.dispose();
+terminalRef.current = null;
+```
+
+**Contracts**:
+
+- Clear the hidden-WebGL timer when the terminal becomes visible again and during component unmount.
+- Re-check `isVisibleRef.current` inside the timer callback before disposing.
+- Recreate WebGL only while visible and only when the existing theme/background conditions allow it (not transparent, not light theme).
+- After recreating WebGL, schedule a fit/viewport refresh so the existing xterm buffer repaints without reloading terminal history.
+- The initial terminal creation effect must not add `lowMemoryMode` as a dependency that recreates the whole terminal when the setting toggles.
+
+**Tests**: Run `npx tsc --noEmit`. Manually enable low memory mode, switch away from a terminal for more than 10 seconds, verify the session keeps running, then switch back and confirm the current viewport repaints without restarting the shell or losing scrollback.
+
 ### Convention: Session history transcripts use a history render layer before Markdown
 
 **What**: When rendering Claude/Codex session history message bodies, use `src/components/history/SessionTranscriptContent.tsx` instead of rendering raw message content directly with `MarkdownContent`. `SessionTranscriptContent` may detect session-log structures such as XML-ish blocks, workflow-state blocks, Git status lines, long lists, paths, commit hashes, and status tokens; ordinary Markdown content must still delegate to `HistoryMarkdownContent` / shared `MarkdownContent`.

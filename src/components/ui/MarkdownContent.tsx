@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -380,7 +380,8 @@ const makeComponents = (
   };
 };
 
-export function MarkdownContent({
+// props 全为原始值，memo 浅比较即可：调用方（转录/历史）高频重渲染时跳过重复 Markdown 解析。
+export const MarkdownContent = memo(function MarkdownContent({
   content,
   query = "",
   compact = false,
@@ -411,4 +412,4 @@ export function MarkdownContent({
       </Markdown>
     </div>
   );
-}
+});

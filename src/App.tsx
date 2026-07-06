@@ -11,9 +11,8 @@ import { TerminalTabs } from "./components/TerminalTabs";
 import { CommandPalette } from "./components/CommandPalette";
 import type { LucideIcon } from "lucide-react";
 import type { SettingsTab } from "./components/SettingsModal";
-const SettingsModal = lazy(() =>
-  import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }))
-);
+const loadSettingsModal = () => import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }));
+const SettingsModal = lazy(loadSettingsModal);
 const StatsPanel = lazy(() =>
   import("./components/stats/StatsPanel").then((module) => ({ default: module.StatsPanel }))
 );
@@ -22,12 +21,16 @@ const CcusageStatsPanel = lazy(() =>
 );
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { CloseConfirmDialog } from "./components/CloseConfirmDialog";
+import { ExitProgressOverlay, type ExitPhase } from "./components/ExitProgressOverlay";
+import { AppFailureState } from "./components/AppFailureState";
+import { ExternalSessionSyncDialog } from "./components/ExternalSessionSyncDialog";
 import { CircleAlert, CircleCheck, Info, ShieldAlert, X } from "./components/icons";
 import { useSettingsStore, type HookEventType } from "./stores/settingsStore";
 import { useProjectStore } from "./stores/projectStore";
 import { useSessionStore } from "./stores/sessionStore";
 import { useSyncStore } from "./stores/syncStore";
 import { useHistoryStore } from "./stores/historyStore";
+import { useExternalSessionSyncStore } from "./stores/externalSessionSyncStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
@@ -53,8 +56,13 @@ let firstScreenShown = false;
 let startupBaseReady = false;
 let deferredStartupTasksStarted = false;
 let startupUpdateChecked = false;
+let settingsModalPreloadStarted = false;
 const COMPACT_WINDOW_WIDTH = 350;
 const WINDOW_MIN_HEIGHT = 600;
+// 关闭期自动同步上限：封顶最坏退出时间（WebDAV 客户端本身有 30s HTTP 超时）。
+const CLOSE_SYNC_TIMEOUT_MS = 8000;
+// 退出遮罩上 conflict/error 提示的停留时长，之后继续退出流程。
+const EXIT_NOTICE_DISPLAY_MS = 1200;
 const IN_TAURI = isTauri();
 const CLAUDE_HOOK_TOAST_PREFIX = "claude-hook-notification";
 const SYSTEM_NOTIFICATION_ACTION_EVENT = "system-notification-action";
@@ -63,6 +71,15 @@ type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled
 
 function isLikelyMacOs() {
   return typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+}
+
+function preloadSettingsModal(): void {
+  if (settingsModalPreloadStarted) return;
+  settingsModalPreloadStarted = true;
+  void loadSettingsModal().catch((err) => {
+    settingsModalPreloadStarted = false;
+    logWarn("Failed to preload settings modal", err);
+  });
 }
 
 interface HookSettingsStatusPayload {
@@ -311,6 +328,8 @@ function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): vo
   deferredStartupTasksStarted = true;
 
   window.setTimeout(() => {
+    window.setTimeout(preloadSettingsModal, 250);
+
     void (async () => {
       await useProjectStore.getState().refreshProjectDiagnostics().catch((err) => {
         logWarn("Failed to refresh deferred project diagnostics", err);
@@ -347,6 +366,17 @@ function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): vo
         });
       })();
     }
+
+    window.setTimeout(() => {
+      const startExternalSessionSync = () => {
+        useExternalSessionSyncStore.getState().startMonitor();
+      };
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(startExternalSessionSync, { timeout: 3000 });
+      } else {
+        startExternalSessionSync();
+      }
+    }, 5000);
   }, 0);
 }
 
@@ -377,15 +407,19 @@ function App() {
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [statsOpen, setStatsOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [exitPhase, setExitPhase] = useState<ExitPhase | null>(null);
+  const [exitNotice, setExitNotice] = useState<string | null>(null);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
   const [terminalScopeProjectId, setTerminalScopeProjectId] = useState<string | null>(null);
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
+  const [initError, setInitError] = useState<string | null>(null);
   const terminalFullscreenMaximizedRef = useRef(false);
   const restoreWindowWidthRef = useRef<number | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
 
   const handleOpenSettings = useCallback((tab?: SettingsTab) => {
     const nextTab = tab ?? lastSettingsTab;
+    preloadSettingsModal();
     setSettingsInitialTab(nextTab);
     if (tab && tab !== useSettingsStore.getState().lastSettingsTab) {
       void updateSetting("lastSettingsTab", tab);
@@ -431,16 +465,34 @@ function App() {
     return () => window.removeEventListener("keydown", handleF12, true);
   }, [debugMode]);
 
+  // 关闭期自动同步：8s 封顶避免网络慢时退出无限等待；conflict/error 不再 toast
+  // （窗口即将销毁看不到），改为退出遮罩上短暂提示后继续退出，并记录日志。
   const runCloseAutoSync = useCallback(async () => {
-    const result = await useSyncStore.getState().runAutoSync("close");
-    if (result === "conflict") {
-      toast.warning(t("notifications.autoSync.exitConflict"), {
-        description: t("notifications.autoSync.conflictDescription"),
-      });
-    } else if (result === "error") {
-      toast.error(t("notifications.autoSync.exitFailed"), {
-        description: t("notifications.autoSync.failedDescription"),
-      });
+    const showExitNotice = async (message: string) => {
+      setExitNotice(message);
+      await new Promise((resolve) => setTimeout(resolve, EXIT_NOTICE_DISPLAY_MS));
+    };
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timeoutId = setTimeout(() => resolve("timeout"), CLOSE_SYNC_TIMEOUT_MS);
+    });
+    try {
+      const result = await Promise.race([useSyncStore.getState().runAutoSync("close"), timeoutPromise]);
+      if (result === "timeout") {
+        logWarn("Close auto sync timed out, continuing exit", { timeoutMs: CLOSE_SYNC_TIMEOUT_MS });
+        await showExitNotice(t("app.exitProgress.syncTimeout"));
+        return;
+      }
+      if (result === "conflict" || result === "error") {
+        logWarn(`Close auto sync ended with ${result}, continuing exit`);
+        await showExitNotice(result === "conflict" ? t("app.exitProgress.syncConflict") : t("app.exitProgress.syncFailed"));
+      }
+    } catch (err) {
+      logWarn("Close auto sync threw, continuing exit", err);
+      await showExitNotice(t("app.exitProgress.syncFailed"));
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }, [t]);
 
@@ -609,13 +661,23 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     const init = async () => {
+      setInitError(null);
+      startupBaseReady = false;
+
       // 1. 先加载设置，再并行加载依赖设置路径的子系统
       await loadSettings();
+
       await Promise.all([
-        useSyncStore.getState().load(),
-        useSessionStore.getState().load(),
+        useSyncStore.getState().load().catch((err) => {
+          logWarn("Failed to load sync store during startup", err);
+        }),
+        useSessionStore.getState().load().catch((err) => {
+          logWarn("Failed to load persisted sessions during startup", err);
+        }),
       ]);
+
       void useModelPricingStore.getState().load().catch((err) => {
         logWarn("Failed to preload model pricing", err);
       });
@@ -626,14 +688,27 @@ function App() {
       await useWorktreeStore.getState().markMissingWorktrees();
 
       // 3. 启动时不恢复历史终端，避免重建 PTY 并重跑 startupCmd。
-      await useSessionStore.getState().clear();
+      await useSessionStore.getState().clear().catch((err) => {
+        logWarn("Failed to clear restored sessions during startup", err);
+      });
 
       startupBaseReady = true;
-      runDeferredStartupTasks(handleOpenSettings);
+      if (!cancelled) {
+        runDeferredStartupTasks(handleOpenSettings);
+      }
     };
     init().catch((err) => {
+      const message = err instanceof Error ? err.stack || err.message : String(err);
+      logWarn("Application init failed", err);
+      if (!cancelled) {
+        setInitError(message);
+      }
       toast.error(t("notifications.app.initFailed"), { description: String(err) });
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [handleOpenSettings, loadSettings, t]);
 
   useEffect(() => {
@@ -820,7 +895,13 @@ function App() {
 
   const runExitCleanup = useCallback(async (source: string) => {
     try {
+      // 全程保持窗口可见并显示进度遮罩；destroy 前不复位 exitPhase。
+      flushSync(() => {
+        setExitNotice(null);
+        setExitPhase("syncing");
+      });
       await runCloseAutoSync();
+      setExitPhase("closing");
       try {
         await invoke("pty_close_all");
       } catch (err) {
@@ -974,6 +1055,20 @@ function App() {
     };
   }, [handleOpenSettings, resolvedTheme, viewMode]);
 
+  if (initError) {
+    return (
+      <AppFailureState
+        title={t("app.init.failedTitle")}
+        description={t("app.init.failedDescription")}
+        detail={initError}
+        primaryAction={{
+          label: t("common.retry"),
+          onClick: () => window.location.reload(),
+        }}
+      />
+    );
+  }
+
   if (!settingsLoaded) {
     return <div className="ui-workspace-shell flex h-screen flex-col" />;
   }
@@ -1017,6 +1112,7 @@ function App() {
         </div>
       )}
       <CommandPalette />
+      <ExternalSessionSyncDialog />
       <Suspense fallback={null}>
         {settingsEverOpened && (
             <SettingsModal
@@ -1046,6 +1142,7 @@ function App() {
         onExit={handleCloseDialogExit}
         onClose={() => setCloseDialogOpen(false)}
       />
+      {exitPhase && <ExitProgressOverlay phase={exitPhase} notice={exitNotice} />}
       <Toaster
         theme={resolvedTheme}
         position="bottom-right"

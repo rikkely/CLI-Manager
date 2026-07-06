@@ -119,6 +119,7 @@ window.addEventListener("keydown", (event) => {
 }
 ```
 
+
 > CLI-Manager 桌面应用启动期的可执行约束。
 
 ---
@@ -180,3 +181,75 @@ window.addEventListener("keydown", (event) => {
 
 - 统一复用 `show_main_window(...)`。
 - 在 `tauri::Builder::default()` 后立刻注册单实例插件，再继续其他插件和 `setup(...)`。
+
+## Scenario: App exit cleanup feedback
+
+### 1. Scope / Trigger
+
+- Trigger: window close, tray quit, or close-confirm dialog chooses exit while terminal PTYs and optional auto-sync may still be active.
+- This is cross-layer because React drives exit UX, WebDAV sync may cross the network, and Rust owns PTY process cleanup.
+
+### 2. Signatures
+
+- Frontend close behavior setting: `settingsStore.closeBehavior: "minimize" | "exit" | "ask"`.
+- Frontend cleanup entry: `runExitCleanup(source: string) -> Promise<void>` in `src/App.tsx`.
+- Frontend overlay state: `exitPhase: "syncing" | "closing" | null`.
+- Frontend overlay component: `ExitProgressOverlay({ phase, notice })`.
+- Backend command during exit: `pty_close_all() -> Result<(), String>`.
+
+### 3. Contracts
+
+- If `closeBehavior="minimize"`, close requests hide the window and must not run exit cleanup.
+- All true-exit paths (tray quit, `closeBehavior="exit"`, and close dialog confirm exit) must enter `runExitCleanup`.
+- `runExitCleanup` must show an exit overlay before starting potentially slow work; the app must not appear frozen while sync or PTY cleanup runs.
+- Close-phase auto-sync must be bounded by a frontend timeout (currently 8 seconds). Timeout, conflict, or error must show a short overlay notice, log a warning, and continue exit cleanup.
+- `pty_close_all` runs after the sync phase and before session metadata clearing / window destroy.
+- Exit-path notices should not be normal toast notifications because the app is about to destroy the window.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Auto-sync skipped or succeeds | Advance from `syncing` to `closing`. |
+| Auto-sync returns conflict | Show conflict notice briefly, log warning, then continue exit. |
+| Auto-sync returns error | Show failure notice briefly, log warning, then continue exit. |
+| Auto-sync does not settle before timeout | Show timeout notice briefly, log warning, then continue exit. |
+| `pty_close_all` fails | Log warning and continue to clear session state / destroy window. |
+| Exit requested twice while cleanup is active | Do not start independent duplicate cleanups; keep the existing overlay path authoritative. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: user confirms exit and immediately sees “syncing/closing” progress feedback instead of a 3-5 second unresponsive window.
+- Good: slow WebDAV close sync times out at the frontend limit and the app still exits.
+- Base: no sync configured; overlay quickly transitions to terminal closing and exits.
+- Bad: awaiting WebDAV sync and serial PTY cleanup before showing any UI feedback.
+- Bad: reporting close-sync failures only via toast while destroying the window.
+
+### 6. Tests Required
+
+- Frontend type-check: `npx tsc --noEmit` after changing exit UI or cleanup logic.
+- Backend checks: `cd src-tauri && cargo check` and `cd src-tauri && cargo test` after changing `pty_close_all`.
+- Manual desktop verification: tray quit, `closeBehavior="exit"`, and close dialog confirm exit all show the overlay and eventually exit.
+- Manual slow-sync verification: simulate slow/failed WebDAV close sync and confirm timeout/conflict/error notices appear briefly before exit continues.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```tsx
+await runCloseAutoSync();
+await invoke("pty_close_all");
+await getCurrentWindow().destroy();
+```
+
+#### Correct
+
+```tsx
+setExitPhase("syncing");
+const result = await withTimeout(runCloseAutoSync(), CLOSE_SYNC_TIMEOUT_MS);
+if (result !== "success" && result !== "skipped") await showExitNotice(result);
+
+setExitPhase("closing");
+await invoke("pty_close_all").catch(logWarn);
+await getCurrentWindow().destroy();
+```

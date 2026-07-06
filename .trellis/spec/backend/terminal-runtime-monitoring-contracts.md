@@ -337,6 +337,9 @@ pub fn close_all(&self) -> Result<(), String>
 - Windows cleanup must target the PTY root PID returned by `portable_pty::Child::process_id()` and terminate that process tree.
 - Windows cleanup must not scan by process name (`codex.exe`, `bash.exe`, etc.); only the owned PTY process tree is eligible.
 - Non-Windows cleanup keeps the existing direct child kill behavior unless a platform-specific process-tree mechanism is explicitly added later.
+- On Windows, `close_all` should batch process-tree termination into a single `taskkill /F /T /PID <pid> ...` call for all known PTY root PIDs, then still call each child handle's direct kill as a fallback.
+- `close_all` must not hold the global sessions map lock while running `taskkill` or joining reader threads. Snapshot/remove sessions first, then perform blocking cleanup.
+- `close()` remains the per-session path; do not make tab close wait for unrelated sessions.
 
 ### 4. Validation & Error Matrix
 
@@ -346,14 +349,17 @@ pub fn close_all(&self) -> Result<(), String>
 | Windows child PID is available | Run process-tree termination for that PID, then still call child kill as a fallback. |
 | Windows process-tree termination fails | Log a warning and fall back to `portable_pty::Child::kill()`; do not block tab close. |
 | Windows child PID is missing | Skip tree termination and use direct child kill. |
-| `pty_close_all` runs while sessions are active | Snapshot session ids first, then close each session through the same `close()` path. |
+| `pty_close_all` runs while sessions are active on Windows | Remove/snapshot all sessions, batch owned root PIDs into one `taskkill /F /T` call, then direct-kill each child and join readers. |
+| `pty_close_all` runs while sessions are active on non-Windows | Keep the existing per-session close behavior unless a platform-specific tree cleanup is added. |
 | App exit cleanup fails to close PTYs | Log the error and continue the exit path so the app does not hang. |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: closing a Codex terminal launched through Git Bash removes the shell and its `codex.exe` descendants.
+- Good: app exit with many active terminals issues one scoped Windows `taskkill` for all owned PTY root PIDs instead of spawning one `taskkill` per session.
 - Base: closing an already-exited session is harmless; stale status entries are removed.
 - Bad: killing all system processes named `codex.exe` or `bash.exe` may terminate work started outside CLI-Manager and is forbidden.
+- Bad: `close_all` loops through `close()` on Windows and spawns N `taskkill` processes serially, causing visible app-exit lag.
 
 ### 6. Tests Required
 
@@ -361,6 +367,7 @@ pub fn close_all(&self) -> Result<(), String>
 - Frontend checks: `npx tsc --noEmit` or `npm run build` when the exit path changes.
 - Manual Windows verification: open a Git Bash/Codex terminal, close its tab, and confirm the associated process tree no longer remains in Task Manager.
 - Manual Windows verification: exit the app with active PTY sessions and confirm owned PTY child processes are gone.
+- Regression check: app exit with multiple active PTYs should not spawn one `taskkill` per session on Windows; the full-exit cleanup path should remain bounded by one batch command plus reader joins.
 
 ### 7. Wrong vs Correct
 
@@ -374,6 +381,9 @@ taskkill /IM codex.exe /F
 #### Correct
 
 ```rust
-// Cleanup is scoped to the PTY root process owned by this session.
+// Per-session cleanup is scoped to the PTY root process owned by this session.
 taskkill /PID <pty-root-pid> /T /F
+
+// Full app exit batches all owned PTY roots once, then direct-kills children as fallback.
+taskkill /F /T /PID <pty-root-1> /PID <pty-root-2>
 ```

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo } from "react";
+import { useState, useEffect, useRef, memo, type PointerEvent as ReactPointerEvent } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -8,6 +8,12 @@ import { Folder, Terminal, Play, ChevronRight, AlertTriangle } from "../icons";
 import { VendorIcon, inferVendor } from "../VendorIcon";
 import { WorktreeIcon } from "../WorktreeIcon";
 import { useI18n } from "../../lib/i18n";
+
+function preventSecondaryPointerFocus(event: ReactPointerEvent<HTMLElement>) {
+  if (event.button !== 2) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
 
 function InlineRename({ initial, onConfirm, onCancel }: { initial: string; onConfirm: (name: string) => void; onCancel: () => void }) {
   const [value, setValue] = useState(initial);
@@ -151,6 +157,7 @@ function TreeNodeItemImpl({
         aria-level={depth + 1}
         aria-selected={isSelected || isMultiSelected}
         tabIndex={focusedNodeKey === treeKey ? 0 : -1}
+        onPointerDownCapture={preventSecondaryPointerFocus}
         onFocus={() => onFocusNode(treeKey)}
       >
         <div
@@ -161,6 +168,9 @@ function TreeNodeItemImpl({
           data-status={status ?? "idle"}
           data-invalid={pathInvalid ? "true" : "false"}
           style={{ paddingLeft, paddingRight: compact ? 8 : 10 }}
+          onMouseDown={(e) => {
+            if (e.button === 2) e.preventDefault();
+          }}
           onClick={(e) => actions.onSelectProject(e, p)}
           onDoubleClick={() => actions.onOpenProject(p)}
           onContextMenu={(e) => actions.onContextMenuProject(e, p)}
@@ -271,6 +281,7 @@ function TreeNodeItemImpl({
       aria-expanded={isOpen}
       aria-selected={false}
       tabIndex={focusedNodeKey === treeKey ? 0 : -1}
+      onPointerDownCapture={preventSecondaryPointerFocus}
       onFocus={() => onFocusNode(treeKey)}
     >
       <div className={`ui-tree-group-shell ${compact ? "my-0.5" : "my-1"}`} style={{ marginLeft: depth === 0 ? 0 : 2 }}>
@@ -283,6 +294,9 @@ function TreeNodeItemImpl({
           data-open={isOpen ? "true" : "false"}
           data-drop-target={isOverInto ? "true" : "false"}
           style={{ paddingLeft, paddingRight: compact ? 8 : 10, color: "var(--text-secondary)" }}
+          onMouseDown={(e) => {
+            if (e.button === 2) e.preventDefault();
+          }}
           onClick={() => {
             if (!forceExpanded) actions.toggleCollapsed(g.id);
           }}
