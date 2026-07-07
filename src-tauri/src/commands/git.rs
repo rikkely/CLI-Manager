@@ -2185,6 +2185,22 @@ fn split_remote_branch(branch: &str) -> Option<(&str, &str)> {
     (!remote.is_empty() && !name.is_empty()).then_some((remote, name))
 }
 
+fn run_checkout_branch(project_path: &str, branch: &str, remote: bool) -> Result<String, String> {
+    if remote {
+        if split_remote_branch(branch).is_none() {
+            return Err("invalid_branch".to_string());
+        }
+        run_git_cli(project_path, &["checkout", "--track", branch])
+    } else {
+        run_git_cli(project_path, &["checkout", branch])
+    }
+}
+
+fn is_no_stash_created(output: &str) -> bool {
+    let s = output.to_lowercase();
+    s.contains("no local changes to save") || s.contains("no local changes")
+}
+
 #[tauri::command]
 pub async fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo>, String> {
     tokio::task::spawn_blocking(move || {
@@ -2272,14 +2288,44 @@ pub async fn git_checkout_branch(
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         validate_branch_name_with_git(&project_path, &branch)?;
-        if remote {
-            if split_remote_branch(&branch).is_none() {
-                return Err("invalid_branch".to_string());
-            }
-            run_git_cli(&project_path, &["checkout", "--track", &branch])
-        } else {
-            run_git_cli(&project_path, &["checkout", &branch])
+        run_checkout_branch(&project_path, &branch, remote)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_smart_checkout_branch(
+    project_path: String,
+    branch: String,
+    remote: bool,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        validate_branch_name_with_git(&project_path, &branch)?;
+
+        let stash_message = format!("CLI-Manager smart checkout: {branch}");
+        let stash_output = run_git_cli(
+            &project_path,
+            &["stash", "push", "-u", "-m", &stash_message],
+        )
+        .map_err(|e| format!("smart_checkout_stash_failed: {e}"))?;
+        if is_no_stash_created(&stash_output) {
+            return Err("smart_checkout_stash_empty".to_string());
         }
+
+        if let Err(checkout_err) = run_checkout_branch(&project_path, &branch, remote) {
+            let restore_result = run_git_cli(&project_path, &["stash", "apply", "stash@{0}"]);
+            return match restore_result {
+                Ok(_) => Err(format!("smart_checkout_checkout_failed: {checkout_err}")),
+                Err(restore_err) => Err(format!(
+                    "smart_checkout_restore_failed: {checkout_err}; restore: {restore_err}"
+                )),
+            };
+        }
+
+        run_git_cli(&project_path, &["stash", "apply", "stash@{0}"])
+            .map(|out| format!("{stash_output}\n{out}").trim().to_string())
+            .map_err(|e| format!("smart_checkout_apply_conflict: {e}"))
     })
     .await
     .map_err(|e| format!("task_failed: {e}"))?
@@ -2450,7 +2496,7 @@ mod tests {
     use super::{
         build_reverse_hunk_patch, build_reverse_lines_patch, build_worktree_snapshot,
         collect_git_changes_from_repo, git_fork_worktree_snapshot, git_restore_worktree_snapshot,
-        is_nested_repo_entry, parse_wsl_git_status, parse_wsl_numstat,
+        is_nested_repo_entry, is_no_stash_created, parse_wsl_git_status, parse_wsl_numstat,
         remove_untracked_snapshot_file, scan_git_repository_paths, should_skip_diff_line_stats,
         validate_branch_name, validate_repo_relative_path, validate_snapshot_branch_name,
         GIT_DIFF_LINE_STATS_STATUS_LIMIT,
@@ -2605,6 +2651,15 @@ mod tests {
             "invalid_branch"
         );
         assert_eq!(validate_branch_name("bad/").unwrap_err(), "invalid_branch");
+    }
+
+    #[test]
+    fn detects_no_stash_created_output() {
+        assert!(is_no_stash_created("No local changes to save"));
+        assert!(is_no_stash_created("no local changes"));
+        assert!(!is_no_stash_created(
+            "Saved working directory and index state"
+        ));
     }
 
     #[test]

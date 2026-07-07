@@ -83,6 +83,7 @@ interface GitStore {
   push: () => Promise<string>;
   fetchRemote: () => Promise<string>;
   checkoutBranch: (branch: string, remote: boolean) => Promise<string>;
+  smartCheckoutBranch: (branch: string, remote: boolean) => Promise<string>;
   createBranch: (branch: string) => Promise<string>;
   /** 按策略拉取（merge/rebase/ff-only）。分叉时 merge/rebase 可直接拉取，冲突抛 pull_conflict。 */
   pull: (strategy: GitPullStrategy) => Promise<string>;
@@ -718,6 +719,34 @@ export const useGitStore = create<GitStore>((set, get) => ({
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`[GitStore] 切换分支失败:`, err);
+      set({ error: errorMsg });
+      await get().fetchChanges(currentProjectPath, true);
+      await get().fetchBranchStatus(currentProjectPath);
+      await get().fetchBranches(currentProjectPath, true);
+      throw err;
+    } finally {
+      set({ checkingOutBranch: false });
+    }
+  },
+
+  smartCheckoutBranch: async (branch: string, remote: boolean) => {
+    const { currentProjectPath } = get();
+    if (!currentProjectPath) throw new Error("no_project");
+    set({ checkingOutBranch: true, error: null });
+    try {
+      const out = await invoke<string>("git_smart_checkout_branch", {
+        projectPath: effectiveRepoPath(),
+        branch,
+        remote,
+      });
+      await get().fetchChanges(currentProjectPath, true);
+      await get().fetchBranchStatus(currentProjectPath);
+      await get().fetchBranches(currentProjectPath, true);
+      await get().fetchRepositories(currentProjectPath);
+      return out;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[GitStore] Smart Checkout 失败:`, err);
       set({ error: errorMsg });
       await get().fetchChanges(currentProjectPath, true);
       await get().fetchBranchStatus(currentProjectPath);

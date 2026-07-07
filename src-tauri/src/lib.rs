@@ -510,6 +510,7 @@ pub fn run() {
             commands::git::git_list_branches,
             commands::git::git_fetch,
             commands::git::git_checkout_branch,
+            commands::git::git_smart_checkout_branch,
             commands::git::git_create_branch,
             commands::git::git_push,
             commands::git::git_pull,

@@ -46,6 +46,11 @@ function formatGitNetError(prefix: string, raw: string, t: Translate): string {
   if (raw.includes("no_remote")) return t("git.error.noRemote", { prefix });
   if (raw.includes("pull_conflict")) return t("git.error.pullConflict", { prefix });
   if (raw.includes("checkout_conflict")) return t("git.error.checkoutConflict", { prefix });
+  if (raw.includes("smart_checkout_stash_failed")) return t("git.error.smartCheckoutStashFailed", { prefix });
+  if (raw.includes("smart_checkout_stash_empty")) return t("git.error.smartCheckoutStashEmpty", { prefix });
+  if (raw.includes("smart_checkout_checkout_failed")) return t("git.error.smartCheckoutCheckoutFailed", { prefix });
+  if (raw.includes("smart_checkout_restore_failed")) return t("git.error.smartCheckoutRestoreFailed", { prefix });
+  if (raw.includes("smart_checkout_apply_conflict")) return t("git.error.smartCheckoutApplyConflict", { prefix });
   if (raw.includes("invalid_branch")) return t("git.error.invalidBranch", { prefix });
   if (raw.includes("git_not_found")) return t("git.error.gitNotFound", { prefix });
   return t("git.error.generic", { prefix, message: raw.replace(/^[a-z_]+:\s*/, "") });
@@ -290,6 +295,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
     push,
     fetchRemote,
     checkoutBranch,
+    smartCheckoutBranch,
     createBranch,
     pull,
     pullAbort,
@@ -313,6 +319,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
   const [selectedFile, setSelectedFile] = useState<{ path: string; name: string; status: string } | null>(null);
   const [confirmAllOpen, setConfirmAllOpen] = useState(false);
   const [discardTarget, setDiscardTarget] = useState<{ path: string; name: string; status: string } | null>(null);
+  const [smartCheckoutTarget, setSmartCheckoutTarget] = useState<GitBranchInfo | null>(null);
   const [commitMsg, setCommitMsg] = useState("");
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
@@ -582,7 +589,25 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
       toast.success(t("git.toast.checkedOutBranch", { branch: branch.name }));
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
+      if (m.includes("checkout_conflict")) {
+        setSmartCheckoutTarget(branch);
+        return;
+      }
       toast.error(formatGitNetError(t("git.error.checkoutFailed"), m, t));
+    }
+  };
+
+  const handleSmartCheckoutConfirm = async () => {
+    if (!smartCheckoutTarget || branchActionBusy) return;
+    const target = smartCheckoutTarget;
+    try {
+      await smartCheckoutBranch(target.name, target.branchType === "remote");
+      setSmartCheckoutTarget(null);
+      setBranchMenuOpen(false);
+      toast.success(t("git.toast.smartCheckedOutBranch", { branch: target.name }));
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      toast.error(formatGitNetError(t("git.error.smartCheckoutFailed"), m, t));
     }
   };
 
@@ -1202,6 +1227,19 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
           setDiscardTarget(null);
         }}
         onClose={() => setDiscardTarget(null)}
+      />
+
+      {/* Smart Checkout：用户确认后才 stash 并切换，避免自动移动未提交改动。 */}
+      <ConfirmDialog
+        open={!!smartCheckoutTarget}
+        title={t("git.smartCheckout.title")}
+        message={smartCheckoutTarget ? t("git.smartCheckout.message", { branch: smartCheckoutTarget.name }) : undefined}
+        confirmText={checkingOutBranch ? t("git.smartCheckout.loading") : t("git.smartCheckout.confirm")}
+        cancelText={t("common.cancel")}
+        onConfirm={() => void handleSmartCheckoutConfirm()}
+        onClose={() => {
+          if (!checkingOutBranch) setSmartCheckoutTarget(null);
+        }}
       />
 
       {/* 丢弃全部确认 */}

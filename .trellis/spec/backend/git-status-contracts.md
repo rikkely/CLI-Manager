@@ -150,3 +150,83 @@ await invoke("git_checkout_branch", {
   remote: item.branchType === "remote",
 });
 ```
+
+---
+
+## Smart Checkout 命令合约（V1.2.6 Stage B）
+
+### 1. Scope / Trigger
+
+- Trigger: Git 分支切换遇到 `checkout_conflict` 时，前端提供用户确认后的 Smart Checkout。该流程会移动未提交改动，必须由后端按固定序列执行。
+- Target: `src-tauri/src/commands/git.rs` 中 `git_smart_checkout_branch`；前端只能在用户确认后调用。
+
+### 2. Signatures
+
+```rust
+#[tauri::command]
+pub async fn git_smart_checkout_branch(
+    project_path: String,
+    branch: String,
+    remote: bool,
+) -> Result<String, String>;
+```
+
+### 3. Contracts
+
+- 只在普通 `git_checkout_branch` 返回 `checkout_conflict` 后由 UI 弹窗确认触发；不要在普通点击分支时直接自动 stash。
+- 后端执行顺序固定：
+  1. `validate_branch_name_with_git(project_path, branch)`
+  2. `git stash push -u -m "CLI-Manager smart checkout: <branch>"`
+  3. 本地分支：`git checkout <branch>`；远程分支：`git checkout --track <remote>/<name>`
+  4. `git stash apply stash@{0}`
+- 不使用 `git checkout -f`。
+- 不自动 `stash drop`。`stash apply` 成功后也保留 stash 记录作为用户兜底恢复点。
+- 成功或失败后前端必须刷新 changes、branch status、branch list；成功还要刷新 repository list。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|------|------|
+| 分支名基础校验或 `git check-ref-format --branch` 失败 | `invalid_branch` |
+| `remote=true` 但分支没有 `<remote>/<name>` 结构 | `invalid_branch` |
+| `stash push` 失败 | `smart_checkout_stash_failed:*`，不切换分支 |
+| `stash push` 输出 `No local changes to save` | `smart_checkout_stash_empty`，不切换分支 |
+| stash 成功但 checkout 失败，stash apply 回原分支成功 | `smart_checkout_checkout_failed:*`，stash 保留 |
+| stash 成功但 checkout 失败，自动 apply 回原分支也失败 | `smart_checkout_restore_failed:*`，提示用户检查 `git status` 和 `git stash list` |
+| checkout 成功但 `stash apply` 失败或冲突 | `smart_checkout_apply_conflict:*`，目标分支已切换，用户需要解决冲突 |
+
+### 5. Good/Base/Bad Cases
+
+- Good: 用户点击分支，普通 checkout 返回 `checkout_conflict`，UI 弹确认；用户确认后 Smart Checkout stash、切分支、apply，最终目标分支生效且本地改动恢复。
+- Base: 用户取消弹窗，当前分支和工作区不变。
+- Bad: 普通 checkout 失败后前端直接自动调用 Smart Checkout。
+- Bad: `stash apply` 成功后自动 `stash drop`，导致用户失去恢复点。
+- Bad: checkout 失败后不尝试把 stash apply 回原分支。
+
+### 6. Tests Required
+
+- Rust 单测覆盖 `is_no_stash_created` 对 `No local changes to save` 的识别。
+- `cargo check` 覆盖 Tauri command 注册和编译。
+- `npx tsc --noEmit` 覆盖新增 store action、弹窗状态、i18n key。
+- 手动验证：取消不改工作区；确认后目标分支生效；apply 冲突时 UI 提示且 Git 面板刷新。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+// 用户只点了分支，前端自动 stash。风险太高。
+await invoke("git_smart_checkout_branch", { projectPath, branch, remote });
+```
+
+#### Correct
+
+```typescript
+try {
+  await checkoutBranch(branch.name, branch.branchType === "remote");
+} catch (error) {
+  if (String(error).includes("checkout_conflict")) {
+    setSmartCheckoutTarget(branch);
+  }
+}
+```
