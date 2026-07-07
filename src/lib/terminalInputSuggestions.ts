@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { info } from "@tauri-apps/plugin-log";
 import type { CommandHistoryEntry, CommandTemplate } from "./types";
 import { BUILTIN_AI_COMMANDS, type BuiltinAiCommand } from "./builtinAiCommands";
 
@@ -34,6 +35,7 @@ export interface TerminalInputSuggestionContext {
   provider: TerminalInputSuggestionProvider;
   model?: string;
   aiConfig?: TerminalInputSuggestionAiConfig;
+  debugLogging?: boolean;
 }
 
 export interface TerminalInputSuggestionOptions {
@@ -288,6 +290,20 @@ function compactCwdForAiContext(value: string | null | undefined): string | null
   return parts.length > 2 ? parts.slice(-2).join("/") : cwd;
 }
 
+function logAiSuggestionDebug(
+  context: TerminalInputSuggestionContext,
+  event: string,
+  data: Record<string, unknown> = {}
+): void {
+  if (!context.debugLogging) return;
+  void info(`[command-suggestion:debug] ${JSON.stringify({
+    event,
+    model: context.aiConfig?.model || context.model || null,
+    inputChars: context.input.length,
+    ...data,
+  })}`).catch(() => {});
+}
+
 function compactHistory(history: CommandHistoryEntry[], input: string): string[] {
   const inputRoot = commandRoot(input);
   const seen = new Set<string>();
@@ -321,6 +337,7 @@ export async function getTerminalInputSuggestionAiResult(
 ): Promise<TerminalInputSuggestionResult> {
   const config = isUsableAiConfig(context.aiConfig) ? context.aiConfig : undefined;
   if (!config) {
+    logAiSuggestionDebug(context, "missing_ai_config");
     return {
       suggestions: [],
       aiAttempt: {
@@ -334,6 +351,15 @@ export async function getTerminalInputSuggestionAiResult(
   }
 
   try {
+    const cwd = compactCwdForAiContext(context.cwd);
+    const history = compactHistory(context.history, context.input);
+    const templates = compactTemplates(context.templates, context.input);
+    logAiSuggestionDebug(context, "request_start", {
+      cwdPresent: Boolean(cwd),
+      previousPresent: Boolean(context.previousCommand?.trim()),
+      historyCount: history.length,
+      templateCount: templates.length,
+    });
     const response = await invoke<BackendCommandSuggestionResponse>("command_suggestion_generate", {
       request: {
         baseUrl: config.baseUrl,
@@ -341,15 +367,27 @@ export async function getTerminalInputSuggestionAiResult(
         model: config.model,
         prompt: config.prompt,
         input: context.input,
-        cwd: compactCwdForAiContext(context.cwd),
+        cwd,
         previousCommand: context.previousCommand ?? null,
-        history: compactHistory(context.history, context.input),
-        templates: compactTemplates(context.templates, context.input),
+        history,
+        templates,
       },
+    });
+    logAiSuggestionDebug(context, "response_received", {
+      responseTimeMs: response.responseTimeMs,
+      hasCommand: Boolean(response.command),
+      commandChars: response.command?.length ?? 0,
+      inputTokens: response.inputTokens ?? null,
+      outputTokens: response.outputTokens ?? null,
+      totalTokens: response.totalTokens ?? null,
     });
     const command = normalizeCommand(response.command ?? "");
     const suffix = getSafeSuggestionSuffix(context.input, command, { source: "ai" });
     if (!suffix) {
+      logAiSuggestionDebug(context, "frontend_reject", {
+        reason: "unsafe_or_empty_ai_command",
+        responseTimeMs: response.responseTimeMs,
+      });
       return {
         suggestions: [],
         aiAttempt: {
@@ -365,6 +403,10 @@ export async function getTerminalInputSuggestionAiResult(
         },
       };
     }
+    logAiSuggestionDebug(context, "frontend_accept", {
+      responseTimeMs: response.responseTimeMs,
+      suffixChars: suffix.length,
+    });
     return {
       suggestions: [{
         id: `ai:${Date.now()}`,
@@ -386,6 +428,9 @@ export async function getTerminalInputSuggestionAiResult(
       },
     };
   } catch (error) {
+    logAiSuggestionDebug(context, "request_error", {
+      message: error instanceof Error ? error.message : String(error),
+    });
     return {
       suggestions: [],
       aiAttempt: {

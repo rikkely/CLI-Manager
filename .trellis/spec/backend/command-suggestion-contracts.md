@@ -50,6 +50,8 @@ interface CommandSuggestionResponse {
 - LLM output is never executed. `Tab` / `Ctrl+Space` may insert only the accepted suffix.
 - Backend should reuse a shared `reqwest::Client`; per-request timeout stays on the request builder. Response bodies are bounded before parsing to avoid unbounded memory growth.
 - Usage stats are hot-path data. Frontend may update the Zustand state immediately, but persistent store writes should be batched/debounced.
+- LLM suggestion diagnostics must follow the system Debug Mode. When debug mode is off, no prediction diagnostics are emitted. When debug mode is on, frontend `@tauri-apps/plugin-log` entries and backend command logs write to the existing local log file.
+- Debug diagnostics may include endpoint type, sanitized endpoint URL, model name, response time, HTTP status, body byte length, context item counts, token usage, and frontend reject/fallback reason. They must not include API keys, full current input, prompt text, history/template command text, cwd absolute path, or response body text.
 
 ### 4. Validation & Error Matrix
 
@@ -65,13 +67,17 @@ interface CommandSuggestionResponse {
 | Response `Content-Length` or actual body exceeds the configured response body cap | Return `model_response_too_large` |
 | Multi-line or very long generated command | Treat as no command and let frontend fall back |
 | AI result does not start with the current input or adds a dangerous suffix | Treat as no command and keep/fall back to local suggestions |
+| Debug Mode disabled | Do not write LLM prediction diagnostics |
+| Debug Mode enabled | Write only sanitized LLM prediction diagnostics to the local app log |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: Chat Completions or Responses returns `{"command":"git status"}` for input `git s`; frontend shows only `tatus`.
 - Good: local history returns `git status` immediately for `git s`; a later valid AI result for the same still-current input may replace the ghost suffix.
 - Base: model is slow but succeeds; settings test reports degraded and terminal suggestions keep local suggestions visible while the input-time request is pending.
+- Base: debug mode is enabled; logs show timing/status/counts for model test and generation, plus frontend fallback reason, without command text or secrets.
 - Bad: model returns `rm -rf .\ngit status`, `git status && rm -rf .`, or a command that does not start with current input; backend/frontend reject it and local suggestions remain available.
+- Bad: debug logs contain API keys, full prompt, full command input, history/template command text, or raw provider response body.
 
 ### 6. Tests Required
 
@@ -90,6 +96,7 @@ interface CommandSuggestionResponse {
   - `cd src-tauri && cargo check`.
   - `cd src-tauri && cargo test command_suggestion`.
   - Response body cap rejects oversized responses before JSON parsing.
+  - Debug log endpoint labels remove URL userinfo, query, and fragment before writing diagnostics.
 
 ### 7. Wrong vs Correct
 

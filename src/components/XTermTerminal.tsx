@@ -1719,6 +1719,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         templates,
         provider: currentSettings.terminalInputSuggestionProvider,
         model: TERMINAL_INPUT_SUGGESTION_AI_MODEL,
+        debugLogging: currentSettings.debugMode,
         aiConfig: {
           enabled: currentSettings.terminalInputSuggestionLlmEnabled,
           baseUrl: currentSettings.terminalInputSuggestionBaseUrl,

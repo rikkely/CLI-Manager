@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,6 +11,18 @@ const SUGGESTION_TIMEOUT_MS: u64 = 1600;
 const MAX_TEXT_FIELD_CHARS: usize = 4_000;
 const MAX_CONTEXT_ITEMS: usize = 12;
 const MAX_RESPONSE_BODY_BYTES: usize = 128 * 1024;
+
+macro_rules! command_suggestion_debug {
+    ($($arg:tt)*) => {{
+        if command_suggestion_debug_enabled() {
+            log::info!(
+                target: "cli_manager::command_suggestion",
+                "[debug] {}",
+                format_args!($($arg)*)
+            );
+        }
+    }};
+}
 
 #[derive(Debug, Clone, Copy)]
 enum CommandSuggestionApiType {
@@ -68,10 +81,18 @@ pub async fn command_suggestion_test_model(
 ) -> Result<CommandSuggestionModelTestResult, String> {
     validate_config(&base_url, &api_key, &model)?;
     let client = shared_client()?;
+    let api_type = detect_api_type(&base_url);
     let started = Instant::now();
+    command_suggestion_debug!(
+        "model_test start api_type={} endpoint={} model={} timeout_ms={}",
+        api_type_label(api_type),
+        endpoint_log_label(&base_url, api_type),
+        model.trim(),
+        MODEL_TEST_TIMEOUT_SECS * 1000
+    );
     let result = post_model_request(
         client,
-        detect_api_type(&base_url),
+        api_type,
         &base_url,
         &api_key,
         &model,
@@ -82,7 +103,16 @@ pub async fn command_suggestion_test_model(
     )
     .await;
     let elapsed = elapsed_ms(started);
-    Ok(build_model_test_result(result, elapsed))
+    let test_result = build_model_test_result(result, elapsed);
+    command_suggestion_debug!(
+        "model_test finish status={:?} success={} http_status={:?} response_time_ms={} message={}",
+        test_result.status,
+        test_result.success,
+        test_result.http_status,
+        elapsed,
+        test_result.message
+    );
+    Ok(test_result)
 }
 
 #[tauri::command]
@@ -92,11 +122,27 @@ pub async fn command_suggestion_generate(
     validate_config(&request.base_url, &request.api_key, &request.model)?;
     validate_generation_input(&request)?;
     let client = shared_client()?;
+    let api_type = detect_api_type(&request.base_url);
     let started = Instant::now();
     let user_prompt = build_user_prompt(&request);
-    let (status, body) = post_model_request(
+    command_suggestion_debug!(
+        "generate start api_type={} endpoint={} model={} input_chars={} cwd_present={} previous_present={} history_count={} template_count={} timeout_ms={}",
+        api_type_label(api_type),
+        endpoint_log_label(&request.base_url, api_type),
+        request.model.trim(),
+        request.input.chars().count(),
+        request.cwd.as_deref().is_some_and(|value| !value.trim().is_empty()),
+        request
+            .previous_command
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        request.history.len(),
+        request.templates.len(),
+        SUGGESTION_TIMEOUT_MS
+    );
+    let (status, body) = match post_model_request(
         client,
-        detect_api_type(&request.base_url),
+        api_type,
         &request.base_url,
         &request.api_key,
         &request.model,
@@ -105,19 +151,58 @@ pub async fn command_suggestion_generate(
         80,
         Duration::from_millis(SUGGESTION_TIMEOUT_MS),
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(message) => {
+            command_suggestion_debug!(
+                "generate request_error response_time_ms={} message={}",
+                elapsed_ms(started),
+                message
+            );
+            return Err(message);
+        }
+    };
     let response_time_ms = elapsed_ms(started);
+    command_suggestion_debug!(
+        "generate response http_status={} response_time_ms={} body_bytes={}",
+        status,
+        response_time_ms,
+        body.len()
+    );
     if !(200..300).contains(&status) {
-        return Err(summarize_http_error(status, &body));
-    }
-    let value: Value = serde_json::from_str(&body)
-        .map_err(|err| format!("model_response_parse_failed: {err}"))?;
-    if let Some(message) = response_error_message(&value) {
+        let message = summarize_http_error(status, &body);
+        command_suggestion_debug!(
+            "generate rejected reason=http_status status={} message={}",
+            status,
+            message
+        );
         return Err(message);
     }
-    let command =
-        extract_command(&value, detect_api_type(&request.base_url)).and_then(|command| sanitize_command(&command));
+    let value: Value = match serde_json::from_str(&body) {
+        Ok(value) => value,
+        Err(err) => {
+            let message = format!("model_response_parse_failed: {err}");
+            command_suggestion_debug!("generate rejected reason=parse_error message={message}");
+            return Err(message);
+        }
+    };
+    if let Some(message) = response_error_message(&value) {
+        command_suggestion_debug!("generate rejected reason=response_error message={message}");
+        return Err(message);
+    }
+    let extracted_command = extract_command(&value, api_type);
+    let command = extracted_command.as_deref().and_then(sanitize_command);
     let usage = value.get("usage").unwrap_or(&Value::Null);
+    command_suggestion_debug!(
+        "generate finish extracted={} accepted={} command_chars={} input_tokens={:?} output_tokens={:?} total_tokens={:?}",
+        extracted_command.is_some(),
+        command.is_some(),
+        command.as_deref().map(|value| value.chars().count()).unwrap_or(0),
+        usage_u64(usage, &["prompt_tokens", "input_tokens"]),
+        usage_u64(usage, &["completion_tokens", "output_tokens"]),
+        usage_u64(usage, &["total_tokens"])
+    );
     Ok(CommandSuggestionResponse {
         command,
         response_time_ms,
@@ -196,6 +281,45 @@ fn detect_api_type(base_url: &str) -> CommandSuggestionApiType {
     }
 }
 
+fn command_suggestion_debug_enabled() -> bool {
+    matches!(log::max_level(), LevelFilter::Debug | LevelFilter::Trace)
+}
+
+fn api_type_label(api_type: CommandSuggestionApiType) -> &'static str {
+    match api_type {
+        CommandSuggestionApiType::ChatCompletions => "chat_completions",
+        CommandSuggestionApiType::Responses => "responses",
+    }
+}
+
+fn api_type_path(api_type: CommandSuggestionApiType) -> &'static str {
+    match api_type {
+        CommandSuggestionApiType::ChatCompletions => "v1/chat/completions",
+        CommandSuggestionApiType::Responses => "v1/responses",
+    }
+}
+
+fn endpoint_log_label(base_url: &str, api_type: CommandSuggestionApiType) -> String {
+    let base = sanitize_url_for_log(base_url);
+    sanitize_url_for_log(&endpoint_url(&base, api_type_path(api_type)))
+}
+
+fn sanitize_url_for_log(value: &str) -> String {
+    let trimmed = value.trim();
+    if let Ok(mut url) = reqwest::Url::parse(trimmed) {
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_query(None);
+        url.set_fragment(None);
+        return url.to_string();
+    }
+    trimmed
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
 async fn post_model_request(
     client: &reqwest::Client,
     api_type: CommandSuggestionApiType,
@@ -252,7 +376,12 @@ async fn post_chat_completion(
         .timeout(timeout)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {api_key}"))
-        .json(&chat_completion_body(model, system_prompt, user_prompt, max_tokens))
+        .json(&chat_completion_body(
+            model,
+            system_prompt,
+            user_prompt,
+            max_tokens,
+        ))
         .send()
         .await
         .map_err(map_request_error)?;
@@ -326,7 +455,10 @@ fn responses_body(model: &str, instructions: &str, input: &str, max_tokens: u16)
     let mut body = serde_json::Map::new();
     body.insert("model".to_string(), serde_json::json!(model.trim()));
     body.insert("input".to_string(), serde_json::json!(input));
-    body.insert("max_output_tokens".to_string(), serde_json::json!(max_tokens));
+    body.insert(
+        "max_output_tokens".to_string(),
+        serde_json::json!(max_tokens),
+    );
     body.insert("stream".to_string(), Value::Bool(false));
     body.insert("store".to_string(), Value::Bool(false));
     let instructions = instructions.trim();
@@ -413,7 +545,9 @@ fn response_error_message(value: &Value) -> Option<String> {
 fn extract_command(value: &Value, api_type: CommandSuggestionApiType) -> Option<String> {
     match api_type {
         CommandSuggestionApiType::ChatCompletions => extract_chat_command(value),
-        CommandSuggestionApiType::Responses => extract_responses_command(value).or_else(|| extract_chat_command(value)),
+        CommandSuggestionApiType::Responses => {
+            extract_responses_command(value).or_else(|| extract_chat_command(value))
+        }
     }
 }
 
@@ -546,7 +680,10 @@ mod tests {
             "https://example.com/v1/chat/completions"
         );
         assert_eq!(
-            endpoint_url("https://example.com/v1/chat/completions", "v1/chat/completions"),
+            endpoint_url(
+                "https://example.com/v1/chat/completions",
+                "v1/chat/completions"
+            ),
             "https://example.com/v1/chat/completions"
         );
         assert_eq!(
@@ -576,12 +713,26 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_log_label_removes_url_credentials_query_and_fragment() {
+        assert_eq!(
+            endpoint_log_label(
+                "https://user:secret@example.com/v1?token=secret#debug",
+                CommandSuggestionApiType::ChatCompletions
+            ),
+            "https://example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
     fn minimal_model_test_bodies_avoid_optional_sampling_params() {
         let chat = chat_completion_body("model-a", "", "ping", 16);
         assert!(chat.get("temperature").is_none());
         let messages = chat.get("messages").and_then(Value::as_array).unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].get("role").and_then(Value::as_str), Some("user"));
+        assert_eq!(
+            messages[0].get("role").and_then(Value::as_str),
+            Some("user")
+        );
 
         let responses = responses_body("model-a", "", "ping", 16);
         assert!(responses.get("temperature").is_none());
