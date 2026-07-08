@@ -14,6 +14,10 @@ import {
   type TerminalInputSuggestionProvider,
   type TerminalInputSuggestionUsageStats,
 } from "../lib/terminalInputSuggestions";
+import {
+  migrateTerminalShellProfiles,
+  type TerminalShellProfile,
+} from "../lib/terminalShellProfiles";
 
 export type ThemeMode = "dark" | "light" | "system";
 export type LightThemePalette =
@@ -232,6 +236,7 @@ interface Settings {
   lowMemoryMode: boolean;
   disableHardwareAcceleration: boolean;
   terminalBackground: TerminalBackgroundSettings;
+  terminalShellProfiles: TerminalShellProfile[];
   terminalInputSuggestionsEnabled: boolean;
   terminalInputSuggestionProvider: TerminalInputSuggestionProvider;
   terminalInputSuggestionLlmEnabled: boolean;
@@ -352,6 +357,7 @@ const DEFAULTS: Settings = {
     blur: 0,
     overlayDarken: 30,
   },
+  terminalShellProfiles: [],
   terminalInputSuggestionsEnabled: true,
   terminalInputSuggestionProvider: "local",
   terminalInputSuggestionLlmEnabled: false,
@@ -840,6 +846,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.terminalStatsCardVisibility = migrateTerminalStatsCardVisibility(entries.terminalStatsCardVisibility);
     entries.terminalStatsCardOrder = migrateTerminalStatsCardOrder(entries.terminalStatsCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
+    entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
 
     const currentDefaultShell = typeof entries.defaultShell === "string" ? entries.defaultShell.trim() : "";
     entries.defaultShell = currentDefaultShell || DEFAULTS.defaultShell;

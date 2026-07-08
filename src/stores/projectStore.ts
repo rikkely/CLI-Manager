@@ -5,7 +5,7 @@ import { resolveProjectFetchPolicy, type ProjectFetchReason } from "../lib/proje
 import { useSettingsStore } from "./settingsStore";
 import { logWarn } from "../lib/logger";
 import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType } from "../lib/providerSwitching";
-import { defaultShellForOs, getOsPlatform, normalizeShellForOs } from "../lib/shell";
+import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey } from "../lib/shell";
 import type {
   Project, CreateProjectInput, UpdateProjectInput,
   Group, CreateGroupInput, TreeNode, WorktreeRecord,
@@ -318,7 +318,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const id = crypto.randomUUID();
     const ts = Date.now().toString();
     const os = await getOsPlatform();
-    const shell = normalizeShellForOs(input.shell, os) ?? defaultShellForOs(os);
+    const rawShell = input.shell?.trim() ?? "";
+    const shell =
+      normalizeShellForOs(rawShell, os) ??
+      (rawShell && !normalizeShellKey(rawShell) ? rawShell : defaultShellForOs(os));
     const project: Project = {
       id,
       name: input.name,

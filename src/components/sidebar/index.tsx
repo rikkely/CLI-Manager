@@ -639,10 +639,10 @@ export function Sidebar({
         await fetchAll();
       }
     } catch (err) {
-      const description = String(err);
+      const description = t("sidebar.tree.loadFailedDescription");
       setLoadError(description);
       toast.error(t("sidebar.toast.projectLoadFailed"), { description });
-      logError("Failed to fetch sidebar projects", err);
+      logError(`Failed to fetch sidebar projects. Visible message: ${description}`, err);
     } finally {
       setInitialLoading(false);
     }

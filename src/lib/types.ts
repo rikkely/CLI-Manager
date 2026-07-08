@@ -500,7 +500,7 @@ export interface HistoryStatsPayload {
 export const SHELL_OPTIONS_WINDOWS = [
   { value: "powershell", label: "PowerShell" },
   { value: "cmd", label: "CMD" },
-  { value: "pwsh", label: "PowerShell Core" },
+  { value: "pwsh", label: "PowerShell 7" },
   { value: "wsl", label: "WSL" },
   { value: "gitbash", label: "Git Bash" },
   { value: "bash", label: "Bash" },
@@ -511,6 +511,7 @@ export const SHELL_OPTIONS_MACOS = [
   { value: "bash", label: "Bash" },
   { value: "fish", label: "Fish" },
   { value: "sh", label: "Sh" },
+  { value: "pwsh", label: "PowerShell 7" },
 ] as const;
 
 export const SHELL_OPTIONS_LINUX = [
@@ -518,6 +519,7 @@ export const SHELL_OPTIONS_LINUX = [
   { value: "zsh", label: "Zsh" },
   { value: "fish", label: "Fish" },
   { value: "sh", label: "Sh" },
+  { value: "pwsh", label: "PowerShell 7" },
 ] as const;
 
 export type ShellOption = { value: string; label: string };

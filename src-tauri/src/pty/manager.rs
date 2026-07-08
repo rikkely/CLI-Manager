@@ -5,6 +5,7 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -159,7 +160,26 @@ impl PtyManager {
         }
     }
 
+    fn resolve_custom_shell_path(shell: &str) -> Result<Option<String>, String> {
+        let trimmed = shell.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let looks_like_path = trimmed.contains('\\') || trimmed.contains('/') || Path::new(trimmed).is_absolute();
+        if !looks_like_path {
+            return Ok(None);
+        }
+        let path = Path::new(trimmed);
+        if path.is_file() {
+            return Ok(Some(trimmed.to_string()));
+        }
+        Err(format!("Shell executable not found: {trimmed}"))
+    }
+
     fn resolve_shell(shell: &str) -> Result<(String, Vec<String>), String> {
+        if let Some(custom_shell) = Self::resolve_custom_shell_path(shell)? {
+            return Ok((custom_shell, Vec::new()));
+        }
         match shell {
             // Windows shells
             "cmd" if cfg!(target_os = "windows") => {
@@ -1271,5 +1291,32 @@ mod tests {
         let mut diag = VtScrollDiag::default();
         scan_vt_scroll_sequences(b"\x1b[r", &mut diag, "test");
         assert_eq!(diag.decstbm, 1);
+    }
+
+    #[test]
+    fn resolve_shell_accepts_custom_executable_path() {
+        let path = std::env::temp_dir().join(format!(
+            "cli-manager-test-shell-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"test").unwrap();
+
+        let (exe, args) = PtyManager::resolve_shell(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(exe, path.to_string_lossy().to_string());
+        assert!(args.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_shell_rejects_missing_custom_path() {
+        let missing = std::env::temp_dir().join("cli-manager-missing-shell.exe");
+        let result = PtyManager::resolve_shell(missing.to_str().unwrap());
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Shell executable not found"));
     }
 }

@@ -31,7 +31,10 @@ import {
   TERMINAL_INPUT_SUGGESTION_BUILTIN_PROMPT,
   TERMINAL_INPUT_SUGGESTION_AI_MODEL,
   getLocalTerminalInputSuggestions,
+  getTerminalPathInputSuggestions,
   getTerminalInputSuggestionAiResult,
+  mergeTerminalInputSuggestions,
+  resolveSubmittedDirectoryChange,
   type TerminalInputSuggestion,
   type TerminalInputSuggestionContext,
 } from "../lib/terminalInputSuggestions";
@@ -83,11 +86,12 @@ import { logError, logInfo } from "../lib/logger";
 // Shell integration OSC 序列在原始 PTY 流上解析（而非 xterm parser hook）：
 // 后台 Tab 的输出会进入 inactive ring buffer 且可能被截断丢弃，状态事件必须
 // 在丢弃之前提取，否则后台 Tab 不再上报状态。
-// 777 为本应用私有协议（消费后剥离）；133/633 为 FinalTerm / VS Code 标准
+// 777 为本应用私有协议（消费后剥离）；7/133/633 为 cwd / FinalTerm / VS Code 标准
 // shell integration 序列（消费后原样放行，xterm 会忽略），借此兼容 oh-my-posh、
 // VS Code shell integration 等用户自带集成。
 const LEGACY_RUNTIME_OSC_PREFIX = "\x1b]777;cli-manager;";
-const INTEGRATION_OSC_PREFIXES = ["\x1b]133;", "\x1b]633;", LEGACY_RUNTIME_OSC_PREFIX];
+const CWD_OSC_PREFIX = "\x1b]7;";
+const INTEGRATION_OSC_PREFIXES = ["\x1b]133;", "\x1b]633;", CWD_OSC_PREFIX, LEGACY_RUNTIME_OSC_PREFIX];
 const OSC_CARRY_BUFFER_MAX = 8192;
 const OSC_PREFIX = "\x1b]";
 const XTERM_BG_COLOR_MASK = 0x03ffffff;
@@ -114,6 +118,37 @@ type OscPrefixMatch =
   | { kind: "match"; prefix: string }
   | { kind: "partial" }
   | { kind: "none" };
+
+function decodeOscPathValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseOsc7Cwd(body: string): string | null {
+  const value = body.trim();
+  if (!value.toLocaleLowerCase().startsWith("file://")) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "file:") return null;
+    const path = decodeOscPathValue(url.pathname);
+    if (/^\/[a-z]:[\\/]/iu.test(path)) return path.slice(1);
+    if (url.hostname && url.hostname !== "localhost") return `//${url.hostname}${path}`;
+    return path || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStandardIntegrationCwd(command: string, rest: string): string | null {
+  if (command !== "P") return null;
+  const field = rest.split(";").find((part) => part.toLocaleLowerCase().startsWith("cwd="));
+  if (!field) return null;
+  const value = decodeOscPathValue(field.slice(field.indexOf("=") + 1)).trim();
+  return value || null;
+}
 
 const matchIntegrationOscPrefix = (text: string, start: number): OscPrefixMatch => {
   let partial = false;
@@ -619,6 +654,15 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     useTerminalStore.getState().handleShellRuntimeEvent({ sessionId, event, exitCode, origin: "osc" });
   };
 
+  const updateSessionCwdIfChanged = (cwd: string | null) => {
+    const value = cwd?.trim();
+    if (!value) return;
+    const store = useTerminalStore.getState();
+    const session = store.sessions.find((item) => item.id === sessionId);
+    if (!session || session.cwd === value) return;
+    store.updateSessionCwd(sessionId, value);
+  };
+
   const getSessionToolContext = () => {
     const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
     const project = session?.projectId
@@ -675,12 +719,24 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     emitShellRuntimeEvent(eventName as ShellRuntimeEventName, Number.isFinite(exitCode) ? exitCode : null);
   };
 
-  // 标准 OSC 133/633：A=prompt 开始，C=命令开始执行，D[;exit]=命令结束。
+  // 标准 OSC 7/133/633：OSC 7 与 633;P;Cwd 同步 cwd；A=prompt 开始，C=命令开始执行，D[;exit]=命令结束。
   // D 不带 exit code 表示没跑命令（空回车 / prompt 处 Ctrl+C），不改变状态。
   const handleStandardIntegrationOsc = (body: string) => {
+    const osc7Cwd = parseOsc7Cwd(body);
+    if (osc7Cwd) {
+      updateSessionCwdIfChanged(osc7Cwd);
+      return;
+    }
+
     const separator = body.indexOf(";");
     const command = separator < 0 ? body : body.slice(0, separator);
     const rest = separator < 0 ? "" : body.slice(separator + 1);
+    const cwd = parseStandardIntegrationCwd(command, rest);
+    if (cwd) {
+      updateSessionCwdIfChanged(cwd);
+      return;
+    }
+
     if (command === "A") {
       emitShellRuntimeEvent("prompt_shown", null);
     } else if (command === "C") {
@@ -1542,6 +1598,20 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
       if (
         e.type === "keydown" &&
+        e.key === "ArrowRight" &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        !e.altKey &&
+        !e.metaKey
+      ) {
+        if (acceptSuggestionRef.current()) {
+          e.preventDefault();
+          return false;
+        }
+        return true;
+      }
+      if (
+        e.type === "keydown" &&
         e.ctrlKey &&
         !e.shiftKey &&
         !e.altKey &&
@@ -1713,6 +1783,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         input,
         projectId,
         cwd: session?.cwd ?? null,
+        shell: session?.shell ?? null,
         sessionId,
         previousCommand: lastSubmittedCommand,
         history,
@@ -1816,10 +1887,28 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
 
       const context = buildSuggestionContext(input, session, history, templates);
-      const suggestion = getLocalTerminalInputSuggestions(context, { limit: 1 })[0] ?? null;
+      const localSuggestions = getLocalTerminalInputSuggestions(context, { limit: 1 });
+      const suggestion = localSuggestions[0] ?? null;
       suggestionRef.current = suggestion;
       updateSuggestionGhostPosition(suggestion);
       scheduleAiSuggestionRefresh(context, requestId);
+
+      void getTerminalPathInputSuggestions(context, { limit: 1 })
+        .then((pathSuggestions) => {
+          if (
+            suggestionDisposed ||
+            requestId !== suggestionRequestId ||
+            input !== inputBuffer.current ||
+            !useSettingsStore.getState().terminalInputSuggestionsEnabled ||
+            suggestionRef.current?.source === "ai"
+          ) {
+            return;
+          }
+          const mergedSuggestion = mergeTerminalInputSuggestions([...localSuggestions, ...pathSuggestions], { limit: 1 })[0] ?? null;
+          suggestionRef.current = mergedSuggestion;
+          updateSuggestionGhostPosition(mergedSuggestion);
+        })
+        .catch(() => {});
     };
 
     const scheduleSuggestionRefresh = () => {
@@ -1884,6 +1973,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         if (cmd.trim()) {
           lastSubmittedCommand = cmd.trim();
           suggestionContextCache = null;
+          const submittedCwd = useTerminalStore.getState().sessions.find((item) => item.id === sessionId)?.cwd ?? null;
+          void resolveSubmittedDirectoryChange(cmd, submittedCwd)
+            .then((cwd) => updateSessionCwdIfChanged(cwd))
+            .catch(() => {});
           addCommand(getProjectId(), cmd);
           // 回车猜测仅作为 cmd 的 command_started 信号（store 按 origin 过滤）；
           // 其余 shell 由 shell integration OSC 序列驱动，猜测会误判。

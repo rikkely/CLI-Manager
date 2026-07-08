@@ -17,7 +17,24 @@ pub struct ExternalTab {
 }
 
 #[cfg(target_os = "windows")]
+fn resolve_custom_shell_path(shell: &str) -> Result<Option<String>, String> {
+    let trimmed = shell.trim();
+    let looks_like_path = trimmed.contains('\\') || trimmed.contains('/');
+    if !looks_like_path {
+        return Ok(None);
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_file() {
+        return Ok(Some(trimmed.to_string()));
+    }
+    Err(format!("Shell executable not found: {trimmed}"))
+}
+
+#[cfg(target_os = "windows")]
 fn shell_exe(shell: &str) -> Result<(String, Option<&'static str>), String> {
+    if let Some(custom_shell) = resolve_custom_shell_path(shell)? {
+        return Ok((custom_shell, None));
+    }
     match shell {
         // Windows shells
         "cmd" => Ok(("cmd".to_string(), Some("/K"))),
@@ -57,6 +74,7 @@ fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String
 
     let shell_key = tab.shell.as_deref().unwrap_or("powershell");
     let (exe, no_exit_flag) = shell_exe(shell_key)?;
+    let custom_shell = resolve_custom_shell_path(shell_key)?.is_some();
 
     if let Some(cmd) = &tab.startup_cmd {
         let cmd = cmd.trim();
@@ -72,6 +90,8 @@ fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String
                 args.push("-i".into());
                 args.push("-c".into());
                 args.push(format!("{}; exec bash --login -i", cmd));
+            } else if custom_shell {
+                args.push(cmd.into());
             } else {
                 args.push("-Command".into());
                 args.push(cmd.into());
@@ -89,15 +109,16 @@ fn escape_posix_single_quoted(value: &str) -> String {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn unix_shell_exe(shell: Option<&str>) -> &'static str {
+fn unix_shell_exe(shell: Option<&str>) -> String {
     match shell {
-        Some("bash") => "bash",
-        Some("zsh") => "zsh",
-        Some("fish") => "fish",
-        Some("sh") => "sh",
-        Some("pwsh") => "pwsh",
-        _ if cfg!(target_os = "macos") => "zsh",
-        _ => "bash",
+        Some("bash") => "bash".to_string(),
+        Some("zsh") => "zsh".to_string(),
+        Some("fish") => "fish".to_string(),
+        Some("sh") => "sh".to_string(),
+        Some("pwsh") => "pwsh".to_string(),
+        Some(value) if value.contains('/') && PathBuf::from(value).is_file() => value.to_string(),
+        _ if cfg!(target_os = "macos") => "zsh".to_string(),
+        _ => "bash".to_string(),
     }
 }
 
@@ -116,7 +137,7 @@ fn build_unix_terminal_command(tab: &ExternalTab) -> String {
     if let Some(cmd) = trimmed_startup_cmd(tab) {
         parts.push(cmd.to_string());
     }
-    parts.push(format!("exec {shell}"));
+    parts.push(format!("exec {}", escape_posix_single_quoted(&shell)));
     parts.join("; ")
 }
 

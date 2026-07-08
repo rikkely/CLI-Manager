@@ -1,13 +1,13 @@
-import { useState, useRef, useEffect, useCallback, useId, type Ref } from "react";
+import { useState, useRef, useEffect, useCallback, useId, useMemo, type Ref } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/projectStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { Project, Group, ProjectFileEntry, WorktreeIsolationStrategy } from "../lib/types";
-import { getShellOptions } from "../lib/types";
 import { getOsPlatform, normalizeShellKey } from "../lib/shell";
 import { getConfigModalShellPrefill } from "../lib/configModalShellPrefill";
 import type { OsPlatform } from "../lib/shell";
+import { getEnabledTerminalShellOptions } from "../lib/terminalShellProfiles";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Check, ChevronDown } from "./icons";
 import { Input } from "./ui/input";
@@ -74,9 +74,12 @@ function initialWslPickerPath(currentPath: string): string {
 }
 
 export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Props) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
+  const text = (zh: string, en: string) => (language === "zh-CN" ? zh : en);
   const { createProject, updateProject, groups } = useProjectStore();
   const symlinkCompatibilityEnabled = useSettingsStore((s) => s.symlinkCompatibilityEnabled);
+  const terminalShellProfiles = useSettingsStore((s) => s.terminalShellProfiles);
+  const defaultShell = useSettingsStore((s) => s.defaultShell);
   const isEdit = !!project;
   const isClone = !!cloneFrom;
   const logInstanceIdRef = useRef(crypto.randomUUID().slice(0, 8));
@@ -123,6 +126,15 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
   const [wslPickerLoading, setWslPickerLoading] = useState(false);
   const [wslPickerError, setWslPickerError] = useState("");
 
+  const resolveFallbackShell = useCallback((platform: OsPlatform) => {
+    const enabledOptions = getEnabledTerminalShellOptions(platform, terminalShellProfiles);
+    const normalizedDefaultShell = normalizeShellKey(defaultShell);
+    const preferred =
+      enabledOptions.find((option) => option.value === defaultShell)?.value ??
+      enabledOptions.find((option) => normalizeShellKey(option.value) === normalizedDefaultShell)?.value;
+    return preferred ?? enabledOptions[0]?.value ?? "";
+  }, [defaultShell, terminalShellProfiles]);
+
   useEffect(() => {
     logInfo("[config-modal] mounted", {
       instanceId: logInstanceIdRef.current,
@@ -145,31 +157,39 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
       setOsPlatform(platform);
       setShell((currentShell) => {
         const resolvedShell = getConfigModalShellPrefill(platform, currentShell, isEdit, isClone);
+        const nextShell = resolvedShell.trim() || (!isEdit && !isClone ? resolveFallbackShell(platform) : "");
         logInfo("[config-modal] resolved shell prefill", {
           instanceId: logInstanceIdRef.current,
           platform,
           currentShell,
-          resolvedShell,
+          resolvedShell: nextShell,
           isEdit,
           isClone,
         });
-        if (platform === "macos" && !isEdit && !isClone && !resolvedShell.trim()) {
+        if (platform === "macos" && !isEdit && !isClone && !nextShell.trim()) {
           logWarn("[config-modal] macOS new terminal modal resolved empty shell prefill", {
             currentShell,
-            resolvedShell,
+            resolvedShell: nextShell,
           });
         }
-        return resolvedShell;
+        return nextShell;
       });
     })().catch((err) => {
       logError("[config-modal] failed to resolve shell prefill", { err, isEdit, isClone });
     });
-  }, [isClone, isEdit]);
+  }, [isClone, isEdit, resolveFallbackShell]);
 
   useEffect(() => {
     if (isEdit || isClone || osPlatform === "unknown") return;
+    if (!shell.trim()) {
+      const fallbackShell = resolveFallbackShell(osPlatform);
+      if (fallbackShell) {
+        setShell(fallbackShell);
+        return;
+      }
+    }
     const effectiveShell = getConfigModalShellPrefill(osPlatform, shell, isEdit, isClone);
-    const optionValues = getShellOptions(osPlatform).map((opt) => opt.value);
+    const optionValues = getEnabledTerminalShellOptions(osPlatform, terminalShellProfiles).map((opt) => opt.value);
     const hasShellOption = optionValues.includes(effectiveShell);
     logInfo("[config-modal] shell select state", {
       instanceId: logInstanceIdRef.current,
@@ -186,7 +206,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
         optionValues,
       });
     }
-  }, [isClone, isEdit, osPlatform, shell]);
+  }, [isClone, isEdit, osPlatform, resolveFallbackShell, shell, terminalShellProfiles]);
 
   useEffect(() => {
     if (!wslPickerOpen) return;
@@ -339,13 +359,14 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
   const shellSelectValue = getConfigModalShellPrefill(osPlatform, shell, isEdit, isClone);
   const shellSelectKey = `${osPlatform}:${isEdit ? "edit" : isClone ? "clone" : "create"}`;
 
-  // Shell 选项：如果当前 shell 在平台选项中不存在，保留为"当前自定义（保留）"
-  const normalizedShell = normalizeShellKey(shellSelectValue);
-  const isCustomShell = shellSelectValue && !normalizedShell;
-  const shellOptions = [
-    ...(isCustomShell ? [{ value: shellSelectValue, label: `${shellSelectValue}（当前自定义）` }] : []),
-    ...getShellOptions(osPlatform),
-  ];
+  const shellOptions = useMemo(() => {
+    const enabledOptions = getEnabledTerminalShellOptions(osPlatform, terminalShellProfiles);
+    const hasCurrent = Boolean(shellSelectValue) && !enabledOptions.some((option) => option.value === shellSelectValue);
+    return [
+      ...(hasCurrent ? [{ value: shellSelectValue, label: `${shellSelectValue}${text("（当前自定义）", " (current custom)")}` }] : []),
+      ...enabledOptions,
+    ];
+  }, [language, osPlatform, shellSelectValue, terminalShellProfiles]);
 
   return (
     <>

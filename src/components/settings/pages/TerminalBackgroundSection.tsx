@@ -75,7 +75,7 @@ const POSITION_LABEL_EN: Record<TerminalBackgroundPosition, string> = {
   "bottom-right": "Bottom right",
 };
 
-export function TerminalBackgroundSection() {
+export function TerminalBackgroundSection({ embedded = false }: { embedded?: boolean }) {
   const { language } = useI18n();
   const text = (zh: string, en: string) => (language === "zh-CN" ? zh : en);
   const terminalBackground = useSettingsStore((s) => s.terminalBackground);
@@ -187,24 +187,40 @@ export function TerminalBackgroundSection() {
   const detailsDisabled = !enabled;
 
   return (
-    <section className="ui-surface-card rounded-2xl border border-border p-4">
+    <section className={embedded ? "" : "ui-surface-card rounded-2xl border border-border p-4"}>
       <Stack gap="md">
-        <Group justify="space-between" align="flex-start" gap="md" wrap="nowrap">
-          <Box>
-            <Text size="sm" fw={600} c="var(--on-surface)">
-              {text("终端背景", "Terminal Background")}
-            </Text>
-            <Text mt={4} size="xs" c="var(--on-surface-variant)">
+        {!embedded && (
+          <Group justify="space-between" align="flex-start" gap="md" wrap="nowrap">
+            <Box>
+              <Text size="sm" fw={600} c="var(--on-surface)">
+                {text("终端背景", "Terminal Background")}
+              </Text>
+              <Text mt={4} size="xs" c="var(--on-surface-variant)">
+                {text("使用本地图片作为终端背景。支持 JPEG / PNG / GIF。", "Use a local image as the terminal background. JPEG / PNG / GIF supported.")}
+              </Text>
+            </Box>
+            <Switch
+              color="cliPrimary"
+              checked={enabled}
+              onChange={(event) => patch({ enabled: event.currentTarget.checked })}
+              aria-label={enabled ? text("关闭终端背景图", "Disable terminal background image") : text("启用终端背景图", "Enable terminal background image")}
+            />
+          </Group>
+        )}
+
+        {embedded && (
+          <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+            <Text size="xs" c="var(--on-surface-variant)">
               {text("使用本地图片作为终端背景。支持 JPEG / PNG / GIF。", "Use a local image as the terminal background. JPEG / PNG / GIF supported.")}
             </Text>
-          </Box>
-          <Switch
-            color="cliPrimary"
-            checked={enabled}
-            onChange={(event) => patch({ enabled: event.currentTarget.checked })}
-            aria-label={enabled ? text("关闭终端背景图", "Disable terminal background image") : text("启用终端背景图", "Enable terminal background image")}
-          />
-        </Group>
+            <Switch
+              color="cliPrimary"
+              checked={enabled}
+              onChange={(event) => patch({ enabled: event.currentTarget.checked })}
+              aria-label={enabled ? text("关闭终端背景图", "Disable terminal background image") : text("启用终端背景图", "Enable terminal background image")}
+            />
+          </Group>
+        )}
 
         {enabled && terminalBackgroundMissing && (
           <Card className="border border-warning/40 bg-warning/10" p="sm" radius="lg" role="alert">

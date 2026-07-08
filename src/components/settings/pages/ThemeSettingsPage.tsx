@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ActionIcon,
   Badge,
   Box,
+  Button,
   Card,
   Group,
   NumberInput,
@@ -17,7 +18,9 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
-import { CircleHelp } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ChevronDown, CircleHelp, Plus, RefreshCw, Trash2 } from "lucide-react";
 import {
   TERMINAL_THEME_GROUPS,
   TERMINAL_THEME_PRESETS,
@@ -29,7 +32,12 @@ import { debugConsoleWarn } from "../../../lib/debugConsole";
 import { normalizeTerminalFontFamily } from "../../../lib/terminalFontFamily";
 import { normalizeShellKey, getOsPlatform } from "../../../lib/shell";
 import type { OsPlatform } from "../../../lib/shell";
-import { getShellOptions } from "../../../lib/types";
+import {
+  getEnabledTerminalShellOptions,
+  makeCustomTerminalShellProfile,
+  mergeTerminalShellProfiles,
+  type TerminalShellProfile,
+} from "../../../lib/terminalShellProfiles";
 import {
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
@@ -52,6 +60,15 @@ import { useI18n } from "../../../lib/i18n";
 
 const SWATCH_KEYS = ["background", "foreground", "red", "green", "blue", "cyan"] as const;
 const TERMINAL_FONT_FALLBACK = "monospace";
+type TerminalSettingsSectionKey = "behavior" | "shells" | "preview" | "themes" | "background";
+
+const DEFAULT_EXPANDED_SECTIONS: Record<TerminalSettingsSectionKey, boolean> = {
+  behavior: true,
+  shells: false,
+  preview: false,
+  themes: false,
+  background: false,
+};
 
 const FONT_FAMILY_OPTIONS: { value: string; label: string; labelEn?: string }[] = [
   { value: "Cascadia Code, Consolas, monospace", label: "Cascadia Code（推荐）", labelEn: "Cascadia Code (Recommended)" },
@@ -107,6 +124,50 @@ function clampTerminalScrollbackRows(value: number) {
   return Math.min(TERMINAL_SCROLLBACK_ROWS_MAX, Math.max(TERMINAL_SCROLLBACK_ROWS_MIN, Math.round(value)));
 }
 
+function CollapsibleSettingsSection({
+  title,
+  description,
+  open,
+  onToggle,
+  children,
+  className = "",
+}: {
+  title: string;
+  description?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`ui-surface-card rounded-2xl border border-border p-4 ${className}`}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="ui-focus-ring flex w-full items-center justify-between gap-3 rounded-lg text-left outline-none"
+        aria-expanded={open}
+      >
+        <Box>
+          <Text size="sm" fw={600} c="var(--on-surface)">
+            {title}
+          </Text>
+          {description && (
+            <Text mt={4} size="xs" c="var(--on-surface-variant)">
+              {description}
+            </Text>
+          )}
+        </Box>
+        <ChevronDown
+          size={18}
+          strokeWidth={1.8}
+          className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && <Box mt="md">{children}</Box>}
+    </section>
+  );
+}
+
 export function ThemeSettingsPage() {
   const { language, t } = useI18n();
   const text = (zh: string, en: string) => (language === "zh-CN" ? zh : en);
@@ -128,6 +189,7 @@ export function ThemeSettingsPage() {
   const batchLaunchGroupInPane = useSettingsStore((s) => s.batchLaunchGroupInPane);
   const batchLaunchPaneDirection = useSettingsStore((s) => s.batchLaunchPaneDirection);
   const projectScopedTerminalViewEnabled = useSettingsStore((s) => s.projectScopedTerminalViewEnabled);
+  const terminalShellProfiles = useSettingsStore((s) => s.terminalShellProfiles);
   const update = useSettingsStore((s) => s.update);
   const [query, setQuery] = useState("");
   const [fontSizeDraft, setFontSizeDraft] = useState(fontSize);
@@ -136,6 +198,33 @@ export function ThemeSettingsPage() {
   const [systemFonts, setSystemFonts] = useState<SystemFontFamily[]>([]);
   const [systemFontsLoading, setSystemFontsLoading] = useState(false);
   const [systemFontsError, setSystemFontsError] = useState<string | null>(null);
+  const [expandedSections, setExpandedSections] =
+    useState<Record<TerminalSettingsSectionKey, boolean>>(DEFAULT_EXPANDED_SECTIONS);
+  const [shellScanLoading, setShellScanLoading] = useState(false);
+  const [shellScanError, setShellScanError] = useState<string | null>(null);
+  const [customShellName, setCustomShellName] = useState("");
+  const [customShellPath, setCustomShellPath] = useState("");
+
+  const toggleSection = (key: TerminalSettingsSectionKey) => {
+    setExpandedSections((current) => ({ ...current, [key]: !current[key] }));
+  };
+
+  const scanTerminalShellProfiles = async (platform = osPlatform) => {
+    if (platform === "unknown") return;
+    setShellScanLoading(true);
+    setShellScanError(null);
+    try {
+      const scanned = await invoke<TerminalShellProfile[]>("terminal_shell_scan");
+      const currentProfiles = useSettingsStore.getState().terminalShellProfiles;
+      const nextProfiles = mergeTerminalShellProfiles(currentProfiles, scanned, platform);
+      await update("terminalShellProfiles", nextProfiles);
+    } catch (err) {
+      debugConsoleWarn("Failed to scan terminal shell profiles:", err);
+      setShellScanError(String(err));
+    } finally {
+      setShellScanLoading(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -160,7 +249,10 @@ export function ThemeSettingsPage() {
   }, [language]);
 
   useEffect(() => {
-    void getOsPlatform().then(setOsPlatform);
+    void getOsPlatform().then((platform) => {
+      setOsPlatform(platform);
+      void scanTerminalShellProfiles(platform);
+    });
   }, []);
 
   useEffect(() => {
@@ -228,14 +320,64 @@ export function ThemeSettingsPage() {
   ];
   const normalizedDefaultShell = normalizeShellKey(defaultShell);
   const shellSelectValue = normalizedDefaultShell ?? defaultShell;
-  const isCustomShellValue = !normalizedDefaultShell;
+  const enabledShellOptions = useMemo(
+    () => getEnabledTerminalShellOptions(osPlatform, terminalShellProfiles),
+    [osPlatform, terminalShellProfiles]
+  );
   const shellOptions = useMemo(
     () => [
-      ...(isCustomShellValue ? [{ value: defaultShell, label: text("当前自定义（保留）", "Current custom (keep)") }] : []),
-      ...getShellOptions(osPlatform),
+      ...(shellSelectValue && !enabledShellOptions.some((option) => option.value === shellSelectValue)
+        ? [{ value: shellSelectValue, label: text("当前自定义（保留）", "Current custom (keep)") }]
+        : []),
+      ...enabledShellOptions,
     ],
-    [defaultShell, isCustomShellValue, language, osPlatform]
+    [enabledShellOptions, language, shellSelectValue]
   );
+  const shellProfilesForPlatform = useMemo(
+    () => terminalShellProfiles.filter((profile) => profile.platform === osPlatform),
+    [osPlatform, terminalShellProfiles]
+  );
+  const enabledShellCount = shellProfilesForPlatform.filter(
+    (profile) => profile.enabled && (profile.detected || profile.kind === "custom")
+  ).length;
+
+  const updateShellProfile = (id: string, patch: Partial<TerminalShellProfile>) => {
+    const nextProfiles = terminalShellProfiles.map((profile) => (
+      profile.id === id ? { ...profile, ...patch } : profile
+    ));
+    void update("terminalShellProfiles", nextProfiles);
+  };
+
+  const removeShellProfile = (id: string) => {
+    void update("terminalShellProfiles", terminalShellProfiles.filter((profile) => profile.id !== id));
+  };
+
+  const handlePickCustomShell = async () => {
+    const selected = await openDialog({
+      directory: false,
+      multiple: false,
+      title: text("选择终端可执行文件", "Choose shell executable"),
+    });
+    if (typeof selected === "string") {
+      setCustomShellPath(selected);
+      if (!customShellName.trim()) {
+        setCustomShellName(selected.replace(/\\/g, "/").split("/").pop() ?? "");
+      }
+    }
+  };
+
+  const handleAddCustomShell = () => {
+    const command = customShellPath.trim();
+    if (!command) return;
+    const profile = makeCustomTerminalShellProfile(osPlatform, customShellName, command);
+    const nextProfiles = [
+      ...terminalShellProfiles.filter((item) => item.command !== profile.command),
+      profile,
+    ];
+    void update("terminalShellProfiles", nextProfiles);
+    setCustomShellName("");
+    setCustomShellPath("");
+  };
   const commitFontSize = (value = fontSizeDraft) => {
     const next = clampFontSize(value);
     setFontSizeDraft(next);
@@ -251,77 +393,192 @@ export function ThemeSettingsPage() {
     }
   };
 
-  // 注意：sticky 必须放在普通 div wrapper 上。Mantine Card（.m_e615b15f）自带
-  // `position: relative`，且项目引入的是无 cascade layer 的 @mantine/core/styles.css，
-  // 其优先级高于 Tailwind v4 @layer utilities 中的 `sticky`，导致直接写在 Card 上失效。
-  const terminalPreview = (
-    <div className="self-start xl:sticky xl:top-5 xl:z-10 xl:col-start-2 xl:row-span-3 xl:row-start-1">
-      <section className="ui-surface-card rounded-2xl border border-border p-4">
-        <Stack gap="sm">
-          <Box>
-            <Text size="sm" fw={600} c="var(--on-surface)">
-              {text("终端预览", "Terminal Preview")}
-            </Text>
-            <Text mt={4} size="xs" c="var(--on-surface-variant)">
-              {selectedTheme.label}
-            </Text>
-          </Box>
-          <Box
-            className="rounded-xl border p-3 font-mono text-xs"
-            style={{
-              borderColor: "var(--border)",
-              backgroundColor: selectedTheme.theme.background ?? "var(--surface-container-lowest)",
-              color: selectedTheme.theme.foreground ?? "var(--on-surface)",
-            }}
-          >
-            <div>$ echo "hello cli-manager"</div>
-            <div className="mt-1 opacity-80">hello cli-manager</div>
-            <Group mt="md" gap={6}>
-              {SWATCH_KEYS.map((key) => (
-                <Box
-                  key={key}
-                  component="span"
-                  w={16}
-                  h={16}
-                  style={{
-                    backgroundColor:
-                      (selectedTheme.theme as Record<string, string | undefined>)[key] ?? "var(--surface-container-lowest)",
-                    border: "1px solid rgba(255,255,255,0.15)",
-                    borderRadius: 4,
-                  }}
-                  title={key}
-                />
-              ))}
-            </Group>
-          </Box>
-
-          <Text size="xs" fw={600} c="var(--on-surface-variant)">
-            {text("实时字体预览", "Live Font Preview")}
+  const shellProfileSection = (
+    <Stack gap="md">
+      <Group justify="space-between" align="center" gap="md">
+        <Box>
+          <Text size="xs" c="var(--on-surface-variant)">
+            {text(
+              `当前平台：${osPlatform}，已启用 ${enabledShellCount} 个终端类型。`,
+              `Current platform: ${osPlatform}. ${enabledShellCount} terminal types enabled.`
+            )}
           </Text>
-          <Box
-            className="rounded-xl border border-border p-4 font-mono"
-            style={{ backgroundColor: "var(--surface-container-lowest)", color: "var(--on-surface)" }}
-          >
-            <Box style={{ fontFamily: normalizedFontFamily, fontSize: `${fontSize}px` }}>
-              <div>$ cli-manager --doctor</div>
-              <div className="opacity-80">Environment ready. Launching workspace...</div>
-              <div className="mt-1 text-success">Terminal initialized</div>
-            </Box>
-          </Box>
+          {shellScanError && (
+            <Text mt={4} size="xs" c="var(--danger)">
+              {text("扫描失败：", "Scan failed: ")}{shellScanError}
+            </Text>
+          )}
+        </Box>
+        <Button
+          variant="light"
+          color="cliPrimary"
+          size="xs"
+          leftSection={<RefreshCw size={14} />}
+          loading={shellScanLoading}
+          onClick={() => void scanTerminalShellProfiles()}
+        >
+          {text("重新扫描", "Rescan")}
+        </Button>
+      </Group>
+
+      <Stack gap="xs">
+        {shellProfilesForPlatform.length === 0 && (
+          <Card className="border border-dashed border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Text size="xs" c="var(--on-surface-variant)">
+              {shellScanLoading
+                ? text("正在扫描终端类型...", "Scanning terminal types...")
+                : text("尚无扫描结果，可点击重新扫描。", "No scan results yet. Click Rescan.")}
+            </Text>
+          </Card>
+        )}
+        {shellProfilesForPlatform.map((profile) => (
+          <Card key={profile.id} className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+              <Box style={{ minWidth: 0 }}>
+                <Group gap="xs" wrap="nowrap">
+                  <Text size="xs" fw={600} c="var(--on-surface)" truncate>
+                    {profile.label}
+                  </Text>
+                  <Badge size="xs" variant="light" color={profile.detected || profile.kind === "custom" ? "green" : "gray"}>
+                    {profile.detected || profile.kind === "custom" ? text("可用", "Available") : text("未检测到", "Missing")}
+                  </Badge>
+                  {profile.kind === "custom" && (
+                    <Badge size="xs" variant="light" color="blue">
+                      {text("自定义", "Custom")}
+                    </Badge>
+                  )}
+                </Group>
+                <Text mt={4} size="xs" c="var(--text-muted)" className="font-mono" style={{ overflowWrap: "anywhere" }}>
+                  {profile.command}
+                </Text>
+              </Box>
+              <Group gap="xs" wrap="nowrap">
+                {profile.kind === "custom" && (
+                  <ActionIcon
+                    variant="subtle"
+                    color="red"
+                    size="sm"
+                    aria-label={text("删除自定义终端", "Delete custom shell")}
+                    onClick={() => removeShellProfile(profile.id)}
+                  >
+                    <Trash2 size={14} strokeWidth={1.8} />
+                  </ActionIcon>
+                )}
+                <Switch
+                  color="cliPrimary"
+                  checked={profile.enabled}
+                  disabled={!profile.detected && profile.kind !== "custom"}
+                  onChange={(event) => updateShellProfile(profile.id, { enabled: event.currentTarget.checked })}
+                  aria-label={profile.enabled ? text("禁用终端类型", "Disable terminal type") : text("启用终端类型", "Enable terminal type")}
+                />
+              </Group>
+            </Group>
+          </Card>
+        ))}
+      </Stack>
+
+      <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+        <Stack gap="sm">
+          <Text size="xs" fw={600} c="var(--on-surface)">
+            {text("添加自定义终端", "Add Custom Shell")}
+          </Text>
+          <Group align="flex-end" gap="xs" wrap="wrap">
+            <TextInput
+              label={text("名称", "Name")}
+              value={customShellName}
+              onChange={(event) => setCustomShellName(event.currentTarget.value)}
+              size="xs"
+              style={{ flex: "1 1 160px" }}
+            />
+            <TextInput
+              label={text("可执行文件", "Executable")}
+              value={customShellPath}
+              onChange={(event) => setCustomShellPath(event.currentTarget.value)}
+              size="xs"
+              style={{ flex: "2 1 260px" }}
+            />
+            <Button variant="light" color="cliPrimary" size="xs" onClick={() => void handlePickCustomShell()}>
+              {text("选择地址", "Choose Path")}
+            </Button>
+            <Button
+              variant="filled"
+              color="cliPrimary"
+              size="xs"
+              leftSection={<Plus size={14} />}
+              disabled={!customShellPath.trim()}
+              onClick={handleAddCustomShell}
+            >
+              {text("添加", "Add")}
+            </Button>
+          </Group>
+          <Text size="xs" c="var(--text-muted)">
+            {text("仅保存名称和可执行文件路径；自定义启动参数仍请放在项目启动命令中。", "Only name and executable path are saved. Put custom startup arguments in the project startup command.")}
+          </Text>
         </Stack>
-      </section>
-    </div>
+      </Card>
+    </Stack>
+  );
+
+  const terminalPreview = (
+    <Stack gap="sm">
+      <Text size="xs" c="var(--on-surface-variant)">
+        {selectedTheme.label}
+      </Text>
+      <Box
+        className="rounded-xl border p-3 font-mono text-xs"
+        style={{
+          borderColor: "var(--border)",
+          backgroundColor: selectedTheme.theme.background ?? "var(--surface-container-lowest)",
+          color: selectedTheme.theme.foreground ?? "var(--on-surface)",
+        }}
+      >
+        <div>$ echo "hello cli-manager"</div>
+        <div className="mt-1 opacity-80">hello cli-manager</div>
+        <Group mt="md" gap={6}>
+          {SWATCH_KEYS.map((key) => (
+            <Box
+              key={key}
+              component="span"
+              w={16}
+              h={16}
+              style={{
+                backgroundColor:
+                  (selectedTheme.theme as Record<string, string | undefined>)[key] ?? "var(--surface-container-lowest)",
+                border: "1px solid rgba(255,255,255,0.15)",
+                borderRadius: 4,
+              }}
+              title={key}
+            />
+          ))}
+        </Group>
+      </Box>
+
+      <Text size="xs" fw={600} c="var(--on-surface-variant)">
+        {text("实时字体预览", "Live Font Preview")}
+      </Text>
+      <Box
+        className="rounded-xl border border-border p-4 font-mono"
+        style={{ backgroundColor: "var(--surface-container-lowest)", color: "var(--on-surface)" }}
+      >
+        <Box style={{ fontFamily: normalizedFontFamily, fontSize: `${fontSize}px` }}>
+          <div>$ cli-manager --doctor</div>
+          <div className="opacity-80">Environment ready. Launching workspace...</div>
+          <div className="mt-1 text-success">Terminal initialized</div>
+        </Box>
+      </Box>
+    </Stack>
   );
 
   return (
     <Stack gap="md">
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="ui-surface-card rounded-2xl border border-border p-4 xl:col-start-1 xl:row-start-1">
+        <CollapsibleSettingsSection
+          title={text("终端行为", "Terminal Behavior")}
+          open={expandedSections.behavior}
+          onToggle={() => toggleSection("behavior")}
+          className="xl:col-start-1 xl:row-start-1"
+        >
           <Stack gap="md">
-            <Text size="sm" fw={600} c="var(--on-surface)">
-              {text("终端行为", "Terminal Behavior")}
-            </Text>
-
             <Stack gap={6}>
               <Group justify="space-between" align="center">
                 <Text size="xs" c="var(--on-surface-variant)">
@@ -617,16 +874,35 @@ export function ThemeSettingsPage() {
               </Group>
             </Card>
           </Stack>
-        </section>
+        </CollapsibleSettingsSection>
 
-        {terminalPreview}
+        <CollapsibleSettingsSection
+          title={text("Shell / 终端类型", "Shell / Terminal Types")}
+          description={text("扫描并启用可在新建项目中选择的终端。", "Scan and enable terminal types shown when creating projects.")}
+          open={expandedSections.shells}
+          onToggle={() => toggleSection("shells")}
+          className="xl:col-start-1 xl:row-start-2"
+        >
+          {shellProfileSection}
+        </CollapsibleSettingsSection>
 
-        <section className="ui-surface-card rounded-2xl border border-border p-4 xl:col-start-1 xl:row-start-2">
+        <CollapsibleSettingsSection
+          title={text("终端预览", "Terminal Preview")}
+          open={expandedSections.preview}
+          onToggle={() => toggleSection("preview")}
+          className="self-start xl:sticky xl:top-5 xl:z-10 xl:col-start-2 xl:row-span-4 xl:row-start-1"
+        >
+          {terminalPreview}
+        </CollapsibleSettingsSection>
+
+        <CollapsibleSettingsSection
+          title={text("终端主题库", "Terminal Theme Library")}
+          open={expandedSections.themes}
+          onToggle={() => toggleSection("themes")}
+          className="xl:col-start-1 xl:row-start-3"
+        >
           <Stack gap="md">
             <Group align="flex-end" justify="space-between" gap="md">
-              <Text size="sm" fw={600} c="var(--on-surface)">
-                {text("终端主题库", "Terminal Theme Library")}
-              </Text>
               <TextInput
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
@@ -745,10 +1021,16 @@ export function ThemeSettingsPage() {
             )}
             </Stack>
           </Stack>
-        </section>
+        </CollapsibleSettingsSection>
 
-        <div className="min-w-0 xl:col-start-1 xl:row-start-3">
-          <TerminalBackgroundSection />
+        <div className="min-w-0 xl:col-start-1 xl:row-start-4">
+          <CollapsibleSettingsSection
+            title={text("终端背景", "Terminal Background")}
+            open={expandedSections.background}
+            onToggle={() => toggleSection("background")}
+          >
+          <TerminalBackgroundSection embedded />
+          </CollapsibleSettingsSection>
         </div>
       </section>
     </Stack>

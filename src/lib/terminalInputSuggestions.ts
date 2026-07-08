@@ -13,7 +13,7 @@ export const TERMINAL_INPUT_SUGGESTION_BUILTIN_PROMPT = [
 ].join(" ");
 
 export type TerminalInputSuggestionProvider = "local" | "ai";
-export type TerminalInputSuggestionSource = "history" | "template" | "builtin" | "ai";
+export type TerminalInputSuggestionSource = "history" | "template" | "builtin" | "path" | "ai";
 export type TerminalInputSuggestionModelStatus = "operational" | "degraded" | "failed";
 
 export interface TerminalInputSuggestion {
@@ -28,6 +28,7 @@ export interface TerminalInputSuggestionContext {
   input: string;
   projectId: string | null;
   cwd?: string | null;
+  shell?: string | null;
   sessionId?: string | null;
   previousCommand?: string | null;
   history: CommandHistoryEntry[];
@@ -101,6 +102,12 @@ interface BackendCommandSuggestionResponse {
   totalTokens?: number | null;
 }
 
+interface BackendPathSuggestionEntry {
+  name: string;
+  kind: "directory" | "file";
+  isSymlink: boolean;
+}
+
 interface Candidate {
   id: string;
   command: string;
@@ -112,6 +119,8 @@ const DEFAULT_LIMIT = 1;
 const MAX_COMMAND_LENGTH = 500;
 const AI_CONTEXT_LIMIT = 12;
 const AI_CONTEXT_COMMAND_MAX_LENGTH = 240;
+const PATH_CONTEXT_LIMIT = 12;
+const PATH_SOURCE_SCORE = 94;
 const SECRET_VALUE_PATTERN =
   /(?:sk-[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{16,}|akia[0-9a-z]{16}|(?:api[_-]?key|token|password|passwd|secret)\s*[:=]\s*["']?[^"'\s]+|authorization\s*:\s*bearer\s+[^"'\s]+|bearer\s+[a-z0-9._-]{20,})/giu;
 const SECRET_FILE_PATTERN = /(?:^|[\s"'=])(?:\.env(?:\.\w+)?|\.npmrc|\.pypirc|\.netrc|id_rsa|id_ed25519)(?:$|[\s"'])/iu;
@@ -123,6 +132,67 @@ const DANGEROUS_AI_SUFFIX_PATTERNS: readonly RegExp[] = [
   /(?:^|\s)--(?:force|yes|assume-yes|no-preserve-root)(?:\s|$)/iu,
   /(?:^|\s)-[a-z]*[fy][a-z]*(?:\s|$)/iu,
 ];
+const DIRECTORY_ARGUMENT_COMMANDS = new Set([
+  "cd",
+  "chdir",
+  "set-location",
+  "sl",
+  "pushd",
+  "rd",
+  "rmdir",
+]);
+const PATH_ARGUMENT_COMMANDS = new Set([
+  "bat",
+  "cat",
+  "code",
+  "copy",
+  "copy-item",
+  "cp",
+  "del",
+  "dir",
+  "explorer",
+  "find",
+  "gc",
+  "get-childitem",
+  "grep",
+  "ii",
+  "less",
+  "ls",
+  "md",
+  "mkdir",
+  "more",
+  "move",
+  "move-item",
+  "mv",
+  "nano",
+  "new-item",
+  "node",
+  "notepad",
+  "open",
+  "python",
+  "rm",
+  "remove-item",
+  "rg",
+  "sed",
+  "start",
+  "tail",
+  "touch",
+  "type",
+  "vi",
+  "vim",
+  "where",
+  "which",
+]);
+const PATH_ARGUMENT_COMMANDS_REQUIRING_PATH_SHAPE = new Set([
+  "cargo",
+  "deno",
+  "git",
+  "go",
+  "npm",
+  "pnpm",
+  "rustc",
+  "yarn",
+]);
 
 export const DEFAULT_TERMINAL_INPUT_SUGGESTION_USAGE: TerminalInputSuggestionUsageStats = {
   requestCount: 0,
@@ -142,6 +212,25 @@ export const DEFAULT_TERMINAL_INPUT_SUGGESTION_USAGE: TerminalInputSuggestionUsa
 };
 
 const normalizeCommand = (value: string) => value.replace(/\r?\n$/u, "").trim();
+
+interface ParsedShellToken {
+  value: string;
+  start: number;
+  end: number;
+  quote: "\"" | "'" | null;
+  closed: boolean;
+}
+
+interface PathCompletionRequest {
+  directory: string;
+  prefix: string;
+  directoriesOnly: boolean;
+  tokenStart: number;
+  tokenValue: string;
+  separator: "/" | "\\";
+  quote: "\"" | "'" | null;
+  score: number;
+}
 
 export function getSafeSuggestionSuffix(
   input: string,
@@ -168,6 +257,8 @@ function scoreHistoryEntry(
   entry: CommandHistoryEntry,
   input: string,
   projectId: string | null,
+  previousCommand: string | null | undefined,
+  precedingEntry: CommandHistoryEntry | undefined,
   index: number
 ): Candidate | null {
   const command = normalizeCommand(entry.command);
@@ -179,12 +270,16 @@ function scoreHistoryEntry(
     ? Math.min(20, Math.max(0, (Date.now() - executedAt) / 86_400_000))
     : 10;
   const projectBoost = projectId && entry.project_id === projectId ? 16 : entry.project_id === null ? 4 : 0;
+  const previousCommandBoost =
+    previousCommand?.trim() && normalizeCommand(precedingEntry?.command ?? "") === previousCommand.trim()
+      ? 18
+      : 0;
 
   return {
     id: `history:${entry.id}`,
     command,
     source: "history",
-    score: 100 + projectBoost - agePenalty - index * 0.2,
+    score: 100 + projectBoost + previousCommandBoost - agePenalty - index * 0.2,
   };
 }
 
@@ -220,6 +315,252 @@ function scoreBuiltinCommand(item: BuiltinAiCommand, input: string, index: numbe
   };
 }
 
+function normalizeCommandRoot(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\.(?:exe|cmd|ps1|bat)$/iu, "");
+}
+
+function parseShellTokens(input: string): ParsedShellToken[] {
+  const tokens: ParsedShellToken[] = [];
+  let index = 0;
+  while (index < input.length) {
+    while (index < input.length && /\s/u.test(input[index])) index += 1;
+    if (index >= input.length) break;
+
+    const start = index;
+    let value = "";
+    let quote: "\"" | "'" | null = null;
+    let activeQuote: "\"" | "'" | null = null;
+    if (input[index] === "\"" || input[index] === "'") {
+      quote = input[index] as "\"" | "'";
+      activeQuote = quote;
+      index += 1;
+    }
+
+    while (index < input.length) {
+      const char = input[index];
+      if (activeQuote) {
+        if (char === activeQuote) {
+          activeQuote = null;
+          index += 1;
+          continue;
+        }
+        value += char;
+        index += 1;
+        continue;
+      }
+      if (/\s/u.test(char)) break;
+      value += char;
+      index += 1;
+    }
+
+    tokens.push({
+      value,
+      start,
+      end: index,
+      quote,
+      closed: activeQuote === null,
+    });
+  }
+  return tokens;
+}
+
+function tokenUsesPathSeparator(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
+}
+
+function isWindowsDriveAbsolutePath(value: string): boolean {
+  return /^[a-z]:[\\/]/iu.test(value);
+}
+
+function isUncPath(value: string): boolean {
+  return value.startsWith("\\\\") || value.startsWith("//");
+}
+
+function isAbsolutePath(value: string): boolean {
+  return isWindowsDriveAbsolutePath(value) || value.startsWith("/") || isUncPath(value);
+}
+
+function isPathLikeToken(value: string): boolean {
+  return (
+    tokenUsesPathSeparator(value) ||
+    value.startsWith(".") ||
+    /^[a-z]:/iu.test(value) ||
+    isUncPath(value)
+  );
+}
+
+function preferredPathSeparator(tokenValue: string, cwd: string | null | undefined): "/" | "\\" {
+  if (tokenValue.includes("\\")) return "\\";
+  if (tokenValue.includes("/")) return "/";
+  return cwd?.includes("\\") ? "\\" : "/";
+}
+
+function splitPathToken(tokenValue: string): { directoryToken: string; prefix: string } {
+  const slash = tokenValue.lastIndexOf("/");
+  const backslash = tokenValue.lastIndexOf("\\");
+  const separatorIndex = Math.max(slash, backslash);
+  if (separatorIndex < 0) {
+    return { directoryToken: "", prefix: tokenValue };
+  }
+  return {
+    directoryToken: tokenValue.slice(0, separatorIndex + 1),
+    prefix: tokenValue.slice(separatorIndex + 1),
+  };
+}
+
+function joinPath(base: string, relative: string): string {
+  if (!relative) return base;
+  const normalizedBase = base.replace(/[\\/]+$/u, "");
+  const normalizedRelative = relative.replace(/^[\\/]+/u, "");
+  return `${normalizedBase}/${normalizedRelative}`;
+}
+
+function resolveDirectoryForPathToken(cwd: string | null | undefined, tokenValue: string): string | null {
+  const { directoryToken } = splitPathToken(tokenValue);
+  if (directoryToken) {
+    return isAbsolutePath(directoryToken) ? directoryToken : cwd ? joinPath(cwd, directoryToken) : null;
+  }
+  if (isAbsolutePath(tokenValue)) {
+    return null;
+  }
+  return cwd?.trim() || null;
+}
+
+function pathTokenCanUseEntryName(quote: "\"" | "'" | null, entryName: string): boolean {
+  if (!quote && /\s/u.test(entryName)) return false;
+  if (quote && entryName.includes(quote)) return false;
+  return true;
+}
+
+function getDirectoryCommandPathTokenIndex(root: string, tokens: ParsedShellToken[]): number {
+  if ((root === "cd" || root === "chdir") && tokens[1]?.value.toLocaleLowerCase() === "/d") {
+    return 2;
+  }
+  return 1;
+}
+
+function buildPathCompletionRequest(context: TerminalInputSuggestionContext): PathCompletionRequest | null {
+  const input = context.input;
+  if (!input || input.includes("\n") || input.includes("\r") || /\s$/u.test(input)) return null;
+
+  const tokens = parseShellTokens(input);
+  if (tokens.length === 0) return null;
+  const trailingToken = tokens[tokens.length - 1];
+  if (trailingToken.end !== input.length || trailingToken.value === "") return null;
+  if (trailingToken.quote && trailingToken.closed) return null;
+
+  const root = normalizeCommandRoot(tokens[0].value);
+  if (tokens.length > 1 && root.startsWith("/")) return null;
+  const isDirectoryCommand = DIRECTORY_ARGUMENT_COMMANDS.has(root);
+  const isPathArgumentCommand = PATH_ARGUMENT_COMMANDS.has(root);
+  const isPathArgumentCommandRequiringPathShape = PATH_ARGUMENT_COMMANDS_REQUIRING_PATH_SHAPE.has(root);
+  const pathTokenIndex = isDirectoryCommand ? getDirectoryCommandPathTokenIndex(root, tokens) : tokens.length - 1;
+  if (trailingToken !== tokens[pathTokenIndex]) return null;
+
+  const tokenLooksPathLike = isPathLikeToken(trailingToken.value);
+  const allowed = (
+    (isDirectoryCommand && tokens.length > pathTokenIndex) ||
+    isPathArgumentCommand ||
+    (isPathArgumentCommandRequiringPathShape && tokenLooksPathLike) ||
+    (tokens.length === 1 && tokenLooksPathLike) ||
+    tokenLooksPathLike
+  );
+  if (!allowed) return null;
+
+  const { prefix } = splitPathToken(trailingToken.value);
+  const directory = resolveDirectoryForPathToken(context.cwd, trailingToken.value);
+  if (!directory) return null;
+
+  return {
+    directory,
+    prefix,
+    directoriesOnly: isDirectoryCommand,
+    tokenStart: trailingToken.start,
+    tokenValue: trailingToken.value,
+    separator: preferredPathSeparator(trailingToken.value, context.cwd),
+    quote: trailingToken.quote,
+    score: PATH_SOURCE_SCORE + (isDirectoryCommand ? 4 : 0) + (tokenLooksPathLike ? 2 : 0),
+  };
+}
+
+export function mergeTerminalInputSuggestions(
+  suggestions: TerminalInputSuggestion[],
+  options: TerminalInputSuggestionOptions = {}
+): TerminalInputSuggestion[] {
+  const limit = Math.max(1, options.limit ?? DEFAULT_LIMIT);
+  const candidatesByCommand = new Map<string, TerminalInputSuggestion>();
+  suggestions.forEach((suggestion) => {
+    if (!suggestion.suffix) return;
+    const existing = candidatesByCommand.get(suggestion.command);
+    if (!existing || suggestion.score > existing.score) {
+      candidatesByCommand.set(suggestion.command, suggestion);
+    }
+  });
+  return Array.from(candidatesByCommand.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+export async function getTerminalPathInputSuggestions(
+  context: TerminalInputSuggestionContext,
+  options: TerminalInputSuggestionOptions = {}
+): Promise<TerminalInputSuggestion[]> {
+  const request = buildPathCompletionRequest(context);
+  if (!request) return [];
+  const entries = await invoke<BackendPathSuggestionEntry[]>("command_suggestion_list_path_entries", {
+    request: {
+      directory: request.directory,
+      prefix: request.prefix,
+      directoriesOnly: request.directoriesOnly,
+      limit: Math.max(PATH_CONTEXT_LIMIT, options.limit ?? DEFAULT_LIMIT),
+    },
+  });
+
+  const { prefix } = splitPathToken(request.tokenValue);
+  const suggestions = entries
+    .filter((entry) => pathTokenCanUseEntryName(request.quote, entry.name))
+    .map((entry, index): TerminalInputSuggestion | null => {
+      const entrySuffix = entry.name.slice(prefix.length);
+      if (entrySuffix.length === 0 && entry.kind !== "directory") return null;
+      const command = `${context.input}${entrySuffix}${entry.kind === "directory" ? request.separator : ""}`;
+      const suffix = getSafeSuggestionSuffix(context.input, command);
+      if (!suffix) return null;
+      return {
+        id: `path:${request.directory}:${entry.name}`,
+        command,
+        suffix,
+        source: "path",
+        score: request.score - index * 0.1,
+      };
+    })
+    .filter((suggestion): suggestion is TerminalInputSuggestion => suggestion !== null);
+
+  return mergeTerminalInputSuggestions(suggestions, options);
+}
+
+export function getSubmittedDirectoryChangePath(input: string, cwd: string | null | undefined): string | null {
+  const normalized = normalizeCommand(input);
+  if (!normalized || normalized.includes("\n") || normalized.includes("\r")) return null;
+  const tokens = parseShellTokens(normalized);
+  if (tokens.length < 2) return null;
+  const root = normalizeCommandRoot(tokens[0].value);
+  if (!DIRECTORY_ARGUMENT_COMMANDS.has(root)) return null;
+  const pathToken = tokens[getDirectoryCommandPathTokenIndex(root, tokens)];
+  if (!pathToken?.value || pathToken.value.startsWith("-")) return null;
+  if (pathToken.quote && !pathToken.closed) return null;
+  if (isAbsolutePath(pathToken.value)) return pathToken.value;
+  return cwd ? joinPath(cwd, pathToken.value) : null;
+}
+
+export async function resolveSubmittedDirectoryChange(
+  input: string,
+  cwd: string | null | undefined
+): Promise<string | null> {
+  const path = getSubmittedDirectoryChangePath(input, cwd);
+  if (!path) return null;
+  return invoke<string | null>("command_suggestion_resolve_directory", { path });
+}
+
 export function getLocalTerminalInputSuggestions(
   context: TerminalInputSuggestionContext,
   options: TerminalInputSuggestionOptions = {}
@@ -236,7 +577,9 @@ export function getLocalTerminalInputSuggestions(
     }
   };
 
-  context.history.forEach((entry, index) => push(scoreHistoryEntry(entry, input, context.projectId, index)));
+  context.history.forEach((entry, index) => (
+    push(scoreHistoryEntry(entry, input, context.projectId, context.previousCommand, context.history[index + 1], index))
+  ));
   context.templates.forEach((template, index) => push(scoreTemplate(template, input, index)));
   BUILTIN_AI_COMMANDS.forEach((item, index) => push(scoreBuiltinCommand(item, input, index)));
 

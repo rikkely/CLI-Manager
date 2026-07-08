@@ -118,6 +118,64 @@ if (suffix) {
 
 Keep LLM completion as a suggestion source only; the PTY write path is reached only after explicit user acceptance.
 
+## Scenario: Local path suggestions
+
+### 1. Scope / Trigger
+
+- Trigger: terminal input ends with a path-shaped token or a command that normally accepts a path, such as `cd`, `ls`, `cat`, `code`, `git add src/`, or `D:/work/`.
+- Goal: provide fish/zsh-style path suffix suggestions without invoking the user's shell completion engine or executing user commands.
+- Execution model: frontend parses the current input, asks the backend for one directory listing, and merges path candidates with history/template/built-in suggestions.
+
+### 2. Signatures
+
+- `command_suggestion_list_path_entries(request: CommandSuggestionPathRequest) -> CommandSuggestionPathEntry[]`
+- `command_suggestion_resolve_directory(path: string) -> string | null`
+
+```typescript
+interface CommandSuggestionPathRequest {
+  directory: string;
+  prefix: string;
+  directoriesOnly: boolean;
+  limit?: number;
+}
+
+interface CommandSuggestionPathEntry {
+  name: string;
+  kind: "directory" | "file";
+  isSymlink: boolean;
+}
+```
+
+### 3. Contracts
+
+- Path suggestions are read-only. Backend may list a directory or check whether a submitted `cd` target is a directory; it must not create, delete, move, or execute paths.
+- Native `directory` must be absolute before listing. Relative tokens are resolved by the frontend against the session cwd.
+- WSL UNC paths are listed through `wsl.exe --exec find` inside the target distro; native paths use `std::fs::read_dir`.
+- Entries are filtered by case-insensitive prefix, directories are sorted before files, and result count is clamped.
+- `directoriesOnly=true` returns only directories, including symlinks whose target is a directory.
+- Frontend must treat listing failures as no path suggestions and keep existing local suggestions visible.
+- Session cwd can be updated from shell integration cwd sequences (`OSC 7` or `OSC 633;P;Cwd=...`) or from a submitted `cd` command only after `command_suggestion_resolve_directory` confirms the target exists.
+- Accepted suggestions only insert the suffix. They never send Enter or execute commands.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+| --- | --- |
+| Empty directory | Return `missing_directory` |
+| Empty path for resolve | Return `missing_path` |
+| NUL or oversized path/prefix | Return `path_input_too_large` |
+| Native list directory is relative | Return `path_not_absolute` |
+| Directory cannot be canonicalized or read | Return an error; frontend silently falls back |
+| Resolve target does not exist or is not a directory | Return `null` |
+| Prefix has no matches | Return an empty list |
+
+### 5. Tests Required
+
+- `npx tsc --noEmit`.
+- `cd src-tauri && cargo test command_suggestion`.
+- `cd src-tauri && cargo check`.
+- Native path tests should cover prefix filtering, directory-first sorting, `directoriesOnly`, and canonicalizing submitted `cd` targets.
+
 ## Scenario: Local command-history suggestions and storage controls
 
 ### 1. Scope / Trigger

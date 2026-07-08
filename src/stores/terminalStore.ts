@@ -180,6 +180,7 @@ interface TerminalStore {
   createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
+  updateSessionCwd: (sessionId: string, cwd: string) => void;
   markAttentionInputHandled: (sessionId: string) => void;
   handleCliHookEvent: (payload: CliHookPayload) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
@@ -669,9 +670,11 @@ function isShellRuntimeMonitoringEnabled(): boolean {
   return useSettingsStore.getState().shellRuntimeMonitoringEnabled;
 }
 
-function resolveShellForPty(shell: string | null | undefined, hasProject: boolean, os: OsPlatform): ShellKey | null {
+function resolveShellForPty(shell: string | null | undefined, hasProject: boolean, os: OsPlatform): string | null {
   const inputShell = normalizeShellForOs(shell, os);
   if (inputShell) return inputShell;
+  const customShell = shell?.trim();
+  if (customShell && !normalizeShellKey(customShell)) return customShell;
   if (hasProject) return null;
   return normalizeShellForOs(useSettingsStore.getState().defaultShell, os) ?? defaultShellForOs(os);
 }
@@ -719,7 +722,7 @@ export interface DetachedPtyLaunchOptions {
 
 export interface DetachedPtyLaunchResult {
   sessionId: string;
-  shell: ShellKey | null;
+  shell: string | null;
   startupCmd?: string;
 }
 
@@ -811,7 +814,7 @@ function getClaudeProviderLaunchConfig(projectId?: string) {
 export async function createDetachedPtyProcess(options: DetachedPtyLaunchOptions): Promise<DetachedPtyLaunchResult> {
   const os = await getOsPlatform();
   const resolvedShell = resolveShellForPty(options.shell, !!options.projectId, os);
-  const launchStartupCmd = prepareStartupCommandForPty(options.startupCmd ?? undefined, resolvedShell);
+  const launchStartupCmd = prepareStartupCommandForPty(options.startupCmd ?? undefined, normalizeShellKey(resolvedShell) ?? null);
   const sessionId = await invoke<string>("pty_create", {
     cwd: options.cwd ?? null,
     envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
@@ -851,10 +854,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   hiddenBackgroundSessionIds: new Set<string>(),
   subagentTranscripts: {},
 
+  updateSessionCwd: (sessionId, cwd) => set((state) => ({
+    sessions: state.sessions.map((session) => (
+      session.id === sessionId ? { ...session, cwd } : session
+    )),
+  })),
+
   createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId) => {
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(shell, !!projectId, os);
-    const launchStartupCmd = prepareStartupCommandForPty(startupCmd, resolvedShell);
+    const launchStartupCmd = prepareStartupCommandForPty(startupCmd, normalizeShellKey(resolvedShell) ?? null);
 
     let sessionId: string;
     try {
@@ -913,7 +922,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     if (launchStartupCmd) {
       setTimeout(() => {
-        invoke("pty_write", { sessionId, data: formatStartupInputForPty(launchStartupCmd, resolvedShell) }).catch((err) => {
+        invoke("pty_write", { sessionId, data: formatStartupInputForPty(launchStartupCmd, normalizeShellKey(resolvedShell) ?? null) }).catch((err) => {
           toast.error("启动命令写入失败", { description: String(err) });
           logError("Failed to write startup command", {
             sessionId,
@@ -1167,7 +1176,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(options?.shell, !!options?.projectId, os);
-    const launchStartupCmd = prepareStartupCommandForPty(options?.startupCmd, resolvedShell);
+    const launchStartupCmd = prepareStartupCommandForPty(options?.startupCmd, normalizeShellKey(resolvedShell) ?? null);
 
     let splitSessionId: string;
     try {
@@ -1228,7 +1237,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     if (launchStartupCmd) {
       setTimeout(() => {
-        invoke("pty_write", { sessionId: splitSessionId, data: formatStartupInputForPty(launchStartupCmd, resolvedShell) }).catch((err) => {
+        invoke("pty_write", { sessionId: splitSessionId, data: formatStartupInputForPty(launchStartupCmd, normalizeShellKey(resolvedShell) ?? null) }).catch((err) => {
           toast.error("启动命令写入失败", { description: String(err) });
           logError("Failed to write split startup command", {
             sessionId: splitSessionId,
@@ -1520,7 +1529,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       newIdMap[ps.id] = newSessionId;
 
       const restoredStartupCmd = normalizeDirectCodexStartupCommand(ps.startupCmd);
-      const launchStartupCmd = prepareStartupCommandForPty(restoredStartupCmd, resolvedShell);
+      const launchStartupCmd = prepareStartupCommandForPty(restoredStartupCmd, normalizeShellKey(resolvedShell) ?? null);
       const restoredSession: TerminalSession = {
         id: newSessionId,
         projectId: ps.projectId,
@@ -1554,7 +1563,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       // 执行启动命令
       if (launchStartupCmd) {
         setTimeout(() => {
-          invoke("pty_write", { sessionId: newSessionId, data: formatStartupInputForPty(launchStartupCmd, resolvedShell) }).catch((err) => {
+          invoke("pty_write", { sessionId: newSessionId, data: formatStartupInputForPty(launchStartupCmd, normalizeShellKey(resolvedShell) ?? null) }).catch((err) => {
             logError("Failed to write startup command on restore", {
               sessionId: newSessionId,
               hasStartupCmd: true,

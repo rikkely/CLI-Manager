@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -5,12 +7,16 @@ use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::shell_resolver::silent_command;
+
 const MODEL_TEST_TIMEOUT_SECS: u64 = 4;
 const MODEL_TEST_SLOW_THRESHOLD_MS: u64 = 1500;
 const SUGGESTION_TIMEOUT_MS: u64 = 1600;
 const MAX_TEXT_FIELD_CHARS: usize = 4_000;
 const MAX_CONTEXT_ITEMS: usize = 12;
 const MAX_RESPONSE_BODY_BYTES: usize = 128 * 1024;
+const PATH_SUGGESTION_DEFAULT_LIMIT: usize = 24;
+const PATH_SUGGESTION_MAX_LIMIT: usize = 64;
 
 macro_rules! command_suggestion_debug {
     ($($arg:tt)*) => {{
@@ -44,6 +50,15 @@ pub struct CommandSuggestionGenerateRequest {
     templates: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandSuggestionPathRequest {
+    directory: String,
+    prefix: String,
+    directories_only: bool,
+    limit: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandSuggestionResponse {
@@ -52,6 +67,14 @@ pub struct CommandSuggestionResponse {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandSuggestionPathEntry {
+    name: String,
+    kind: String,
+    is_symlink: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,6 +235,25 @@ pub async fn command_suggestion_generate(
     })
 }
 
+#[tauri::command]
+pub async fn command_suggestion_list_path_entries(
+    request: CommandSuggestionPathRequest,
+) -> Result<Vec<CommandSuggestionPathEntry>, String> {
+    validate_path_field(&request.directory, "missing_directory")?;
+    validate_optional_path_field(&request.prefix)?;
+    tokio::task::spawn_blocking(move || list_path_entries(request))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn command_suggestion_resolve_directory(path: String) -> Result<Option<String>, String> {
+    validate_path_field(&path, "missing_path")?;
+    tokio::task::spawn_blocking(move || resolve_directory_path(&path))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
 fn validate_config(base_url: &str, api_key: &str, model: &str) -> Result<(), String> {
     if base_url.trim().is_empty() {
         return Err("missing_base_url".to_string());
@@ -240,6 +282,203 @@ fn validate_generation_input(request: &CommandSuggestionGenerateRequest) -> Resu
         }
     }
     Ok(())
+}
+
+fn validate_path_field(value: &str, empty_error: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(empty_error.to_string());
+    }
+    if value.contains('\0') || value.chars().count() > MAX_TEXT_FIELD_CHARS {
+        return Err("path_input_too_large".to_string());
+    }
+    Ok(())
+}
+
+fn validate_optional_path_field(value: &str) -> Result<(), String> {
+    if value.contains('\0') || value.chars().count() > MAX_TEXT_FIELD_CHARS {
+        return Err("path_input_too_large".to_string());
+    }
+    Ok(())
+}
+
+fn path_suggestion_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(PATH_SUGGESTION_DEFAULT_LIMIT)
+        .clamp(1, PATH_SUGGESTION_MAX_LIMIT)
+}
+
+fn list_path_entries(
+    request: CommandSuggestionPathRequest,
+) -> Result<Vec<CommandSuggestionPathEntry>, String> {
+    let limit = path_suggestion_limit(request.limit);
+    if let Some((distro, linux_dir)) = crate::wsl::parse_wsl_unc_path(&request.directory) {
+        return list_wsl_path_entries(
+            &distro,
+            &linux_dir,
+            &request.prefix,
+            request.directories_only,
+            limit,
+        );
+    }
+    list_native_path_entries(
+        &request.directory,
+        &request.prefix,
+        request.directories_only,
+        limit,
+    )
+}
+
+fn list_native_path_entries(
+    directory: &str,
+    prefix: &str,
+    directories_only: bool,
+    limit: usize,
+) -> Result<Vec<CommandSuggestionPathEntry>, String> {
+    let dir = PathBuf::from(directory);
+    if !dir.is_absolute() {
+        return Err("path_not_absolute".to_string());
+    }
+    let dir = dir
+        .canonicalize()
+        .map_err(|err| format!("path_canonicalize_failed: {err}"))?;
+    if !dir.is_dir() {
+        return Err("not_directory".to_string());
+    }
+
+    let mut entries = Vec::new();
+    for item in fs::read_dir(&dir).map_err(|err| format!("read_dir_failed: {err}"))? {
+        let entry = item.map_err(|err| format!("read_dir_entry_failed: {err}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !entry_matches_prefix(&name, prefix) {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("file_type_failed: {err}"))?;
+        let is_symlink = file_type.is_symlink();
+        let is_dir = if is_symlink {
+            entry.path().metadata().map(|metadata| metadata.is_dir()).unwrap_or(false)
+        } else {
+            file_type.is_dir()
+        };
+        if directories_only && !is_dir {
+            continue;
+        }
+        if !is_dir && !file_type.is_file() {
+            continue;
+        }
+        entries.push(CommandSuggestionPathEntry {
+            name,
+            kind: if is_dir { "directory" } else { "file" }.to_string(),
+            is_symlink,
+        });
+    }
+    sort_and_limit_path_entries(entries, limit)
+}
+
+fn list_wsl_path_entries(
+    distro: &str,
+    linux_dir: &str,
+    prefix: &str,
+    directories_only: bool,
+    limit: usize,
+) -> Result<Vec<CommandSuggestionPathEntry>, String> {
+    let wsl_exe = crate::wsl::find_wsl_exe().unwrap_or_else(|| PathBuf::from("wsl.exe"));
+    let output = silent_command(&wsl_exe.to_string_lossy())
+        .arg("-d")
+        .arg(distro)
+        .arg("--exec")
+        .arg("find")
+        .arg("-H")
+        .arg(linux_dir)
+        .args(["-mindepth", "1", "-maxdepth", "1", "-printf", "%f\\0%y\\0%Y\\0"])
+        .output()
+        .map_err(|err| format!("read_dir_failed: {err}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("read_dir_failed: {}", stderr.trim()));
+    }
+    parse_wsl_path_entries(&output.stdout, prefix, directories_only, limit)
+}
+
+fn parse_wsl_path_entries(
+    stdout: &[u8],
+    prefix: &str,
+    directories_only: bool,
+    limit: usize,
+) -> Result<Vec<CommandSuggestionPathEntry>, String> {
+    let mut fields = stdout.split(|byte| *byte == 0).filter(|field| !field.is_empty());
+    let mut entries = Vec::new();
+    loop {
+        let Some(name_raw) = fields.next() else {
+            break;
+        };
+        let kind_raw = fields
+            .next()
+            .ok_or_else(|| "read_dir_parse_failed".to_string())?;
+        let target_kind_raw = fields
+            .next()
+            .ok_or_else(|| "read_dir_parse_failed".to_string())?;
+        let name = String::from_utf8_lossy(name_raw).to_string();
+        if !entry_matches_prefix(&name, prefix) {
+            continue;
+        }
+        let is_symlink = kind_raw == b"l";
+        let is_dir = kind_raw == b"d" || (kind_raw == b"l" && target_kind_raw == b"d");
+        if directories_only && !is_dir {
+            continue;
+        }
+        entries.push(CommandSuggestionPathEntry {
+            name,
+            kind: if is_dir { "directory" } else { "file" }.to_string(),
+            is_symlink,
+        });
+    }
+    sort_and_limit_path_entries(entries, limit)
+}
+
+fn sort_and_limit_path_entries(
+    mut entries: Vec<CommandSuggestionPathEntry>,
+    limit: usize,
+) -> Result<Vec<CommandSuggestionPathEntry>, String> {
+    entries.sort_by_cached_key(|entry| {
+        (
+            if entry.kind == "directory" { 0u8 } else { 1u8 },
+            entry.name.to_lowercase(),
+        )
+    });
+    entries.truncate(limit);
+    Ok(entries)
+}
+
+fn entry_matches_prefix(name: &str, prefix: &str) -> bool {
+    prefix.is_empty() || name.to_lowercase().starts_with(&prefix.to_lowercase())
+}
+
+fn resolve_directory_path(path: &str) -> Result<Option<String>, String> {
+    if let Some((distro, linux_dir)) = crate::wsl::parse_wsl_unc_path(path) {
+        return Ok(wsl_directory_exists(&distro, &linux_dir)?.then(|| path.trim().to_string()));
+    }
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return Ok(None);
+    }
+    let Ok(canonical) = path.canonicalize() else {
+        return Ok(None);
+    };
+    if !canonical.is_dir() {
+        return Ok(None);
+    }
+    Ok(Some(canonical.to_string_lossy().replace('\\', "/")))
+}
+
+fn wsl_directory_exists(distro: &str, linux_dir: &str) -> Result<bool, String> {
+    let wsl_exe = crate::wsl::find_wsl_exe().unwrap_or_else(|| PathBuf::from("wsl.exe"));
+    let output = silent_command(&wsl_exe.to_string_lossy())
+        .args(["-d", distro, "--exec", "test", "-d", linux_dir])
+        .output()
+        .map_err(|err| format!("path_check_failed: {err}"))?;
+    Ok(output.status.success())
 }
 
 fn shared_client() -> Result<&'static reqwest::Client, String> {
@@ -790,5 +1029,49 @@ mod tests {
     #[test]
     fn sanitize_command_rejects_long_command() {
         assert!(sanitize_command(&"x".repeat(501)).is_none());
+    }
+
+    #[test]
+    fn native_path_entries_filter_prefix_and_sort_directories_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("work-app")).unwrap();
+        fs::write(tmp.path().join("work.txt"), "ok").unwrap();
+        fs::write(tmp.path().join("other.txt"), "skip").unwrap();
+
+        let entries =
+            list_native_path_entries(&tmp.path().to_string_lossy(), "wo", false, 10).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "work-app");
+        assert_eq!(entries[0].kind, "directory");
+        assert_eq!(entries[1].name, "work.txt");
+        assert_eq!(entries[1].kind, "file");
+    }
+
+    #[test]
+    fn native_path_entries_respect_directories_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(tmp.path().join("script.ts"), "ok").unwrap();
+
+        let entries =
+            list_native_path_entries(&tmp.path().to_string_lossy(), "s", true, 10).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "src");
+        assert_eq!(entries[0].kind, "directory");
+    }
+
+    #[test]
+    fn resolve_directory_canonicalizes_native_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("root").join("child")).unwrap();
+        let candidate = tmp.path().join("root").join("..").join("root").join("child");
+
+        let resolved = resolve_directory_path(&candidate.to_string_lossy())
+            .unwrap()
+            .unwrap();
+
+        assert!(resolved.ends_with("/root/child") || resolved.ends_with("\\root\\child"));
     }
 }
