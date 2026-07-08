@@ -3,6 +3,7 @@
 mod app_paths;
 mod claude_hook;
 mod commands;
+mod conpty_sideload;
 mod file_watcher;
 mod git_watcher;
 pub mod hook_client;
@@ -410,6 +411,7 @@ pub fn run() {
                 .build()
         })
         .setup(move |app| {
+            conpty_sideload::initialize(app.handle());
             if let Err(err) = app_paths::migrate_legacy_app_files(app.handle()) {
                 log::warn!("CLI-Manager data migration skipped: {err}");
             }

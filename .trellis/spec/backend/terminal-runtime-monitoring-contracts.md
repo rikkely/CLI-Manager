@@ -307,6 +307,79 @@ Ok((git_bash_path, Vec::new()))
 Ok((git_bash_path, vec!["--login".to_string(), "-i".to_string()]))
 ```
 
+## Scenario: Windows bundled ConPTY/OpenConsole sideload
+
+### 1. Scope / Trigger
+
+- Trigger: Windows internal PTY behavior depends on the ConPTY implementation that `portable-pty` loads before the first terminal session is created.
+- This is an infra contract because it spans Tauri resource bundling, Rust app startup, process environment, and `portable-pty` runtime DLL loading.
+
+### 2. Signatures
+
+```rust
+pub fn initialize<R: Runtime>(app: &AppHandle<R>)
+```
+
+- Called from `src-tauri/src/lib.rs::run()` inside Tauri `setup`, before `PtyManager` creates any PTY session.
+- No Tauri command or frontend IPC signature changes.
+
+### 3. Contracts
+
+| Item | Contract |
+|---|---|
+| Resource root | `src-tauri/resources/conpty/{x64,x86,arm64}` |
+| Required files | Each architecture directory must contain `conpty.dll` and `OpenConsole.exe` from the same Windows Terminal ConPTY package. |
+| Tauri config | `bundle.resources` must include `resources/conpty/**/*`. |
+| Runtime init | On Windows, resolve the matching resource directory through `BaseDirectory::Resource` and prepend it to process `PATH`. |
+| Load order | Init must run before the first `portable-pty` `openpty`; `portable-pty` checks `conpty.dll` before falling back to `kernel32.dll`. |
+| Non-Windows | No-op; do not mutate `PATH`. |
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Unsupported target architecture | Log skip and keep system ConPTY behavior. |
+| Resource directory cannot be resolved | Log warning and keep system ConPTY behavior. |
+| `conpty.dll` or `OpenConsole.exe` missing | Log warning and keep system ConPTY behavior. |
+| Directory already present in `PATH` | Do not duplicate it. |
+| PATH join fails | Log warning and keep system ConPTY behavior. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: x64 Windows build prepends `$RESOURCE/resources/conpty/x64`, so Codex sessions use bundled ConPTY/OpenConsole on old Windows builds.
+- Base: development checkout missing resources logs a warning and still opens terminals through system ConPTY.
+- Bad: mutating `PATH` after `portable-pty` has already loaded `conpty.dll` is too late and must not be treated as effective.
+- Bad: bundling only `conpty.dll` without matching `OpenConsole.exe` can load an incomplete runtime and must be rejected.
+
+### 6. Tests Required
+
+- Rust unit tests:
+  - architecture maps to one of `x64`, `x86`, or `arm64` on Windows;
+  - resource validation requires both `conpty.dll` and `OpenConsole.exe`;
+  - PATH comparison is case-insensitive and ignores trailing separators.
+- Project checks:
+  - `cd src-tauri && cargo check`;
+  - `cd src-tauri && cargo test`;
+  - `npx tsc --noEmit` when frontend terminal wiring is touched.
+- Manual Windows check: start Codex in an internal terminal on an affected Windows build and verify scrollback/scrollbar grows after TUI clear/redraw.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// Too late: the DLL may already be loaded by portable-pty.
+pty_manager.create(...)?;
+std::env::set_var("PATH", conpty_dir);
+```
+
+#### Correct
+
+```rust
+// Setup runs before any PTY session is opened.
+conpty_sideload::initialize(app.handle());
+```
+
 ## Scenario: PTY process tree cleanup
 
 ### 1. Scope / Trigger
