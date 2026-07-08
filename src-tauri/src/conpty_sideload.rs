@@ -6,13 +6,24 @@ use std::path::{Path, PathBuf};
 use tauri::{path::BaseDirectory, Manager};
 use tauri::{AppHandle, Runtime};
 
+#[cfg(target_os = "windows")]
+use crate::app_paths;
+
 const CONPTY_RESOURCE_ROOT: &str = "resources/conpty";
 const CONPTY_DLL: &str = "conpty.dll";
 const OPENCONSOLE_EXE: &str = "OpenConsole.exe";
+#[cfg(target_os = "windows")]
+const WINDOWS_CONPTY_COMPATIBILITY_FIX_SETTING: &str = "windowsConptyCompatibilityFixEnabled";
+#[cfg(target_os = "windows")]
+const WINDOWS_25H2_BUILD: u32 = 26200;
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "windows")]
     {
+        if !windows_conpty_compatibility_fix_enabled() {
+            info!("bundled ConPTY sideload skipped: compatibility fix disabled");
+            return;
+        }
         match bundled_conpty_dir(app).and_then(prepend_conpty_dir_to_path) {
             Ok(Some(dir)) => info!(
                 "bundled ConPTY sideload enabled: dir={}",
@@ -27,6 +38,101 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) {
     {
         let _ = app;
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_conpty_compatibility_fix_enabled() -> bool {
+    let default = default_enabled_for_windows_build(windows_build_number());
+    let settings_path = match app_paths::cli_manager_data_dir() {
+        Ok(dir) => dir.join("settings.json"),
+        Err(err) => {
+            warn!("bundled ConPTY sideload setting unavailable: {err}");
+            return default;
+        }
+    };
+
+    let mut value = match std::fs::read_to_string(&settings_path) {
+        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+            .unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+
+    if let Some(enabled) = value
+        .get(WINDOWS_CONPTY_COMPATIBILITY_FIX_SETTING)
+        .and_then(serde_json::Value::as_bool)
+    {
+        return enabled;
+    }
+
+    if let Some(parent) = settings_path.parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            warn!("bundled ConPTY sideload setting write skipped: {err}");
+            return default;
+        }
+    }
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    value[WINDOWS_CONPTY_COMPATIBILITY_FIX_SETTING] = serde_json::Value::Bool(default);
+    match serde_json::to_string_pretty(&value)
+        .map_err(|err| err.to_string())
+        .and_then(|text| std::fs::write(&settings_path, text).map_err(|err| err.to_string()))
+    {
+        Ok(()) => info!("bundled ConPTY sideload setting initialized: enabled={default}"),
+        Err(err) => warn!("bundled ConPTY sideload setting write skipped: {err}"),
+    }
+    default
+}
+
+#[cfg(target_os = "windows")]
+fn default_enabled_for_windows_build(build: Option<u32>) -> bool {
+    build
+        .map(|value| value < WINDOWS_25H2_BUILD)
+        .unwrap_or(true)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_build_number() -> Option<u32> {
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct OsVersionInfoExW {
+        dwOSVersionInfoSize: u32,
+        dwMajorVersion: u32,
+        dwMinorVersion: u32,
+        dwBuildNumber: u32,
+        dwPlatformId: u32,
+        szCSDVersion: [u16; 128],
+        wServicePackMajor: u16,
+        wServicePackMinor: u16,
+        wSuiteMask: u16,
+        wProductType: u8,
+        wReserved: u8,
+    }
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn RtlGetVersion(version: *mut OsVersionInfoExW) -> i32;
+    }
+
+    let mut version = OsVersionInfoExW {
+        dwOSVersionInfoSize: std::mem::size_of::<OsVersionInfoExW>() as u32,
+        dwMajorVersion: 0,
+        dwMinorVersion: 0,
+        dwBuildNumber: 0,
+        dwPlatformId: 0,
+        szCSDVersion: [0; 128],
+        wServicePackMajor: 0,
+        wServicePackMinor: 0,
+        wSuiteMask: 0,
+        wProductType: 0,
+        wReserved: 0,
+    };
+
+    let status = unsafe { RtlGetVersion(&mut version) };
+    if status < 0 {
+        return None;
+    }
+    Some(version.dwBuildNumber)
 }
 
 #[cfg(target_os = "windows")]
@@ -123,5 +229,17 @@ mod tests {
             Path::new(r"C:\App\resources\conpty\x64\"),
             Path::new(r"c:\app\resources\conpty\x64")
         ));
+    }
+
+    #[test]
+    fn default_enabled_follows_windows_25h2_build_boundary() {
+        assert!(default_enabled_for_windows_build(None));
+        assert!(default_enabled_for_windows_build(Some(
+            WINDOWS_25H2_BUILD - 1
+        )));
+        assert!(!default_enabled_for_windows_build(Some(WINDOWS_25H2_BUILD)));
+        assert!(!default_enabled_for_windows_build(Some(
+            WINDOWS_25H2_BUILD + 1
+        )));
     }
 }

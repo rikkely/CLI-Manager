@@ -6,6 +6,10 @@
 
 - **Codex Windows 滚动条修复**：Windows 内置终端随包侧载新版 Windows Terminal `conpty.dll` 与 `OpenConsole.exe`，让 `portable-pty` 优先使用新版 ConPTY/OpenConsole，缓解旧 Windows build 下 Codex 清屏重绘后 scrollback/滚动条不增长的问题。
 
+### 设置
+
+- **开发者设置模块**：设置页新增“开发者”模块，集中管理 Windows 兼容修复、软连接兼容性、低内存模式、禁用硬件加速与调试模式；Windows 兼容修复仅在 Windows 显示，首次启动按系统 build 自动决定默认值，切换后提示重启应用。
+
 ### 历史用量分析
 
 - **今日项目用量明细**：实时统计和历史详情侧栏的“今日项目用量”卡片新增输入、输出、缓存命中、缓存写入与未计价 Token 明细，便于核对总 Token 与费用估算差异。

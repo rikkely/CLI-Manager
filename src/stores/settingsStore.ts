@@ -46,6 +46,7 @@ export type ViewMode = "standard" | "compact";
 export type CloseBehavior = "ask" | "minimize" | "exit";
 type LastSettingsTab =
   | "general"
+  | "developer"
   | "sidebar"
   | "terminal-theme"
   | "shortcuts"
@@ -232,6 +233,7 @@ interface Settings {
   shellRuntimeMonitoringEnabled: boolean;
   ccusageAnalyticsEnabled: boolean;
   ccusageUseWsl: boolean;
+  windowsConptyCompatibilityFixEnabled: boolean;
   symlinkCompatibilityEnabled: boolean;
   lowMemoryMode: boolean;
   disableHardwareAcceleration: boolean;
@@ -344,6 +346,7 @@ const DEFAULTS: Settings = {
   shellRuntimeMonitoringEnabled: false,
   ccusageAnalyticsEnabled: false,
   ccusageUseWsl: false,
+  windowsConptyCompatibilityFixEnabled: false,
   symlinkCompatibilityEnabled: false,
   lowMemoryMode: false,
   disableHardwareAcceleration: false,
@@ -411,6 +414,7 @@ const LEGACY_TERMINAL_THEME_MAP: Partial<Record<string, string>> = {
 
 const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "general",
+  "developer",
   "sidebar",
   "terminal-theme",
   "shortcuts",
@@ -863,6 +867,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.ccusageUseWsl === "boolean"
         ? entries.ccusageUseWsl
         : DEFAULTS.ccusageUseWsl;
+    entries.windowsConptyCompatibilityFixEnabled =
+      typeof entries.windowsConptyCompatibilityFixEnabled === "boolean"
+        ? entries.windowsConptyCompatibilityFixEnabled
+        : DEFAULTS.windowsConptyCompatibilityFixEnabled;
     entries.symlinkCompatibilityEnabled =
       typeof entries.symlinkCompatibilityEnabled === "boolean"
         ? entries.symlinkCompatibilityEnabled

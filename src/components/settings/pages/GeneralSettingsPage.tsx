@@ -411,13 +411,9 @@ export function GeneralSettingsPage() {
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
   const ccusageUseWsl = useSettingsStore((s) => s.ccusageUseWsl);
-  const symlinkCompatibilityEnabled = useSettingsStore((s) => s.symlinkCompatibilityEnabled);
   const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
-  const lowMemoryMode = useSettingsStore((s) => s.lowMemoryMode);
-  const disableHardwareAcceleration = useSettingsStore((s) => s.disableHardwareAcceleration);
-  const debugMode = useSettingsStore((s) => s.debugMode);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
   const ccusageToolStatus = useCcusageStore((s) => s.toolStatus);
@@ -903,89 +899,6 @@ export function GeneralSettingsPage() {
         </Stack>
       </section>
 
-      <section className="ui-surface-card rounded-2xl border border-border p-4">
-        <Stack gap="sm">
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-              <Box>
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("settings.general.symlinkCompatibility")}
-                </Text>
-                <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
-                  {t("settings.general.symlinkCompatibilityDescription")}
-                </Text>
-              </Box>
-              <Switch
-                color="cliPrimary"
-                checked={symlinkCompatibilityEnabled}
-                onChange={(event) => void update("symlinkCompatibilityEnabled", event.currentTarget.checked)}
-                aria-label={
-                  symlinkCompatibilityEnabled
-                    ? t("settings.general.disableSymlinkCompatibility")
-                    : t("settings.general.enableSymlinkCompatibility")
-                }
-              />
-            </Group>
-          </Card>
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-              <Box>
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("settings.general.lowMemoryMode")}
-                </Text>
-                <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
-                  {t("settings.general.lowMemoryModeDescription")}
-                </Text>
-              </Box>
-              <Switch
-                color="cliPrimary"
-                checked={lowMemoryMode}
-                onChange={(event) => void update("lowMemoryMode", event.currentTarget.checked)}
-                aria-label={
-                  lowMemoryMode
-                    ? t("settings.general.disableLowMemoryMode")
-                    : t("settings.general.enableLowMemoryMode")
-                }
-              />
-            </Group>
-          </Card>
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-              <Box>
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("settings.general.disableHardwareAcceleration")}
-                </Text>
-                <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
-                  {t("settings.general.disableHardwareAccelerationDescription")}
-                </Text>
-              </Box>
-              <Switch
-                color="cliPrimary"
-                checked={disableHardwareAcceleration}
-                onChange={(event) => void update("disableHardwareAcceleration", event.currentTarget.checked)}
-                aria-label={
-                  disableHardwareAcceleration
-                    ? t("settings.general.allowHardwareAcceleration")
-                    : t("settings.general.disableHardwareAccelerationAction")
-                }
-              />
-            </Group>
-          </Card>
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-              <Text size="xs" c="var(--on-surface-variant)">
-                {t("settings.general.debugMode")}
-              </Text>
-              <Switch
-                color="cliPrimary"
-                checked={debugMode}
-                onChange={(event) => void update("debugMode", event.currentTarget.checked)}
-                aria-label={debugMode ? t("settings.general.disableDebugMode") : t("settings.general.enableDebugMode")}
-              />
-            </Group>
-          </Card>
-        </Stack>
-      </section>
       <Dialog open={ccusageWslDialogOpen} onOpenChange={setCcusageWslDialogOpen}>
         <DialogContent className="max-w-[680px]">
           <DialogHeader>

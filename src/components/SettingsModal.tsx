@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ClipboardList,
   Coins,
+  Code2,
   Info,
   Keyboard,
   PanelLeft,
@@ -18,6 +19,7 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 import { AppMantineThemeProvider } from "./ui/MantineThemeProvider";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { GeneralSettingsPage } from "./settings/pages/GeneralSettingsPage";
+import { DeveloperSettingsPage } from "./settings/pages/DeveloperSettingsPage";
 import { SidebarSettingsPage } from "./settings/pages/SidebarSettingsPage";
 import { ThemeSettingsPage } from "./settings/pages/ThemeSettingsPage";
 import { ShortcutSettingsPage } from "./settings/pages/ShortcutSettingsPage";
@@ -34,6 +36,7 @@ import { normalizeFontFamilyStack } from "../lib/systemFonts";
 
 export type SettingsTab =
   | "general"
+  | "developer"
   | "sidebar"
   | "terminal-theme"
   | "shortcuts"
@@ -55,6 +58,7 @@ interface SettingsTabConfig {
 
 const SETTINGS_TAB_ORDER: SettingsTab[] = [
   "general",
+  "developer",
   "terminal-theme",
   "shortcuts",
   "templates",
@@ -73,6 +77,12 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     title: "settings.tabs.general.title",
     description: "settings.tabs.general.description",
     icon: Settings2,
+  },
+  developer: {
+    label: "settings.tabs.developer.label",
+    title: "settings.tabs.developer.title",
+    description: "settings.tabs.developer.description",
+    icon: Code2,
   },
   sidebar: {
     label: "settings.tabs.sidebar.label",
@@ -216,6 +226,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   const activeConfig = SETTINGS_TAB_CONFIG[activeTab];
   const activeContent = (() => {
     if (activeTab === "general") return <GeneralSettingsPage />;
+    if (activeTab === "developer") return <DeveloperSettingsPage />;
     if (activeTab === "sidebar") return <SidebarSettingsPage />;
     if (activeTab === "terminal-theme") return <ThemeSettingsPage />;
     if (activeTab === "shortcuts") return <ShortcutSettingsPage searchValue={searchValue} />;
