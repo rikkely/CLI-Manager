@@ -46,6 +46,7 @@
     "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "diff": "^9.0.0",
     "echarts": "^6.1.0",
     "lucide-react": "^0.577.0",
     "monaco-editor": "^0.55.1",

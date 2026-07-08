@@ -1,18 +1,20 @@
 use crate::commands::model_pricing::{find_cached_model_pricing, CachedModelPricingLookup};
 use crate::shell_resolver::silent_command;
+use chrono::{Datelike, SecondsFormat, Utc};
 use log::{debug, info, warn};
 use memchr::memmem;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 /// BufReader 容量；默认 8KB 对几 MB 的 jsonl 文件 syscall 次数偏多。
 const READ_BUF_CAPACITY: usize = 64 * 1024;
@@ -486,6 +488,19 @@ pub struct HistorySessionDetail {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HistoryConversionResult {
+    pub source: String,
+    pub target_source: String,
+    pub session_id: String,
+    pub project_key: String,
+    pub file_path: String,
+    pub cwd: Option<String>,
+    pub message_count: usize,
+    pub resume_command: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistorySearchResult {
     pub session_id: String,
     pub source: String,
@@ -953,6 +968,28 @@ pub async fn history_get_session(
             started_at.elapsed().as_millis(),
         );
         Ok(detail)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn history_convert_session(
+    file_path: String,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
+    source: String,
+    project_key: String,
+    target_source: String,
+) -> Result<HistoryConversionResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let file_ref = validate_session_file_ref(&file_path, &source, &project_key, &roots)?;
+        let target_source = target_source.trim().to_lowercase();
+        let detail = build_session_detail(&file_ref, false)?;
+        let result = convert_history_session(&detail, &target_source, &roots)?;
+        invalidate_history_caches();
+        Ok(result)
     })
     .await
     .map_err(|err| err.to_string())?
@@ -2929,6 +2966,284 @@ fn collect_subtask_session_file_refs(parent_file_ref: &SessionFileRef) -> Vec<Se
             path,
         })
         .collect()
+}
+
+fn convert_history_session(
+    detail: &HistorySessionDetail,
+    target_source: &str,
+    roots: &HistoryRoots,
+) -> Result<HistoryConversionResult, String> {
+    let source = detail.source.trim().to_lowercase();
+    let target_source = target_source.trim().to_lowercase();
+    if source != "claude" && source != "codex" {
+        return Err("unsupported_history_source".to_string());
+    }
+    if target_source != "claude" && target_source != "codex" {
+        return Err("unsupported_target_history_source".to_string());
+    }
+    if source == target_source {
+        return Err("history_conversion_same_source".to_string());
+    }
+
+    let session_id = Uuid::new_v4().to_string();
+    let cwd = converted_session_cwd(detail);
+    let lines = match target_source.as_str() {
+        "claude" => build_claude_conversion_lines(detail, &session_id, cwd.as_deref()),
+        "codex" => build_codex_conversion_lines(detail, &session_id, cwd.as_deref()),
+        _ => unreachable!(),
+    };
+    let message_count = detail
+        .messages
+        .iter()
+        .filter(|message| !converted_message_content(message).trim().is_empty())
+        .count();
+    if message_count == 0 {
+        return Err("history_conversion_no_messages".to_string());
+    }
+
+    let target_path = match target_source.as_str() {
+        "claude" => converted_claude_session_path(detail, roots, &session_id, cwd.as_deref()),
+        "codex" => converted_codex_session_path(roots, &session_id),
+        _ => unreachable!(),
+    };
+    write_jsonl_lines(&target_path, &lines)?;
+
+    let file_ref = SessionFileRef {
+        source: target_source.clone(),
+        project_key: match target_source.as_str() {
+            "claude" => cwd
+                .as_deref()
+                .map(claude_project_key_from_path)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "default".to_string()),
+            "codex" => cwd
+                .as_deref()
+                .and_then(project_key_from_cwd)
+                .unwrap_or_else(|| detail.project_key.clone()),
+            _ => unreachable!(),
+        },
+        path: target_path.clone(),
+    };
+
+    Ok(HistoryConversionResult {
+        source,
+        target_source: target_source.clone(),
+        session_id: session_id.clone(),
+        project_key: file_ref.project_key,
+        file_path: file_ref.path.to_string_lossy().to_string(),
+        cwd,
+        message_count,
+        resume_command: match target_source.as_str() {
+            "claude" => format!("claude --resume {session_id}"),
+            "codex" => format!("codex resume {session_id}"),
+            _ => unreachable!(),
+        },
+    })
+}
+
+fn converted_session_cwd(detail: &HistorySessionDetail) -> Option<String> {
+    detail
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let project_key = detail.project_key.trim();
+            if project_key.is_empty() {
+                None
+            } else {
+                Some(project_key.to_string())
+            }
+        })
+}
+
+fn conversion_timestamp(message: &HistoryMessage) -> String {
+    message
+        .timestamp
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(now_rfc3339)
+}
+
+fn now_rfc3339() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn converted_message_role(role: &str) -> &'static str {
+    if role.eq_ignore_ascii_case("assistant") {
+        "assistant"
+    } else {
+        "user"
+    }
+}
+
+fn converted_message_content(message: &HistoryMessage) -> String {
+    let content = message.content.trim();
+    if message.role.eq_ignore_ascii_case("tool") {
+        format!("[Tool]\n{content}")
+    } else {
+        content.to_string()
+    }
+}
+
+fn build_claude_conversion_lines(
+    detail: &HistorySessionDetail,
+    session_id: &str,
+    cwd: Option<&str>,
+) -> Vec<Value> {
+    let mut lines = Vec::new();
+    let mut parent_uuid: Option<String> = None;
+    for message in &detail.messages {
+        let content = converted_message_content(message);
+        if content.trim().is_empty() {
+            continue;
+        }
+        let role = converted_message_role(&message.role);
+        let uuid = Uuid::new_v4().to_string();
+        lines.push(json!({
+            "parentUuid": parent_uuid,
+            "isSidechain": false,
+            "userType": "external",
+            "cwd": cwd.unwrap_or_default(),
+            "sessionId": session_id,
+            "version": "cli-manager-converted",
+            "type": role,
+            "message": {
+                "role": role,
+                "content": content
+            },
+            "uuid": uuid,
+            "timestamp": conversion_timestamp(message)
+        }));
+        parent_uuid = Some(uuid);
+    }
+    lines
+}
+
+fn build_codex_conversion_lines(
+    detail: &HistorySessionDetail,
+    session_id: &str,
+    cwd: Option<&str>,
+) -> Vec<Value> {
+    let created_at = detail
+        .messages
+        .first()
+        .map(conversion_timestamp)
+        .unwrap_or_else(now_rfc3339);
+    let mut lines = vec![
+        json!({
+            "timestamp": created_at,
+            "type": "session_meta",
+            "payload": {
+                "id": session_id,
+                "timestamp": created_at,
+                "cwd": cwd.unwrap_or_default(),
+                "originator": "cli-manager",
+                "source": format!("converted-from-{}", detail.source)
+            }
+        }),
+        json!({
+            "timestamp": created_at,
+            "type": "turn_context",
+            "payload": {
+                "cwd": cwd.unwrap_or_default(),
+                "model": detail
+                    .usage
+                    .current_model
+                    .as_deref()
+                    .or(detail.usage.dominant_model.as_deref())
+                    .unwrap_or("converted-history")
+            }
+        }),
+    ];
+
+    for message in &detail.messages {
+        let content = converted_message_content(message);
+        if content.trim().is_empty() {
+            continue;
+        }
+        let role = converted_message_role(&message.role);
+        let block_type = if role == "assistant" {
+            "output_text"
+        } else {
+            "input_text"
+        };
+        lines.push(json!({
+            "timestamp": conversion_timestamp(message),
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": role,
+                "content": [
+                    {
+                        "type": block_type,
+                        "text": content
+                    }
+                ]
+            }
+        }));
+    }
+    lines
+}
+
+fn converted_claude_session_path(
+    detail: &HistorySessionDetail,
+    roots: &HistoryRoots,
+    session_id: &str,
+    cwd: Option<&str>,
+) -> PathBuf {
+    let project_key = cwd
+        .map(claude_project_key_from_path)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            let project_key = detail.project_key.trim();
+            if project_key.is_empty() {
+                "default".to_string()
+            } else {
+                project_key.to_string()
+            }
+        });
+    unique_jsonl_path(
+        resolve_claude_history_root(roots).join(project_key),
+        session_id,
+    )
+}
+
+fn converted_codex_session_path(roots: &HistoryRoots, session_id: &str) -> PathBuf {
+    let now = Utc::now();
+    let dir = resolve_codex_history_root(roots)
+        .join(format!("{:04}", now.year()))
+        .join(format!("{:02}", now.month()))
+        .join(format!("{:02}", now.day()));
+    unique_jsonl_path(dir, &format!("rollout-{}", session_id))
+}
+
+fn unique_jsonl_path(dir: PathBuf, stem: &str) -> PathBuf {
+    let mut candidate = dir.join(format!("{stem}.jsonl"));
+    let mut index = 1usize;
+    while candidate.exists() {
+        candidate = dir.join(format!("{stem}-{index}.jsonl"));
+        index += 1;
+    }
+    candidate
+}
+
+fn write_jsonl_lines(path: &Path, lines: &[Value]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "history_conversion_invalid_target_path".to_string())?;
+    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    let mut file = File::create(path).map_err(|err| err.to_string())?;
+    for line in lines {
+        let encoded = serde_json::to_string(line).map_err(|err| err.to_string())?;
+        file.write_all(encoded.as_bytes())
+            .map_err(|err| err.to_string())?;
+        file.write_all(b"\n").map_err(|err| err.to_string())?;
+    }
+    file.flush().map_err(|err| err.to_string())
 }
 
 fn list_subagent_transcript_files(subagents_dir: &Path) -> Vec<PathBuf> {
@@ -6383,6 +6698,112 @@ mod tests {
             Ok(_) => panic!("expected error"),
             Err(err) => err,
         }
+    }
+
+    fn empty_usage() -> HistorySessionUsage {
+        HistorySessionUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            total_cost_usd: 0.0,
+            dominant_model: None,
+            current_model: None,
+            context_window: None,
+            last_context_tokens: None,
+            reasoning_effort: None,
+            token_trend: Vec::new(),
+            tool_call_count: 0,
+            mcp_calls: Vec::new(),
+            skill_calls: Vec::new(),
+            builtin_calls: Vec::new(),
+        }
+    }
+
+    fn sample_detail(source: &str) -> HistorySessionDetail {
+        HistorySessionDetail {
+            session_id: "source-session".to_string(),
+            source: source.to_string(),
+            project_key: "CLI-Manager".to_string(),
+            title: "implement conversion".to_string(),
+            file_path: "source.jsonl".to_string(),
+            cwd: Some(r"D:\work\CLI-Manager".to_string()),
+            created_at: 1_700_000_000_000,
+            updated_at: 1_700_000_001_000,
+            message_count: 2,
+            branch: None,
+            usage: empty_usage(),
+            tool_events: Vec::new(),
+            file_changes: Vec::new(),
+            messages: vec![
+                HistoryMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                    timestamp: Some("2026-01-01T00:00:00Z".to_string()),
+                    model: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_creation_tokens: None,
+                    cache_read_tokens: None,
+                },
+                HistoryMessage {
+                    role: "assistant".to_string(),
+                    content: "world".to_string(),
+                    timestamp: Some("2026-01-01T00:00:01Z".to_string()),
+                    model: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_creation_tokens: None,
+                    cache_read_tokens: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn convert_codex_history_to_claude_jsonl_readable_by_history_parser() {
+        let temp_dir = TempDir::new().unwrap();
+        let roots = HistoryRoots {
+            claude_config_dir: Some(temp_dir.path().join(".claude")),
+            codex_config_dir: Some(temp_dir.path().join(".codex")),
+        };
+
+        let result = convert_history_session(&sample_detail("codex"), "claude", &roots).unwrap();
+        assert_eq!(result.target_source, "claude");
+        assert_eq!(result.message_count, 2);
+        assert!(result.resume_command.starts_with("claude --resume "));
+
+        let files = collect_claude_session_files(&resolve_claude_history_root(&roots));
+        assert_eq!(files.len(), 1);
+        let detail = build_session_detail(&files[0], false).unwrap();
+        assert_eq!(detail.source, "claude");
+        assert_eq!(detail.messages.len(), 2);
+        assert_eq!(detail.messages[0].role, "user");
+        assert_eq!(detail.messages[0].content, "hello");
+        assert_eq!(detail.messages[1].role, "assistant");
+    }
+
+    #[test]
+    fn convert_claude_history_to_codex_jsonl_readable_by_history_parser() {
+        let temp_dir = TempDir::new().unwrap();
+        let roots = HistoryRoots {
+            claude_config_dir: Some(temp_dir.path().join(".claude")),
+            codex_config_dir: Some(temp_dir.path().join(".codex")),
+        };
+
+        let result = convert_history_session(&sample_detail("claude"), "codex", &roots).unwrap();
+        assert_eq!(result.target_source, "codex");
+        assert_eq!(result.message_count, 2);
+        assert!(result.resume_command.starts_with("codex resume "));
+
+        let files = collect_codex_session_files(&resolve_codex_history_root(&roots));
+        assert_eq!(files.len(), 1);
+        let detail = build_session_detail(&files[0], false).unwrap();
+        assert_eq!(detail.source, "codex");
+        assert_eq!(detail.session_id, result.session_id);
+        assert_eq!(detail.messages.len(), 2);
+        assert_eq!(detail.messages[0].role, "user");
+        assert_eq!(detail.messages[1].content, "world");
     }
 
     #[test]
