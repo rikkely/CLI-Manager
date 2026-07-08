@@ -4,7 +4,12 @@ import { TERM_PANEL, getTerminalSidePanelSkinStyle, panelColorTint } from "../st
 import { SessionReplayPanel } from "./SessionReplayPanel";
 import { TerminalStatsPanel } from "./TerminalStatsPanel";
 import { useI18n } from "../../lib/i18n";
-import { useSettingsStore } from "../../stores/settingsStore";
+import {
+  TERMINAL_PANEL_WIDTH_DEFAULTS,
+  TERMINAL_PANEL_WIDTH_MAX,
+  useSettingsStore,
+  type TerminalPanelWidthKey,
+} from "../../stores/settingsStore";
 
 const GitChangesPanel = lazy(() =>
   import("../git/GitChangesPanel").then((module) => ({ default: module.GitChangesPanel }))
@@ -23,20 +28,21 @@ interface TerminalSidePanelProps {
 }
 
 const MERGED_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-side-panel-width";
-const MERGED_PANEL_DEFAULT_WIDTH = 300;
-const TERMINAL_PANEL_MAX_WIDTH = 500;
 
-export const TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-stats-panel-width";
-export const TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-git-panel-width";
-export const TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-files-panel-width";
-export const TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-replay-panel-width";
-export const TERMINAL_STATS_PANEL_DEFAULT_WIDTH = 203;
-export const TERMINAL_GIT_PANEL_DEFAULT_WIDTH = 196;
-export const TERMINAL_FILES_PANEL_DEFAULT_WIDTH = 220;
-export const TERMINAL_REPLAY_PANEL_DEFAULT_WIDTH = 300;
+const TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-stats-panel-width";
+const TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-git-panel-width";
+const TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-files-panel-width";
+const TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-replay-panel-width";
+const LEGACY_WIDTH_STORAGE_KEYS: Record<TerminalPanelWidthKey, string> = {
+  merged: MERGED_PANEL_WIDTH_STORAGE_KEY,
+  stats: TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY,
+  git: TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY,
+  replay: TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY,
+  files: TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY,
+};
 
 interface ResizableTerminalPanelFrameProps {
-  storageKey: string;
+  widthKey: TerminalPanelWidthKey;
   defaultWidth: number;
   minWidth?: number;
   maxWidth?: number;
@@ -49,27 +55,30 @@ function clampWidth(width: number, minWidth: number, maxWidth: number): number {
   return Math.min(maxWidth, Math.max(minWidth, Math.round(width)));
 }
 
-function readStoredWidth(storageKey: string, defaultWidth: number, minWidth: number, maxWidth: number): number {
-  if (typeof window === "undefined") return defaultWidth;
+function readLegacyStoredWidth(widthKey: TerminalPanelWidthKey, defaultWidth: number, minWidth: number, maxWidth: number): number | null {
+  if (typeof window === "undefined") return null;
+  const storageKey = LEGACY_WIDTH_STORAGE_KEYS[widthKey];
   const raw = window.localStorage.getItem(storageKey);
-  if (!raw) return defaultWidth;
+  if (!raw) return null;
   const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) return defaultWidth;
+  if (!Number.isFinite(parsed)) return null;
   if (storageKey === MERGED_PANEL_WIDTH_STORAGE_KEY && parsed === 243) return defaultWidth;
   return clampWidth(parsed, minWidth, maxWidth);
 }
 
 export function ResizableTerminalPanelFrame({
-  storageKey,
+  widthKey,
   defaultWidth,
   minWidth = defaultWidth,
-  maxWidth = TERMINAL_PANEL_MAX_WIDTH,
+  maxWidth = TERMINAL_PANEL_WIDTH_MAX,
   resizeLabel,
   resizeTitle = resizeLabel,
   children,
 }: ResizableTerminalPanelFrameProps) {
   const terminalSidePanelSkin = useSettingsStore((s) => s.terminalSidePanelSkin);
-  const [width, setWidth] = useState(() => readStoredWidth(storageKey, defaultWidth, minWidth, maxWidth));
+  const persistedWidth = useSettingsStore((s) => s.terminalPanelWidths[widthKey]);
+  const updateSettings = useSettingsStore((s) => s.update);
+  const [width, setWidth] = useState(() => clampWidth(persistedWidth ?? defaultWidth, minWidth, maxWidth));
   const [dragging, setDragging] = useState(false);
   const widthRef = useRef(width);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -81,6 +90,21 @@ export function ResizableTerminalPanelFrame({
   useEffect(() => {
     widthRef.current = width;
   }, [width]);
+
+  useEffect(() => {
+    if (!dragging && persistedWidth !== widthRef.current) {
+      setWidth(clampWidth(persistedWidth, minWidth, maxWidth));
+    }
+  }, [dragging, maxWidth, minWidth, persistedWidth]);
+
+  useEffect(() => {
+    if (persistedWidth !== defaultWidth) return;
+    const legacyWidth = readLegacyStoredWidth(widthKey, defaultWidth, minWidth, maxWidth);
+    if (legacyWidth === null || legacyWidth === persistedWidth) return;
+    setWidth(legacyWidth);
+    const current = useSettingsStore.getState().terminalPanelWidths;
+    void updateSettings("terminalPanelWidths", { ...current, [widthKey]: legacyWidth });
+  }, [defaultWidth, maxWidth, minWidth, persistedWidth, updateSettings, widthKey]);
 
   useEffect(() => {
     if (panelRef.current) {
@@ -122,7 +146,8 @@ export function ResizableTerminalPanelFrame({
         panelRef.current.style.width = `${finalWidth}px`;
       }
       setWidth(finalWidth);
-      window.localStorage.setItem(storageKey, String(finalWidth));
+      const current = useSettingsStore.getState().terminalPanelWidths;
+      void updateSettings("terminalPanelWidths", { ...current, [widthKey]: finalWidth });
       setDragging(false);
     };
 
@@ -139,7 +164,7 @@ export function ResizableTerminalPanelFrame({
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
     };
-  }, [dragging, maxWidth, minWidth, storageKey]);
+  }, [dragging, maxWidth, minWidth, updateSettings, widthKey]);
 
   const handleResizeMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -199,8 +224,8 @@ export function TerminalSidePanel({
 
   return (
     <ResizableTerminalPanelFrame
-      storageKey={MERGED_PANEL_WIDTH_STORAGE_KEY}
-      defaultWidth={MERGED_PANEL_DEFAULT_WIDTH}
+      widthKey="merged"
+      defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.merged}
       resizeLabel={t("terminal.panel.resizeSideLabel")}
       resizeTitle={t("terminal.panel.resizeSideTitle")}
     >

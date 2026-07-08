@@ -4,6 +4,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { toast } from "sonner";
 import { useSettingsStore } from "./settingsStore";
 import { useProjectStore } from "./projectStore";
+import { getCliManagerDataPaths } from "../lib/appPaths";
 import { logInfo, logWarn } from "../lib/logger";
 import { translateCurrent } from "../lib/i18n";
 import type { HistorySource, Project } from "../lib/types";
@@ -82,7 +83,6 @@ interface ExternalSessionSyncStore {
 
 const INITIAL_PROJECT_SCAN_LIMIT = 60;
 const MANUAL_PROJECT_SCAN_LIMIT = 240;
-const STORE_FILE = "external-session-sync.json";
 const STORE_SCHEMA_VERSION = 3;
 
 let store: Store | null = null;
@@ -92,7 +92,8 @@ const deletedKeysThisSession = new Set<string>();
 
 async function getStore() {
   if (!store) {
-    store = await Store.load(STORE_FILE, { autoSave: 100, defaults: {} });
+    const paths = await getCliManagerDataPaths();
+    store = await Store.load(paths.externalSessionSyncStorePath, { autoSave: 0, defaults: {} });
   }
   return store;
 }

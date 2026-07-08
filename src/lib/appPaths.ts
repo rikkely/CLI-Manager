@@ -7,6 +7,7 @@ export interface CliManagerDataPaths {
   settingsStorePath: string;
   sessionsStorePath: string;
   syncStorePath: string;
+  externalSessionSyncStorePath: string;
   logsDir: string;
   codexProvidersDir: string;
   claudeProvidersDir: string;

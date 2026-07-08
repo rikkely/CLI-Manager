@@ -33,6 +33,7 @@
     "store:default",
     "log:default",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "clipboard-manager:allow-read-text"
   ]
 }

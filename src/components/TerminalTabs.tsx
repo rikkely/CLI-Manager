@@ -19,7 +19,7 @@ import {
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState } from "../stores/terminalStore";
-import { useSettingsStore } from "../stores/settingsStore";
+import { TERMINAL_PANEL_WIDTH_DEFAULTS, useSettingsStore } from "../stores/settingsStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
 import { useProjectStore } from "../stores/projectStore";
 import { isProjectFileDirty, useFileExplorerStore } from "../stores/fileExplorerStore";
@@ -35,14 +35,6 @@ import { TerminalStatsPanel } from "./terminal/TerminalStatsPanel";
 import {
   ResizableTerminalPanelFrame,
   TerminalSidePanel,
-  TERMINAL_FILES_PANEL_DEFAULT_WIDTH,
-  TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY,
-  TERMINAL_GIT_PANEL_DEFAULT_WIDTH,
-  TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY,
-  TERMINAL_REPLAY_PANEL_DEFAULT_WIDTH,
-  TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY,
-  TERMINAL_STATS_PANEL_DEFAULT_WIDTH,
-  TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY,
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { SubagentTranscriptView } from "./terminal/SubagentTranscriptView";
@@ -2997,8 +2989,8 @@ export function TerminalTabs({
             <>
               {statsOpen && (
                 <ResizableTerminalPanelFrame
-                  storageKey={TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY}
-                  defaultWidth={TERMINAL_STATS_PANEL_DEFAULT_WIDTH}
+                  widthKey="stats"
+                  defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.stats}
                   resizeLabel={t("terminal.panel.resizeStatsLabel")}
                   resizeTitle={t("terminal.panel.resizeStatsTitle")}
                 >
@@ -3007,8 +2999,8 @@ export function TerminalTabs({
               )}
               {gitOpen && (
                 <ResizableTerminalPanelFrame
-                  storageKey={TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY}
-                  defaultWidth={TERMINAL_GIT_PANEL_DEFAULT_WIDTH}
+                  widthKey="git"
+                  defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.git}
                   resizeLabel={t("terminal.panel.resizeGitLabel")}
                   resizeTitle={t("terminal.panel.resizeGitTitle")}
                 >
@@ -3019,8 +3011,8 @@ export function TerminalTabs({
               )}
               {replayOpen && (
                 <ResizableTerminalPanelFrame
-                  storageKey={TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY}
-                  defaultWidth={TERMINAL_REPLAY_PANEL_DEFAULT_WIDTH}
+                  widthKey="replay"
+                  defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.replay}
                   resizeLabel={t("terminal.panel.resizeReplayLabel")}
                   resizeTitle={t("terminal.panel.resizeReplayTitle")}
                 >
@@ -3029,8 +3021,8 @@ export function TerminalTabs({
               )}
               {filesOpen && (
                 <ResizableTerminalPanelFrame
-                  storageKey={TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY}
-                  defaultWidth={TERMINAL_FILES_PANEL_DEFAULT_WIDTH}
+                  widthKey="files"
+                  defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.files}
                   resizeLabel={t("terminal.panel.resizeFilesLabel")}
                   resizeTitle={t("terminal.panel.resizeFilesTitle")}
                 >

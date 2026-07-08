@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useShallow } from "zustand/shallow";
 import {
@@ -1902,7 +1903,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "v") {
         e.preventDefault();
-        navigator.clipboard.readText().then((text) => {
+        readClipboardText().then((text) => {
           pasteIntoTerminal(wrapTerminalPasteTextForCtrlShiftV(text));
         }).catch((err) => {
           logError("Failed to read clipboard text", { sessionId, err });
@@ -1928,7 +1929,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
       if (key === "v") {
         e.preventDefault();
-        navigator.clipboard.readText().then((text) => {
+        readClipboardText().then((text) => {
           pasteIntoTerminal(text);
         }).catch((err) => {
           logError("Failed to read clipboard text", { sessionId, err });
@@ -2723,41 +2724,53 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     });
 
     // Windows 中文 IME 的直出标点会经过 keyCode 229，但部分 Chromium/WebView2 版本不会让
-    // xterm 的 textarea diff 兜底稳定触发。这里在捕获阶段接管那一小段原生 text input，
-    // 既保留真实组合输入交给 xterm，也避免中文双引号这类标点被静默吞掉。
+    // xterm 的 textarea diff 兜底稳定触发。这里仅延迟补交那一小段原生 text input，
+    // 不阻断 xterm 自己的 composition / input 事件链，避免单字提交被吞或空格确认候选残留。
     const nowForImeInput = () => performance.now();
     const isHelperTextareaEvent = (event: Event) => Boolean(textarea) && event.target === textarea;
     const shouldRecoverNativeTextInput = (event: InputEvent) => {
       if (!isHelperTextareaEvent(event) || event.inputType !== "insertText" || !event.data) return false;
+      if (/^[\t\n\v\f\r ]+$/.test(event.data)) return false;
       if (isComposingRef.current || event.isComposing) return false;
       const now = nowForImeInput();
       if (lastCompositionEndAt >= 0 && now - lastCompositionEndAt <= IME_COMPOSITION_END_SUPPRESS_WINDOW_MS) return false;
       const hasRecentImeProcessKey = lastImeProcessKeyAt >= 0 && now - lastImeProcessKeyAt <= IME_PROCESS_KEY_RECOVERY_WINDOW_MS;
       return hasRecentImeProcessKey;
     };
+    const scheduleNativeTextInputRecovery = (data: string, eventAt: number) => {
+      window.setTimeout(() => {
+        if (cancelled || terminalRef.current !== terminal) return;
+        const lastForwarded = lastForwardedTerminalInput;
+        if (
+          lastForwarded?.source === "onData"
+          && lastForwarded.data === data
+          && lastForwarded.at >= eventAt
+          && lastForwarded.at - eventAt <= IME_CROSS_SOURCE_DUPLICATE_WINDOW_MS
+        ) {
+          return;
+        }
+        forwardTerminalInput(data, "nativeTextInput");
+      }, 0);
+    };
     const recoverNativeTextInput = (event: InputEvent) => {
       if (!shouldRecoverNativeTextInput(event)) return false;
       const data = event.data ?? "";
       const now = nowForImeInput();
-      event.stopPropagation();
-      if (event.type === "beforeinput" && event.cancelable) event.preventDefault();
       if (lastNativeTextInputData === data && now - lastNativeTextInputAt <= NATIVE_TEXT_INPUT_DEDUP_WINDOW_MS) return true;
       lastNativeTextInputAt = now;
       lastNativeTextInputData = data;
-      forwardTerminalInput(data, "nativeTextInput");
+      scheduleNativeTextInputRecovery(data, now);
       return true;
     };
     const onNativeTextBeforeInput = (event: Event) => {
       recoverNativeTextInput(event as InputEvent);
     };
     const onNativeTextInput = (event: Event) => {
-      if (!recoverNativeTextInput(event as InputEvent) || !textarea) return;
-      textarea.value = "";
+      recoverNativeTextInput(event as InputEvent);
     };
     const onImeProcessKeyDown = (event: KeyboardEvent) => {
       if (!isHelperTextareaEvent(event) || event.keyCode !== IME_PROCESS_KEY_CODE || event.ctrlKey || event.altKey || event.metaKey) return;
       lastImeProcessKeyAt = nowForImeInput();
-      event.stopPropagation();
     };
 
     terminalContainer.addEventListener("keydown", onImeProcessKeyDown, nativeTextInputListenerOptions);
@@ -3024,7 +3037,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const terminal = terminalRef.current;
     closeContextMenu();
     if (!terminal) return;
-    navigator.clipboard.readText().then((text) => {
+    readClipboardText().then((text) => {
       const normalizedText = trimTerminalPasteBoundaryLineBreaks(text);
       if (!normalizedText) return;
       useTerminalStore.getState().markAttentionInputHandled(sessionId);

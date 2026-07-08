@@ -14,8 +14,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 use sqlx::{Connection, Row, SqliteConnection};
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
 
 const SQLX_MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 const KNOWN_DRIFT_START_VERSION: i64 = 13;
@@ -23,7 +25,9 @@ const KNOWN_DRIFT_END_VERSION: i64 = 15;
 const REPLAY_SNAPSHOT_PATCH_DIR: &str = "replay-snapshots";
 const REPLAY_SNAPSHOT_PATCH_STORAGE: &str = "file";
 const REPLAY_SNAPSHOT_CLEANUP_MARKER_FILE: &str = "replay-snapshot-patch-cleanup.version";
+const DB_FILE_NAME: &str = "cli-manager.db";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const USER_DATA_TABLES: [&str; 3] = ["projects", "groups", "command_templates"];
 
 const FAVORITE_SNAPSHOT_COLUMNS: [&str; 11] = [
     "session_key",
@@ -89,17 +93,41 @@ pub struct DbMigrationRepairResult {
 }
 
 #[tauri::command]
-pub async fn db_repair_known_migration_drift() -> Result<DbMigrationRepairResult, String> {
+pub async fn db_repair_known_migration_drift(
+    app: AppHandle,
+) -> Result<DbMigrationRepairResult, String> {
     let db_path = app_paths::db_path()?;
+    let legacy_db_recovered = match app.path().app_config_dir() {
+        Ok(old_db_dir) => {
+            let legacy_db_path = old_db_dir.join(DB_FILE_NAME);
+            match recover_legacy_db_file_if_current_empty(&legacy_db_path, &db_path).await {
+                Ok(recovered) => recovered,
+                Err(err) => {
+                    log::warn!("Legacy CLI-Manager DB recovery skipped: {err}");
+                    false
+                }
+            }
+        }
+        Err(_) => false,
+    };
+
     if !db_path.is_file() {
         return Ok(DbMigrationRepairResult {
-            repaired: false,
+            repaired: legacy_db_recovered,
             status: "db_missing".to_string(),
         });
     }
 
     let mut conn = open_cli_manager_db(&db_path).await?;
     let mut result = repair_known_migration_drift(&mut conn).await?;
+    if legacy_db_recovered {
+        result.repaired = true;
+        result.status = if result.status == "already_consistent" {
+            "legacy_db_recovered".to_string()
+        } else {
+            format!("legacy_db_recovered;{}", result.status)
+        };
+    }
     match cleanup_replay_snapshot_inline_patches_for_current_version(
         &mut conn,
         &app_paths::cli_manager_data_dir()?,
@@ -132,6 +160,107 @@ async fn open_cli_manager_db(path: &Path) -> Result<SqliteConnection, String> {
     SqliteConnection::connect_with(&options)
         .await
         .map_err(|err| format!("db_open_failed: {err}"))
+}
+
+fn backup_suffix() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    format!("backup-{millis}")
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut raw = path.as_os_str().to_os_string();
+    raw.push(suffix);
+    PathBuf::from(raw)
+}
+
+fn backup_db_file_family(path: &Path) -> Result<(), String> {
+    for candidate in [
+        path.to_path_buf(),
+        sqlite_sidecar_path(path, "-wal"),
+        sqlite_sidecar_path(path, "-shm"),
+    ] {
+        if !candidate.is_file() {
+            continue;
+        }
+        let file_name = candidate
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "legacy_db_backup_invalid_path".to_string())?;
+        let backup_path = candidate.with_file_name(format!("{file_name}.{}", backup_suffix()));
+        fs::copy(&candidate, backup_path)
+            .map_err(|err| format!("legacy_db_backup_failed: {err}"))?;
+    }
+    Ok(())
+}
+
+fn copy_db_file_family(source: &Path, target: &Path) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("legacy_db_parent_create_failed: {err}"))?;
+    }
+    backup_db_file_family(target)?;
+    fs::copy(source, target).map_err(|err| format!("legacy_db_copy_failed: {err}"))?;
+
+    for suffix in ["-wal", "-shm"] {
+        let source_sidecar = sqlite_sidecar_path(source, suffix);
+        let target_sidecar = sqlite_sidecar_path(target, suffix);
+        if source_sidecar.is_file() {
+            fs::copy(&source_sidecar, &target_sidecar)
+                .map_err(|err| format!("legacy_db_sidecar_copy_failed: {err}"))?;
+        } else if target_sidecar.exists() {
+            fs::remove_file(&target_sidecar)
+                .map_err(|err| format!("legacy_db_sidecar_remove_failed: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+async fn user_data_row_count(path: &Path) -> Result<i64, String> {
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let mut conn = open_cli_manager_db(path).await?;
+    let mut total = 0_i64;
+    for table in USER_DATA_TABLES {
+        if !table_exists(&mut conn, table).await? {
+            continue;
+        }
+        let sql = format!("SELECT COUNT(*) AS count FROM {table}");
+        let row = sqlx::query(&sql)
+            .fetch_one(&mut conn)
+            .await
+            .map_err(|err| format!("legacy_db_count_failed: {err}"))?;
+        let count: i64 = row
+            .try_get("count")
+            .map_err(|err| format!("legacy_db_count_row_failed: {err}"))?;
+        total += count;
+    }
+    Ok(total)
+}
+
+async fn recover_legacy_db_file_if_current_empty(
+    legacy_db_path: &Path,
+    current_db_path: &Path,
+) -> Result<bool, String> {
+    if !legacy_db_path.is_file() {
+        return Ok(false);
+    }
+
+    let legacy_rows = user_data_row_count(legacy_db_path).await?;
+    if legacy_rows == 0 {
+        return Ok(false);
+    }
+
+    let current_rows = user_data_row_count(current_db_path).await?;
+    if current_rows > 0 {
+        return Ok(false);
+    }
+
+    copy_db_file_family(legacy_db_path, current_db_path)?;
+    Ok(true)
 }
 
 async fn repair_known_migration_drift(
@@ -830,6 +959,68 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn recovers_legacy_db_when_current_db_has_no_user_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join("legacy.db");
+        let current = temp.path().join("current.db");
+        create_user_data_db(&legacy, &[("project-1", "Legacy Project")]).await;
+        create_user_data_db(&current, &[]).await;
+
+        let recovered = recover_legacy_db_file_if_current_empty(&legacy, &current)
+            .await
+            .unwrap();
+
+        assert!(recovered);
+        let mut conn = open_cli_manager_db(&current).await.unwrap();
+        let row = sqlx::query("SELECT name FROM projects WHERE id = 'project-1'")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        let name: String = row.try_get("name").unwrap();
+        assert_eq!(name, "Legacy Project");
+        let backup_count = fs::read_dir(temp.path())
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("current.db.backup-")
+            })
+            .count();
+        assert_eq!(backup_count, 1);
+    }
+
+    #[tokio::test]
+    async fn does_not_overwrite_current_db_when_it_has_user_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join("legacy.db");
+        let current = temp.path().join("current.db");
+        create_user_data_db(&legacy, &[("project-legacy", "Legacy Project")]).await;
+        create_user_data_db(&current, &[("project-current", "Current Project")]).await;
+
+        let recovered = recover_legacy_db_file_if_current_empty(&legacy, &current)
+            .await
+            .unwrap();
+
+        assert!(!recovered);
+        let mut conn = open_cli_manager_db(&current).await.unwrap();
+        let current_rows: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM projects WHERE id = 'project-current'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let legacy_rows: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM projects WHERE id = 'project-legacy'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(current_rows.0, 1);
+        assert_eq!(legacy_rows.0, 0);
+    }
+
     async fn create_migration_table(conn: &mut SqliteConnection) {
         conn.execute(
             "CREATE TABLE _sqlx_migrations (
@@ -843,6 +1034,46 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    async fn create_user_data_db(path: &Path, projects: &[(&str, &str)]) {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        conn.execute(
+            "CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE command_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .await
+        .unwrap();
+        for (id, name) in projects {
+            sqlx::query("INSERT INTO projects (id, name) VALUES (?1, ?2)")
+                .bind(id)
+                .bind(name)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        conn.close().await.unwrap();
     }
 
     async fn create_complete_feature_schema(conn: &mut SqliteConnection) {

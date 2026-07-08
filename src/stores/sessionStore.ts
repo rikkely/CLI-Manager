@@ -20,7 +20,7 @@ let store: Store | null = null;
 async function getStore() {
   if (!store) {
     const paths = await getCliManagerDataPaths();
-    store = await Store.load(paths.sessionsStorePath, { autoSave: 100, defaults: {} });
+    store = await Store.load(paths.sessionsStorePath, { autoSave: 0, defaults: {} });
   }
   return store;
 }

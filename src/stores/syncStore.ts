@@ -112,7 +112,7 @@ let sessionWebdavPassword = "";
 async function getStore() {
   if (!store) {
     const paths = await getCliManagerDataPaths();
-    store = await Store.load(paths.syncStorePath, { autoSave: 100, defaults: {} });
+    store = await Store.load(paths.syncStorePath, { autoSave: 0, defaults: {} });
   }
   return store;
 }

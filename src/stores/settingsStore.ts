@@ -66,6 +66,8 @@ export type TerminalStatsCardKey =
   | "tools"
   | "latestChanges"
   | "todayUsage";
+export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files";
+export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
 export const UI_FONT_SIZE_DEFAULT = 13;
@@ -75,6 +77,14 @@ export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_SCROLLBACK_ROWS_MIN = 1000;
 export const TERMINAL_SCROLLBACK_ROWS_MAX = 50000;
 export const TERMINAL_SCROLLBACK_ROWS_DEFAULT = 5000;
+export const TERMINAL_PANEL_WIDTH_MAX = 500;
+export const TERMINAL_PANEL_WIDTH_DEFAULTS: TerminalPanelWidthSettings = {
+  merged: 300,
+  stats: 203,
+  git: 196,
+  replay: 300,
+  files: 220,
+};
 export type ShortcutAction =
   | "newTerminal"
   | "closeTerminal"
@@ -228,6 +238,7 @@ interface Settings {
   /** 是否限制终端辅助侧边面板同一时间只打开一个。 */
   terminalSidePanelSingleOpen: boolean;
   terminalSidePanelSkin: TerminalSidePanelSkin;
+  terminalPanelWidths: TerminalPanelWidthSettings;
   terminalStatsCardVisibility: TerminalStatsCardVisibilitySettings;
   terminalStatsCardOrder: TerminalStatsCardOrderSettings;
   shellRuntimeMonitoringEnabled: boolean;
@@ -334,6 +345,7 @@ const DEFAULTS: Settings = {
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
+  terminalPanelWidths: { ...TERMINAL_PANEL_WIDTH_DEFAULTS },
   terminalStatsCardVisibility: {
     session: true,
     tokenUsage: true,
@@ -558,6 +570,17 @@ function migrateTerminalSidePanelSkin(value: unknown): TerminalSidePanelSkin {
     : DEFAULTS.terminalSidePanelSkin;
 }
 
+export function migrateTerminalPanelWidths(value: unknown): TerminalPanelWidthSettings {
+  const raw = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+  return {
+    merged: clampNumber(raw.merged, TERMINAL_PANEL_WIDTH_DEFAULTS.merged, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.merged),
+    stats: clampNumber(raw.stats, TERMINAL_PANEL_WIDTH_DEFAULTS.stats, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.stats),
+    git: clampNumber(raw.git, TERMINAL_PANEL_WIDTH_DEFAULTS.git, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.git),
+    replay: clampNumber(raw.replay, TERMINAL_PANEL_WIDTH_DEFAULTS.replay, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.replay),
+    files: clampNumber(raw.files, TERMINAL_PANEL_WIDTH_DEFAULTS.files, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.files),
+  };
+}
+
 export function migrateTerminalStatsCardVisibility(value: unknown): TerminalStatsCardVisibilitySettings {
   const defaults = DEFAULTS.terminalStatsCardVisibility;
   if (typeof value !== "object" || value === null) {
@@ -731,7 +754,7 @@ let terminalInputSuggestionUsageSaveTimer: number | null = null;
 async function getStore() {
   if (!store) {
     const paths = await getCliManagerDataPaths();
-    store = await Store.load(paths.settingsStorePath, { autoSave: 100, defaults: {} });
+    store = await Store.load(paths.settingsStorePath, { autoSave: 0, defaults: {} });
   }
   return store;
 }
@@ -811,6 +834,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       entries.uiTextColor = DEFAULTS.uiTextColor;
       persistSetting("uiTextColor", DEFAULTS.uiTextColor);
     }
+    entries.fontFamily =
+      typeof entries.fontFamily === "string" && entries.fontFamily.trim()
+        ? entries.fontFamily
+        : DEFAULTS.fontFamily;
+    entries.uiFontFamily =
+      typeof entries.uiFontFamily === "string" && entries.uiFontFamily.trim()
+        ? entries.uiFontFamily
+        : DEFAULTS.uiFontFamily;
+    entries.sidebarWidth = clampNumber(entries.sidebarWidth, 64, 500, DEFAULTS.sidebarWidth);
+    entries.historySidebarWidth = clampNumber(entries.historySidebarWidth, 180, 520, DEFAULTS.historySidebarWidth);
     entries.uiFontSize = clampNumber(
       entries.uiFontSize,
       UI_FONT_SIZE_MIN,
@@ -849,6 +882,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ? entries.terminalSidePanelSingleOpen
         : DEFAULTS.terminalSidePanelSingleOpen;
     entries.terminalSidePanelSkin = migrateTerminalSidePanelSkin(entries.terminalSidePanelSkin);
+    entries.terminalPanelWidths = migrateTerminalPanelWidths(entries.terminalPanelWidths);
     entries.terminalStatsCardVisibility = migrateTerminalStatsCardVisibility(entries.terminalStatsCardVisibility);
     entries.terminalStatsCardOrder = migrateTerminalStatsCardOrder(entries.terminalStatsCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
@@ -861,6 +895,22 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.shellRuntimeMonitoringEnabled === "boolean"
         ? entries.shellRuntimeMonitoringEnabled
         : DEFAULTS.shellRuntimeMonitoringEnabled;
+    entries.useExternalTerminal =
+      typeof entries.useExternalTerminal === "boolean"
+        ? entries.useExternalTerminal
+        : DEFAULTS.useExternalTerminal;
+    entries.sidebarDensity =
+      entries.sidebarDensity === "compact" || entries.sidebarDensity === "comfortable"
+        ? entries.sidebarDensity
+        : DEFAULTS.sidebarDensity;
+    entries.viewMode =
+      entries.viewMode === "standard" || entries.viewMode === "compact"
+        ? entries.viewMode
+        : DEFAULTS.viewMode;
+    entries.closeBehavior =
+      entries.closeBehavior === "ask" || entries.closeBehavior === "minimize" || entries.closeBehavior === "exit"
+        ? entries.closeBehavior
+        : DEFAULTS.closeBehavior;
     entries.ccusageAnalyticsEnabled =
       typeof entries.ccusageAnalyticsEnabled === "boolean"
         ? entries.ccusageAnalyticsEnabled
@@ -978,6 +1028,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.terminalTabHoverInfoEnabled === "boolean"
         ? entries.terminalTabHoverInfoEnabled
         : DEFAULTS.terminalTabHoverInfoEnabled;
+    entries.gitGroupBy =
+      entries.gitGroupBy === "directory" || entries.gitGroupBy === "module"
+        ? entries.gitGroupBy
+        : DEFAULTS.gitGroupBy;
     entries.fileExplorerIgnoredPaths = migrateFileExplorerIgnoredPaths(entries.fileExplorerIgnoredPaths);
     entries.batchLaunchGroupInPane =
       typeof entries.batchLaunchGroupInPane === "boolean"
@@ -987,6 +1041,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       entries.batchLaunchPaneDirection === "vertical" || entries.batchLaunchPaneDirection === "horizontal"
         ? entries.batchLaunchPaneDirection
         : DEFAULTS.batchLaunchPaneDirection;
+    entries.terminalNewlineShortcut =
+      entries.terminalNewlineShortcut === "Shift+Enter" ||
+      entries.terminalNewlineShortcut === "Ctrl+Enter" ||
+      entries.terminalNewlineShortcut === "Alt+Enter"
+        ? entries.terminalNewlineShortcut
+        : DEFAULTS.terminalNewlineShortcut;
     entries.projectScopedTerminalViewEnabled =
       typeof entries.projectScopedTerminalViewEnabled === "boolean"
         ? entries.projectScopedTerminalViewEnabled

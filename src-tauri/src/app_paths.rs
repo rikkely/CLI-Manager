@@ -1,11 +1,22 @@
 use serde::Serialize;
+use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, Runtime};
 
 const APP_HOME_DIR_NAME: &str = ".cli-manager";
 const DB_FILE_NAME: &str = "cli-manager.db";
-const STORE_FILES: [&str; 3] = ["settings.json", "sessions.json", "sync-config.json"];
+const SETTINGS_STORE_FILE_NAME: &str = "settings.json";
+const SESSIONS_STORE_FILE_NAME: &str = "sessions.json";
+const SYNC_STORE_FILE_NAME: &str = "sync-config.json";
+const EXTERNAL_SESSION_SYNC_STORE_FILE_NAME: &str = "external-session-sync.json";
+const STORE_FILES: [&str; 4] = [
+    SETTINGS_STORE_FILE_NAME,
+    SESSIONS_STORE_FILE_NAME,
+    SYNC_STORE_FILE_NAME,
+    EXTERNAL_SESSION_SYNC_STORE_FILE_NAME,
+];
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +27,7 @@ pub struct CliManagerDataPaths {
     pub settings_store_path: String,
     pub sessions_store_path: String,
     pub sync_store_path: String,
+    pub external_session_sync_store_path: String,
     pub logs_dir: String,
     pub codex_providers_dir: String,
     pub claude_providers_dir: String,
@@ -76,15 +88,19 @@ pub fn data_paths() -> Result<CliManagerDataPaths, String> {
         db_path: db_path.to_string_lossy().into_owned(),
         db_url: format!("sqlite:{}", db_path.to_string_lossy()),
         settings_store_path: data_dir
-            .join("settings.json")
+            .join(SETTINGS_STORE_FILE_NAME)
             .to_string_lossy()
             .into_owned(),
         sessions_store_path: data_dir
-            .join("sessions.json")
+            .join(SESSIONS_STORE_FILE_NAME)
             .to_string_lossy()
             .into_owned(),
         sync_store_path: data_dir
-            .join("sync-config.json")
+            .join(SYNC_STORE_FILE_NAME)
+            .to_string_lossy()
+            .into_owned(),
+        external_session_sync_store_path: data_dir
+            .join(EXTERNAL_SESSION_SYNC_STORE_FILE_NAME)
             .to_string_lossy()
             .into_owned(),
         logs_dir: logs_dir.to_string_lossy().into_owned(),
@@ -106,6 +122,78 @@ fn copy_if_missing(source: &Path, target: &Path) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|err| format!("data_migration_failed: {err}"))?;
     }
     fs::copy(source, target).map_err(|err| format!("data_migration_failed: {err}"))?;
+    Ok(())
+}
+
+fn backup_suffix() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    format!("backup-{millis}")
+}
+
+fn backup_existing_file(path: &Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "data_migration_invalid_backup_path".to_string())?;
+    let backup_path = path.with_file_name(format!("{file_name}.{}", backup_suffix()));
+    fs::copy(path, backup_path).map_err(|err| format!("data_migration_backup_failed: {err}"))?;
+    Ok(())
+}
+
+fn parse_json_object(path: &Path) -> Result<Option<Map<String, Value>>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text =
+        fs::read_to_string(path).map_err(|err| format!("data_migration_read_failed: {err}"))?;
+    if text.trim().is_empty() {
+        return Ok(Some(Map::new()));
+    }
+    match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(object)) => Ok(Some(object)),
+        Ok(_) | Err(_) => Ok(None),
+    }
+}
+
+fn migrate_store_file(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.is_file() {
+        return Ok(());
+    }
+    if !target.exists() {
+        return copy_if_missing(source, target);
+    }
+    if !target.is_file() {
+        return Ok(());
+    }
+
+    let Some(source_object) = parse_json_object(source)? else {
+        return Ok(());
+    };
+    let Some(mut target_object) = parse_json_object(target)? else {
+        return Ok(());
+    };
+
+    let mut changed = false;
+    for (key, value) in source_object {
+        if !target_object.contains_key(&key) {
+            target_object.insert(key, value);
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+
+    backup_existing_file(target)?;
+    let bytes = serde_json::to_vec_pretty(&Value::Object(target_object))
+        .map_err(|err| format!("data_migration_serialize_failed: {err}"))?;
+    fs::write(target, bytes).map_err(|err| format!("data_migration_write_failed: {err}"))?;
     Ok(())
 }
 
@@ -133,7 +221,7 @@ pub fn migrate_legacy_app_files<R: Runtime>(app: &AppHandle<R>) -> Result<(), St
     if let Ok(old_store_dir) = app.path().app_data_dir() {
         let data_dir = cli_manager_data_dir()?;
         for file_name in STORE_FILES {
-            copy_if_missing(&old_store_dir.join(file_name), &data_dir.join(file_name))?;
+            migrate_store_file(&old_store_dir.join(file_name), &data_dir.join(file_name))?;
         }
     }
 
@@ -142,4 +230,61 @@ pub fn migrate_legacy_app_files<R: Runtime>(app: &AppHandle<R>) -> Result<(), St
 
 pub fn history_cache_dir() -> Result<PathBuf, String> {
     Ok(cli_manager_data_dir()?.join("history-cache"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrates_missing_store_file_by_copying_legacy_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("legacy.json");
+        let target = temp.path().join("target.json");
+        fs::write(&source, r#"{"theme":"dark"}"#).unwrap();
+
+        migrate_store_file(&source, &target).unwrap();
+
+        assert_eq!(fs::read_to_string(target).unwrap(), r#"{"theme":"dark"}"#);
+    }
+
+    #[test]
+    fn merges_legacy_store_keys_without_overwriting_target_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("legacy.json");
+        let target = temp.path().join("target.json");
+        fs::write(&source, r#"{"theme":"dark","fontSize":18}"#).unwrap();
+        fs::write(&target, r#"{"theme":"light"}"#).unwrap();
+
+        migrate_store_file(&source, &target).unwrap();
+
+        let merged: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(merged.get("theme").and_then(Value::as_str), Some("light"));
+        assert_eq!(merged.get("fontSize").and_then(Value::as_i64), Some(18));
+        let backup_count = fs::read_dir(temp.path())
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("target.json.backup-")
+            })
+            .count();
+        assert_eq!(backup_count, 1);
+    }
+
+    #[test]
+    fn leaves_target_store_unchanged_when_legacy_has_no_new_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("legacy.json");
+        let target = temp.path().join("target.json");
+        fs::write(&source, r#"{"theme":"dark"}"#).unwrap();
+        fs::write(&target, r#"{"theme":"light"}"#).unwrap();
+
+        migrate_store_file(&source, &target).unwrap();
+
+        assert_eq!(fs::read_to_string(target).unwrap(), r#"{"theme":"light"}"#);
+    }
 }
