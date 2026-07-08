@@ -253,6 +253,16 @@ async function focusMainWindow(): Promise<void> {
   }
 }
 
+async function isMainWindowFocused(): Promise<boolean> {
+  if (!IN_TAURI) return false;
+  try {
+    return await getCurrentWindow().isFocused();
+  } catch (err) {
+    logWarn("Failed to read main window focus state", err);
+    return false;
+  }
+}
+
 type HookNotificationTargetActivator = (tabId: string) => void | Promise<void>;
 
 async function sendSystemNotification(payload: CliHookPayload, tabId: string | null, tabTitle?: string | null): Promise<void> {
@@ -262,6 +272,7 @@ async function sendSystemNotification(payload: CliHookPayload, tabId: string | n
     if (!isSystemNotificationEvent(payload.event)) return;
     if (!settings.systemNotificationEvents[payload.event]) return;
     if (!tabId) return;
+    if (settings.suppressSystemNotificationsWhenFocused && (await isMainWindowFocused())) return;
 
     const projectName = getHookProjectName(payload, tabTitle);
     const title = "CLI-Manager";

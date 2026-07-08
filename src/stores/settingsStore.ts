@@ -254,6 +254,7 @@ interface Settings {
   hookPopupAutoCloseSeconds: number;
   hookSubagentSplitViewEnabled: boolean;
   systemNotificationsEnabled: boolean;
+  suppressSystemNotificationsWhenFocused: boolean;
   systemNotificationEvents: Record<HookEventType, boolean>;
   claudeHookConfigDir: string | null;
   claudeHookAutoRepairKnownInstalled: boolean;
@@ -376,6 +377,7 @@ const DEFAULTS: Settings = {
   hookPopupAutoCloseSeconds: 60,
   hookSubagentSplitViewEnabled: true,
   systemNotificationsEnabled: true,
+  suppressSystemNotificationsWhenFocused: true,
   systemNotificationEvents: {
     SessionStart: false,
     UserPromptSubmit: false,
@@ -943,6 +945,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.systemNotificationsEnabled === "boolean"
         ? entries.systemNotificationsEnabled
         : DEFAULTS.systemNotificationsEnabled;
+    entries.suppressSystemNotificationsWhenFocused =
+      typeof entries.suppressSystemNotificationsWhenFocused === "boolean"
+        ? entries.suppressSystemNotificationsWhenFocused
+        : DEFAULTS.suppressSystemNotificationsWhenFocused;
     entries.systemNotificationEvents = migrateSystemNotificationEvents(entries.systemNotificationEvents);
     entries.claudeHookConfigDir =
       typeof entries.claudeHookConfigDir === "string" && entries.claudeHookConfigDir.trim()

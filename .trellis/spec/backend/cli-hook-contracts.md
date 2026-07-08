@@ -142,7 +142,7 @@ const messages = useIncrementalTranscriptCache(transcript?.content, transcript?.
 ### 2. Signatures
 
 - Frontend event: `listen<CliHookPayload>("claude-hook-notification", handler)`.
-- Frontend setting fields: `systemNotificationsEnabled: boolean` and `systemNotificationEvents: Record<HookEventType, boolean>`.
+- Frontend setting fields: `systemNotificationsEnabled: boolean`, `suppressSystemNotificationsWhenFocused: boolean`, and `systemNotificationEvents: Record<HookEventType, boolean>`.
 - Hook event union for system notifications: `SessionStart | UserPromptSubmit | Notification | Stop | StopFailure | PermissionRequest`.
 - Backend command: `is_wsl() -> bool`.
 - Backend command: `send_notification_via_windows(title: String, body: String) -> Result<(), String>`.
@@ -154,6 +154,8 @@ const messages = useIncrementalTranscriptCache(transcript?.content, transcript?.
 
 - System notifications are **additive**: they must not replace app toast cards or tab status indicators.
 - Default event settings: `Stop`, `StopFailure`, `PermissionRequest`, and `Notification` enabled; `SessionStart` and `UserPromptSubmit` disabled.
+- `suppressSystemNotificationsWhenFocused` defaults to `true`: when the main Tauri window is focused/being used, frontend skips OS-level notifications while preserving in-app Hook toast and tab status updates.
+- If `suppressSystemNotificationsWhenFocused` is `false`, focused-window state must not suppress OS-level notifications; existing global/per-event notification settings remain authoritative.
 - Project name priority: `tabTitle` -> basename of `payload.cwd` -> `"未知项目"`.
 - Title format: `CLI-Manager`; the OS notification should be attributed to the app rather than the CLI process.
 - Body format: emoji + `Claude Code`/`Codex CLI` + project/event phrase, optionally appending `payload.message`.
@@ -165,6 +167,8 @@ const messages = useIncrementalTranscriptCache(transcript?.content, transcript?.
 ### 4. Validation & Error Matrix
 
 - `systemNotificationsEnabled === false` -> no system notification, no error.
+- `suppressSystemNotificationsWhenFocused === true` and main window is focused -> no system notification, no error; app toast/tab status still update.
+- Main-window focus detection fails -> continue notification flow and log warning; do not silently drop critical notifications.
 - `systemNotificationEvents[payload.event] !== true` -> no system notification, no error.
 - Event outside `HookEventType` (e.g. transcript-only hook events) -> no system notification, no error.
 - Non-WSL notification permission denied -> no system notification; log warning only.
@@ -178,18 +182,23 @@ const messages = useIncrementalTranscriptCache(transcript?.content, transcript?.
 - Good: WSL fallback `PermissionRequest` sends through `send_notification_via_windows` without asking Tauri notification permission, and the Toast XML includes `来自 CLI-Manager` attribution.
 - Good: native Windows/macOS/Linux `PermissionRequest` emits `system-notification-action` after notification click and activates the matching terminal tab.
 - Base: `SessionStart` updates session binding but sends no system notification under default settings.
+- Base: main window focused and foreground suppression enabled -> no OS notification, but the Hook toast still appears inside CLI-Manager.
+- Base: main window focused and foreground suppression disabled -> OS notification is allowed if global and per-event settings allow it.
 - Bad: system notification failure prevents `showClaudeHookToast` or `handleCliHookEvent` from running; notification errors must stay isolated.
+- Bad: focused-window suppression is hard-coded without a persisted setting; users cannot opt back into OS notifications while using CLI-Manager.
 - Bad: Windows native app instances route through PowerShell and show source `Windows PowerShell`; they must use the Tauri notification plugin path.
 - Bad: notification click activation bypasses the shared frontend target activation helper and diverges from app toast behavior.
 
 ### 6. Tests Required
 
 - TypeScript type-check must pass after changes to `HookEventType`, settings migration, or notification event filtering.
+- TypeScript type-check must pass after adding or migrating Hook notification settings.
 - Rust compile check must pass after changes to `is_wsl`, `send_notification_via_windows`, or interactive notification command signatures.
 - Manual activation test point: clicking a native notification focuses the app and activates the matching tab; if the tab is closed, it focuses the app and shows the target-closed toast.
 - Manual Windows/macOS/Linux smoke test: enabled event produces an OS notification with expected title/body.
 - Manual WSL smoke test: enabled event produces a Windows Toast through `powershell.exe`.
 - Settings UI test point: toggling one event preserves the other `systemNotificationEvents` values.
+- Settings UI test point: toggling focused-window suppression changes only OS-level notification behavior, not app toast or tab status behavior.
 - Regression test point: app toast and tab indicators still work when system notifications are disabled or fail.
 
 ### 7. Wrong vs Correct

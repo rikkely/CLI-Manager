@@ -445,6 +445,7 @@ export function HookSettingsPage() {
   const hookPopupAutoCloseSeconds = useSettingsStore((s) => s.hookPopupAutoCloseSeconds);
   const hookSubagentSplitViewEnabled = useSettingsStore((s) => s.hookSubagentSplitViewEnabled);
   const systemNotificationsEnabled = useSettingsStore((s) => s.systemNotificationsEnabled);
+  const suppressSystemNotificationsWhenFocused = useSettingsStore((s) => s.suppressSystemNotificationsWhenFocused);
   const systemNotificationEvents = useSettingsStore((s) => s.systemNotificationEvents);
   const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
@@ -799,28 +800,47 @@ export function HookSettingsPage() {
       <CcSwitchProtectionCard status={ccSwitchProtection} />
 
       <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
-        <Group justify="space-between" align="center" gap="md">
-          <Group gap="sm">
-            <Bell
-              size={16}
-              style={{ color: systemNotificationsEnabled ? "var(--primary)" : "var(--text-muted)" }}
+        <Stack gap="sm">
+          <Group justify="space-between" align="center" gap="md">
+            <Group gap="sm">
+              <Bell
+                size={16}
+                style={{ color: systemNotificationsEnabled ? "var(--primary)" : "var(--text-muted)" }}
+              />
+              <Box>
+                <Text size="sm" fw={500} c="var(--on-surface)">
+                  {text("系统通知", "System Notifications")}
+                </Text>
+                <Text size="xs" c="var(--on-surface-variant)">
+                  {text("每个 Hook 卡片下方可独立开关对应事件的系统通知（灰色铃铛=关闭，蓝色铃铛=开启）", "System notifications can be toggled per Hook card. Gray bell means off, blue bell means on.")}
+                </Text>
+              </Box>
+            </Group>
+            <Switch
+              color="cliPrimary"
+              checked={systemNotificationsEnabled}
+              onChange={(event) => void updateSetting("systemNotificationsEnabled", event.currentTarget.checked)}
+              aria-label={text("启用系统通知", "Enable system notifications")}
             />
-            <Box>
+          </Group>
+          <Group justify="space-between" align="center" gap="md">
+            <Box className="min-w-0">
               <Text size="sm" fw={500} c="var(--on-surface)">
-                {text("系统通知", "System Notifications")}
+                {t("settings.hooks.systemNotifications.focusSuppress.title")}
               </Text>
-              <Text size="xs" c="var(--on-surface-variant)">
-                {text("每个 Hook 卡片下方可独立开关对应事件的系统通知（灰色铃铛=关闭，蓝色铃铛=开启）", "System notifications can be toggled per Hook card. Gray bell means off, blue bell means on.")}
+              <Text mt={4} size="xs" c="var(--text-muted)">
+                {t("settings.hooks.systemNotifications.focusSuppress.description")}
               </Text>
             </Box>
+            <Switch
+              color="cliPrimary"
+              className="shrink-0"
+              checked={suppressSystemNotificationsWhenFocused}
+              onChange={(event) => void updateSetting("suppressSystemNotificationsWhenFocused", event.currentTarget.checked)}
+              aria-label={t("settings.hooks.systemNotifications.focusSuppress.title")}
+            />
           </Group>
-          <Switch
-            color="cliPrimary"
-            checked={systemNotificationsEnabled}
-            onChange={(event) => void updateSetting("systemNotificationsEnabled", event.currentTarget.checked)}
-            aria-label={text("启用系统通知", "Enable system notifications")}
-          />
-        </Group>
+        </Stack>
       </Card>
 
       <section className="ui-surface-card rounded-2xl border border-border p-4">
