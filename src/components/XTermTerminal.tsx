@@ -111,9 +111,11 @@ const CODEX_IME_DUPLICATE_WINDOW_MS = 120;
 const IME_PROCESS_KEY_CODE = 229;
 const IME_PROCESS_KEY_RECOVERY_WINDOW_MS = 400;
 const IME_COMPOSITION_END_SUPPRESS_WINDOW_MS = 80;
+const IME_CROSS_SOURCE_DUPLICATE_WINDOW_MS = 80;
 const NATIVE_TEXT_INPUT_DEDUP_WINDOW_MS = 16;
 
 type SpecialColorQueryId = 10 | 11;
+type TerminalInputSource = "onData" | "nativeTextInput";
 
 type OscPrefixMatch =
   | { kind: "match"; prefix: string }
@@ -2284,7 +2286,28 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     // 前置：data 必须是 xterm 已解析出的用户输入，或浏览器 IME text input 兜底拿到的最终文本。
     // 后置：文本写入当前 PTY，并同步命令历史缓冲；副作用是触发 attention 标记、可能记录命令开始事件。
     // 这里统一入口是为了让 xterm onData 与 IME 兜底保持完全一致，避免中文标点只写 PTY 不进历史缓冲。
-    function forwardTerminalInput(data: string, source: "onData" | "nativeTextInput") {
+    let lastForwardedTerminalInput: { data: string; source: TerminalInputSource; at: number } | null = null;
+    const isImeDuplicateCandidate = (data: string) => {
+      if (!data || data === "\r" || data === "\x7f" || data === "\b" || data.startsWith("\x1b")) return false;
+      const normalized = data.replace(/\r\n?/g, "\n");
+      return Boolean(normalized.trim()) && /[^\x00-\x7f]/.test(normalized);
+    };
+    const shouldDropCrossSourceImeDuplicate = (data: string, source: TerminalInputSource, now: number) => {
+      if (!isImeDuplicateCandidate(data) || !lastForwardedTerminalInput) return false;
+      const deltaMs = now - lastForwardedTerminalInput.at;
+      return (
+        lastForwardedTerminalInput.source !== source &&
+        lastForwardedTerminalInput.data === data &&
+        deltaMs >= 0 &&
+        deltaMs <= IME_CROSS_SOURCE_DUPLICATE_WINDOW_MS
+      );
+    };
+
+    function forwardTerminalInput(data: string, source: TerminalInputSource) {
+      const now = performance.now();
+      if (shouldDropCrossSourceImeDuplicate(data, source, now)) {
+        return;
+      }
       markAttentionInputHandled();
       const replacingSelectedInput = consumeSelectedInputForReplacement(data);
       const inputBufferBefore = inputBuffer.current;
@@ -2294,6 +2317,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         os: osPlatformRef.current,
       });
       const ptyData = manualDirectCodexOverride ?? data;
+      lastForwardedTerminalInput = { data, source, at: now };
       invoke("pty_write", { sessionId, data: replacingSelectedInput ? `\x15${ptyData}` : ptyData }).catch((err) => reportPtyWriteError(source, err));
       maybeLogCodexImeDuplicate(data);
       updateInputBufferFromTerminalData(data);

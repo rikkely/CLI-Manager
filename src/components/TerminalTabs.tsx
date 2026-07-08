@@ -593,8 +593,9 @@ function SortableTab({
             <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
           )}
           <button
-            onClick={(e) => { e.stopPropagation(); onClose(e.currentTarget.getBoundingClientRect()); }}
-            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); hideHoverCard(); onClose(e.currentTarget.getBoundingClientRect()); }}
+            onPointerEnter={hideHoverCard}
+            onPointerDown={(e) => { e.stopPropagation(); hideHoverCard(); }}
             onDoubleClick={(e) => e.stopPropagation()}
             className="ui-terminal-tab-close ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-on-surface-variant transition-[background-color,color,opacity,box-shadow] hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]"
             aria-label={t("terminal.tab.close", { title })}

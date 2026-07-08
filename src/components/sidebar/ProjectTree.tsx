@@ -265,6 +265,7 @@ export function ProjectTree({
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const treeContainerRef = useRef<HTMLDivElement | null>(null);
+  const suppressClickAfterDragUntilRef = useRef(0);
   const searchActive = searchOpen && searchQuery.trim().length > 0;
   const filteredTree = useMemo(
     () => (searchActive ? filterTreeNodes(tree, searchQuery) : tree),
@@ -331,13 +332,13 @@ export function ProjectTree({
     setFocusedNodeKey(key);
     requestAnimationFrame(() => {
       const el = document.querySelector<HTMLElement>(`[data-tree-key="${key}"]`);
-      el?.focus();
+      el?.focus({ preventScroll: true });
     });
   }, []);
 
   const focusTreeContainer = useCallback(() => {
     requestAnimationFrame(() => {
-      treeContainerRef.current?.focus();
+      treeContainerRef.current?.focus({ preventScroll: true });
     });
   }, []);
 
@@ -687,9 +688,15 @@ export function ProjectTree({
       <DndContext
         sensors={sensors}
         collisionDetection={treeCollisionDetection}
-        onDragStart={(event: DragStartEvent) => setActiveId(String(event.active.id))}
-        onDragCancel={() => setActiveId(null)}
+        onDragStart={(event: DragStartEvent) => {
+          setActiveId(String(event.active.id));
+        }}
+        onDragCancel={() => {
+          suppressClickAfterDragUntilRef.current = performance.now() + 250;
+          setActiveId(null);
+        }}
         onDragEnd={(event) => {
+          suppressClickAfterDragUntilRef.current = performance.now() + 250;
           setActiveId(null);
           actions.onDragEnd(event);
         }}
@@ -706,6 +713,12 @@ export function ProjectTree({
             tabIndex={-1}
             className={`${shouldFillTreeArea ? "min-h-full" : ""} outline-none`}
             onKeyDown={handleTreeKeyDown}
+            onClickCapture={(event) => {
+              if (performance.now() > suppressClickAfterDragUntilRef.current) return;
+              suppressClickAfterDragUntilRef.current = 0;
+              event.preventDefault();
+              event.stopPropagation();
+            }}
             onMouseDown={(event) => {
               if (event.button === 2) return;
               const target = event.target as HTMLElement | null;
