@@ -3113,7 +3113,7 @@ fn build_claude_conversion_lines(
             "type": role,
             "message": {
                 "role": role,
-                "content": claude_message_content_value(role, content)
+                "content": content
             },
             "uuid": uuid,
             "timestamp": conversion_timestamp(message)
@@ -3121,14 +3121,6 @@ fn build_claude_conversion_lines(
         parent_uuid = Some(uuid);
     }
     lines
-}
-
-fn claude_message_content_value(role: &str, content: String) -> Value {
-    if role == "assistant" {
-        json!([{ "type": "text", "text": content }])
-    } else {
-        Value::String(content)
-    }
 }
 
 fn build_codex_conversion_lines(
@@ -6789,15 +6781,6 @@ mod tests {
         assert_eq!(detail.messages[0].role, "user");
         assert_eq!(detail.messages[0].content, "hello");
         assert_eq!(detail.messages[1].role, "assistant");
-
-        let raw_lines = std::fs::read_to_string(&files[0].path).unwrap();
-        let assistant_line = raw_lines.lines().nth(1).unwrap();
-        let assistant_value: Value = serde_json::from_str(assistant_line).unwrap();
-        assert!(assistant_value
-            .get("message")
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_array)
-            .is_some());
     }
 
     #[test]
