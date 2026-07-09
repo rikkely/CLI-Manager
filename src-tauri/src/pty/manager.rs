@@ -165,7 +165,8 @@ impl PtyManager {
         if trimmed.is_empty() {
             return Ok(None);
         }
-        let looks_like_path = trimmed.contains('\\') || trimmed.contains('/') || Path::new(trimmed).is_absolute();
+        let looks_like_path =
+            trimmed.contains('\\') || trimmed.contains('/') || Path::new(trimmed).is_absolute();
         if !looks_like_path {
             return Ok(None);
         }

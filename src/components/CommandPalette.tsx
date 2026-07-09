@@ -156,7 +156,7 @@ export function CommandPalette() {
           if (viewMode === "compact") {
             void openWindowsTerminal([{
               cwd: p.path,
-              title: p.cli_tool ? `${p.name} (${p.cli_tool})` : p.name,
+              title: p.name,
               startupCmd: resolveProjectStartupCommand(p, { includeCodexProviderProfile: false }),
               shell: p.shell || undefined,
             }]);
@@ -165,7 +165,7 @@ export function CommandPalette() {
           const envVars = parseProjectEnvVars(p);
           createSession(
             p.id, p.path,
-            p.cli_tool ? `${p.name} (${p.cli_tool})` : p.name,
+            p.name,
             resolveProjectStartupCommand(p), envVars, shell,
           );
         },

@@ -66,7 +66,15 @@ export type TerminalStatsCardKey =
   | "tools"
   | "latestChanges"
   | "todayUsage";
-export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files";
+export type SystemResourceCardKey =
+  | "system"
+  | "cpu"
+  | "memory"
+  | "network"
+  | "disk"
+  | "gpu"
+  | "processes";
+export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources";
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
@@ -84,6 +92,7 @@ export const TERMINAL_PANEL_WIDTH_DEFAULTS: TerminalPanelWidthSettings = {
   git: 196,
   replay: 300,
   files: 220,
+  systemResources: 300,
 };
 export type ShortcutAction =
   | "newTerminal"
@@ -130,6 +139,7 @@ export interface TerminalToolbarVisibilitySettings {
   files: boolean;
   stats: boolean;
   gitChanges: boolean;
+  systemResources: boolean;
   showText: boolean;
 }
 
@@ -140,6 +150,8 @@ export interface SidebarToolbarVisibilitySettings {
 
 export type TerminalStatsCardVisibilitySettings = Record<TerminalStatsCardKey, boolean>;
 export type TerminalStatsCardOrderSettings = TerminalStatsCardKey[];
+export type SystemResourceCardVisibilitySettings = Record<SystemResourceCardKey, boolean>;
+export type SystemResourceCardOrderSettings = SystemResourceCardKey[];
 
 export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "session",
@@ -149,6 +161,16 @@ export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "tools",
   "latestChanges",
   "todayUsage",
+];
+
+export const SYSTEM_RESOURCE_CARD_KEYS: readonly SystemResourceCardKey[] = [
+  "system",
+  "cpu",
+  "memory",
+  "network",
+  "disk",
+  "gpu",
+  "processes",
 ];
 
 export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
@@ -241,6 +263,9 @@ interface Settings {
   terminalPanelWidths: TerminalPanelWidthSettings;
   terminalStatsCardVisibility: TerminalStatsCardVisibilitySettings;
   terminalStatsCardOrder: TerminalStatsCardOrderSettings;
+  systemResourceCardVisibility: SystemResourceCardVisibilitySettings;
+  systemResourceCardOrder: SystemResourceCardOrderSettings;
+  systemResourceMonitoringEnabled: boolean;
   shellRuntimeMonitoringEnabled: boolean;
   ccusageAnalyticsEnabled: boolean;
   ccusageUseWsl: boolean;
@@ -335,13 +360,14 @@ const DEFAULTS: Settings = {
     files: true,
     stats: true,
     gitChanges: true,
+    systemResources: true,
     showText: false,
   },
   sidebarToolbarVisibility: {
     stats: true,
     gitChanges: true,
   },
-  terminalToolbarOrder: ["new", "templates", "commandHistory", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats"],
+  terminalToolbarOrder: ["new", "templates", "commandHistory", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "systemResources"],
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
@@ -356,6 +382,17 @@ const DEFAULTS: Settings = {
     todayUsage: true,
   },
   terminalStatsCardOrder: [...TERMINAL_STATS_CARD_KEYS],
+  systemResourceCardVisibility: {
+    system: true,
+    cpu: true,
+    memory: true,
+    network: true,
+    disk: true,
+    gpu: true,
+    processes: true,
+  },
+  systemResourceCardOrder: [...SYSTEM_RESOURCE_CARD_KEYS],
+  systemResourceMonitoringEnabled: false,
   shellRuntimeMonitoringEnabled: false,
   ccusageAnalyticsEnabled: false,
   ccusageUseWsl: false,
@@ -532,6 +569,7 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     files: typeof raw.files === "boolean" ? raw.files : defaults.files,
     stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
+    systemResources: typeof raw.systemResources === "boolean" ? raw.systemResources : defaults.systemResources,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
   };
 }
@@ -578,6 +616,7 @@ export function migrateTerminalPanelWidths(value: unknown): TerminalPanelWidthSe
     git: clampNumber(raw.git, TERMINAL_PANEL_WIDTH_DEFAULTS.git, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.git),
     replay: clampNumber(raw.replay, TERMINAL_PANEL_WIDTH_DEFAULTS.replay, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.replay),
     files: clampNumber(raw.files, TERMINAL_PANEL_WIDTH_DEFAULTS.files, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.files),
+    systemResources: clampNumber(raw.systemResources, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources),
   };
 }
 
@@ -604,6 +643,41 @@ export function migrateTerminalStatsCardOrder(value: unknown): TerminalStatsCard
   for (const item of value) {
     if (typeof item !== "string") continue;
     const key = item as TerminalStatsCardKey;
+    if (!validKeys.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(key);
+  }
+
+  for (const key of defaults) {
+    if (!seen.has(key)) ordered.push(key);
+  }
+
+  return ordered;
+}
+
+export function migrateSystemResourceCardVisibility(value: unknown): SystemResourceCardVisibilitySettings {
+  const defaults = DEFAULTS.systemResourceCardVisibility;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Partial<Record<SystemResourceCardKey, unknown>>;
+  return SYSTEM_RESOURCE_CARD_KEYS.reduce<SystemResourceCardVisibilitySettings>((next, key) => {
+    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
+    return next;
+  }, { ...defaults });
+}
+
+export function migrateSystemResourceCardOrder(value: unknown): SystemResourceCardOrderSettings {
+  const defaults = DEFAULTS.systemResourceCardOrder;
+  if (!Array.isArray(value)) return [...defaults];
+
+  const validKeys = new Set<SystemResourceCardKey>(SYSTEM_RESOURCE_CARD_KEYS);
+  const seen = new Set<SystemResourceCardKey>();
+  const ordered: SystemResourceCardKey[] = [];
+
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const key = item as SystemResourceCardKey;
     if (!validKeys.has(key) || seen.has(key)) continue;
     seen.add(key);
     ordered.push(key);
@@ -885,6 +959,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.terminalPanelWidths = migrateTerminalPanelWidths(entries.terminalPanelWidths);
     entries.terminalStatsCardVisibility = migrateTerminalStatsCardVisibility(entries.terminalStatsCardVisibility);
     entries.terminalStatsCardOrder = migrateTerminalStatsCardOrder(entries.terminalStatsCardOrder);
+    entries.systemResourceCardVisibility = migrateSystemResourceCardVisibility(entries.systemResourceCardVisibility);
+    entries.systemResourceCardOrder = migrateSystemResourceCardOrder(entries.systemResourceCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
     entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
 
@@ -895,6 +971,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.shellRuntimeMonitoringEnabled === "boolean"
         ? entries.shellRuntimeMonitoringEnabled
         : DEFAULTS.shellRuntimeMonitoringEnabled;
+    entries.systemResourceMonitoringEnabled =
+      typeof entries.systemResourceMonitoringEnabled === "boolean"
+        ? entries.systemResourceMonitoringEnabled
+        : DEFAULTS.systemResourceMonitoringEnabled;
     entries.useExternalTerminal =
       typeof entries.useExternalTerminal === "boolean"
         ? entries.useExternalTerminal

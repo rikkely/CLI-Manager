@@ -1,7 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, BarChart3, Folder, GitBranch } from "../icons";
+import { Activity, BarChart3, Cpu, Folder, GitBranch } from "../icons";
 import { TERM_PANEL, getTerminalSidePanelSkinStyle, panelColorTint } from "../stats/termStatsUi";
 import { SessionReplayPanel } from "./SessionReplayPanel";
+import { SystemResourcesPanel } from "./SystemResourcesPanel";
 import { TerminalStatsPanel } from "./TerminalStatsPanel";
 import { useI18n } from "../../lib/i18n";
 import {
@@ -15,7 +16,7 @@ const GitChangesPanel = lazy(() =>
   import("../git/GitChangesPanel").then((module) => ({ default: module.GitChangesPanel }))
 );
 
-export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files";
+export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files" | "systemResources";
 
 interface TerminalSidePanelProps {
   open: boolean;
@@ -23,6 +24,7 @@ interface TerminalSidePanelProps {
   activeSessionId: string | null;
   projectPath: string | null;
   filesTabDisabled?: boolean;
+  systemResourcesEnabled?: boolean;
   filesPanelContent?: ReactNode;
   onTabChange: (tab: TerminalSidePanelTab) => void;
 }
@@ -33,7 +35,7 @@ const TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-stats-panel
 const TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-git-panel-width";
 const TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-files-panel-width";
 const TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-replay-panel-width";
-const LEGACY_WIDTH_STORAGE_KEYS: Record<TerminalPanelWidthKey, string> = {
+const LEGACY_WIDTH_STORAGE_KEYS: Partial<Record<TerminalPanelWidthKey, string>> = {
   merged: MERGED_PANEL_WIDTH_STORAGE_KEY,
   stats: TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY,
   git: TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY,
@@ -58,6 +60,7 @@ function clampWidth(width: number, minWidth: number, maxWidth: number): number {
 function readLegacyStoredWidth(widthKey: TerminalPanelWidthKey, defaultWidth: number, minWidth: number, maxWidth: number): number | null {
   if (typeof window === "undefined") return null;
   const storageKey = LEGACY_WIDTH_STORAGE_KEYS[widthKey];
+  if (!storageKey) return null;
   const raw = window.localStorage.getItem(storageKey);
   if (!raw) return null;
   const parsed = Number.parseInt(raw, 10);
@@ -208,6 +211,7 @@ export function TerminalSidePanel({
   activeSessionId,
   projectPath,
   filesTabDisabled = false,
+  systemResourcesEnabled = false,
   filesPanelContent = null,
   onTabChange,
 }: TerminalSidePanelProps) {
@@ -217,6 +221,9 @@ export function TerminalSidePanel({
 
   const tabs = [
     { key: "stats" as const, label: t("terminal.panel.sideStats"), color: TERM_PANEL.cyan, icon: <BarChart3 size={12} strokeWidth={1.8} /> },
+    ...(systemResourcesEnabled
+      ? [{ key: "systemResources" as const, label: t("terminal.panel.systemResources"), color: TERM_PANEL.green, icon: <Cpu size={12} strokeWidth={1.8} /> }]
+      : []),
     { key: "replay" as const, label: t("terminal.panel.replay"), color: TERM_PANEL.magenta, icon: <Activity size={12} strokeWidth={1.8} /> },
     { key: "git" as const, label: t("terminal.panel.gitChanges"), color: TERM_PANEL.yellow, icon: <GitBranch size={12} strokeWidth={1.8} /> },
     { key: "files" as const, label: t("terminal.panel.files"), color: TERM_PANEL.blue, icon: <Folder size={12} strokeWidth={1.8} />, disabled: filesTabDisabled },
@@ -259,6 +266,9 @@ export function TerminalSidePanel({
 
       <div className="min-h-0 flex-1 overflow-hidden">
         <TerminalStatsPanel activeSessionId={activeSessionId} open={open} visible={activeTab === "stats"} embedded />
+        {systemResourcesEnabled && (
+          <SystemResourcesPanel open={open} visible={activeTab === "systemResources"} embedded />
+        )}
         <SessionReplayPanel activeSessionId={activeSessionId} open={open} visible={activeTab === "replay"} />
         {activeTab === "git" && (
           <Suspense fallback={null}>

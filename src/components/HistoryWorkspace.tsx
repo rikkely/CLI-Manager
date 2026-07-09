@@ -3,11 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useHistoryStore } from "../stores/historyStore";
 import { useTerminalStore } from "../stores/terminalStore";
-import type { HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, Project } from "../lib/types";
+import type { HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, Project, WorktreeRecord } from "../lib/types";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
+import { useWorktreeStore } from "../stores/worktreeStore";
 import { useExternalSessionSyncStore } from "../stores/externalSessionSyncStore";
 import { useI18n } from "../lib/i18n";
+import { findWorktreeByPath, projectWithWorktreeProviderOverrides } from "../lib/terminalProject";
 import { PromptLibrary } from "./prompts/PromptLibrary";
 import { DiffModal } from "./history/DiffModal";
 import { HistoryListPane } from "./history/HistoryListPane";
@@ -115,9 +117,24 @@ function resolveResumeCommand(session: HistorySessionView | HistorySessionDetail
   return null;
 }
 
-function resolveHistoryResumeCwd(session: HistorySessionView | HistorySessionDetail, project?: Project | null): string | undefined {
+function findHistoryWorktree(session: HistorySessionView | HistorySessionDetail, worktrees: WorktreeRecord[]): WorktreeRecord | null {
+  const cwd = "cwd" in session ? session.cwd?.trim() : null;
+  return findWorktreeByPath(worktrees, cwd) ?? findWorktreeByPath(worktrees, session.project_key);
+}
+
+function findProjectForWorktree(worktree: WorktreeRecord | null, projects: Project[]): Project | null {
+  if (!worktree) return null;
+  return projects.find((project) => project.id === worktree.project_id) ?? null;
+}
+
+function resolveHistoryResumeCwd(
+  session: HistorySessionView | HistorySessionDetail,
+  project?: Project | null,
+  worktree?: WorktreeRecord | null
+): string | undefined {
   const cwd = "cwd" in session ? session.cwd?.trim() : null;
   if (cwd) return cwd;
+  if (worktree) return worktree.path;
   if (project) return project.path;
   return isAbsolutePathLike(session.project_key) ? session.project_key.trim() : undefined;
 }
@@ -198,6 +215,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const updateSetting = useSettingsStore((s) => s.update);
   const projects = useProjectStore((s) => s.projects);
   const groups = useProjectStore((s) => s.groups);
+  const worktrees = useWorktreeStore((s) => s.worktrees);
   const createSession = useTerminalStore((s) => s.createSession);
 
   const globalSearchRef = useRef<HTMLInputElement | null>(null);
@@ -619,24 +637,28 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
       return;
     }
 
-    const project = findHistoryProject(activeSession, projects);
-    const cwd = resolveHistoryResumeCwd(activeSession, project);
+    const worktree = findHistoryWorktree(activeSession, worktrees);
+    const project = findHistoryProject(activeSession, projects) ?? findProjectForWorktree(worktree, projects);
+    const cwd = resolveHistoryResumeCwd(activeSession, project, worktree);
     if (!cwd) {
       toast.error("无法继续对话", { description: "未能识别该历史会话的项目目录" });
       return;
     }
 
     try {
-      const titlePrefix = activeSession.source === "claude" ? "Claude" : "Codex";
-      const title = `${titlePrefix} 继续：${activeView?.displayTitle ?? activeSession.title}`;
-      const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
-      await createSession(project?.id, cwd, title, command, parseProjectEnvVars(project), shell);
+      const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
+      const projectName = project?.name.trim();
+      const title = worktree
+        ? `${projectName || activeSession.project_key || activeSession.title} · ${worktree.name}`
+        : projectName || `${activeSession.source === "claude" ? "Claude" : "Codex"} 继续：${activeView?.displayTitle ?? activeSession.title}`;
+      const shell = launchProject?.shell && launchProject.shell !== "powershell" ? launchProject.shell : undefined;
+      await createSession(project?.id ?? worktree?.project_id, cwd, title, command, parseProjectEnvVars(launchProject), shell, undefined, worktree?.id);
       closeHistory();
       toast.success("已创建继续对话终端");
     } catch (err) {
       toast.error("继续对话失败", { description: String(err) });
     }
-  }, [activeSession, activeView?.displayTitle, closeHistory, createSession, projects]);
+  }, [activeSession, activeView?.displayTitle, closeHistory, createSession, projects, worktrees]);
 
   const openByHit = async (hit: HistorySearchHit) => {
     try {
@@ -747,17 +769,22 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
         return;
       }
 
-      const project = findHistoryProject(session, projects);
-      const cwd = resolveHistoryResumeCwd(session, project);
+      const worktree = findHistoryWorktree(session, worktrees);
+      const project = findHistoryProject(session, projects) ?? findProjectForWorktree(worktree, projects);
+      const cwd = resolveHistoryResumeCwd(session, project, worktree);
       if (!cwd) {
         toast.error(t("history.toast.resumeTerminalFailed"), { description: "未能识别该历史会话的项目目录" });
         return;
       }
 
-      const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
-      const title = `${session.source === "claude" ? "Claude" : "Codex"}: ${session.displayTitle || session.session_id}`;
+      const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
+      const shell = launchProject?.shell && launchProject.shell !== "powershell" ? launchProject.shell : undefined;
+      const projectName = project?.name.trim();
+      const title = worktree
+        ? `${projectName || session.project_key || session.displayTitle} · ${worktree.name}`
+        : projectName || `${session.source === "claude" ? "Claude" : "Codex"}: ${session.displayTitle || session.session_id}`;
 
-      void createSession(project?.id, cwd, title, command, parseProjectEnvVars(project), shell)
+      void createSession(project?.id ?? worktree?.project_id, cwd, title, command, parseProjectEnvVars(launchProject), shell, undefined, worktree?.id)
         .then(() => {
           closeHistory();
         })
@@ -765,7 +792,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           toast.error(t("history.toast.resumeTerminalFailed"), { description: String(err) });
         });
     },
-    [closeHistory, createSession, projects, t]
+    [closeHistory, createSession, projects, t, worktrees]
   );
 
   const convertSession = useCallback(

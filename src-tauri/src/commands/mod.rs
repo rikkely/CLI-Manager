@@ -15,6 +15,7 @@ pub mod shell;
 pub mod subagent_transcript;
 pub mod sync;
 pub mod system_notification;
+pub mod system_resources;
 pub mod terminal;
 pub mod terminal_shell;
 pub mod version;

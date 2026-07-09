@@ -12,6 +12,7 @@ export interface TreeActions {
   newGroupParentId: string | null;
   collapsedIds: Set<string>;
   renamingGroupId: string | null;
+  renamingProjectId: string | null;
   providerBadges: Record<string, ProviderBadge>;
   onSelectProject: (e: ReactMouseEvent, p: Project) => void;
   onSelectProjectByKeyboard: (p: Project) => void;
@@ -22,6 +23,8 @@ export interface TreeActions {
   onRequestDeleteGroup: (groupId: string, groupName: string) => void;
   onRenameConfirm: (id: string, newName: string) => void;
   onCancelRename: () => void;
+  onProjectRenameConfirm: (id: string, newName: string) => void;
+  onCancelProjectRename: () => void;
   onContextMenuProject: (e: ReactMouseEvent, p: Project) => void;
   onSelectWorktree: (worktree: WorktreeRecord) => void;
   onOpenWorktree: (project: Project, worktree: WorktreeRecord) => void;

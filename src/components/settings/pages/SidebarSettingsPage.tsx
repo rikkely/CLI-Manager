@@ -18,9 +18,11 @@ import { CSS } from "@dnd-kit/utilities";
 import { ArrowDown, ArrowUp, GripVertical } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import {
+  SYSTEM_RESOURCE_CARD_KEYS,
   TERMINAL_STATS_CARD_KEYS,
   useSettingsStore,
   type SidebarDensity,
+  type SystemResourceCardKey,
   type TerminalSidePanelSkin,
   type TerminalStatsCardKey,
   type TerminalToolbarVisibilitySettings,
@@ -98,6 +100,20 @@ const STATS_CARD_OPTION_MAP = new Map<TerminalStatsCardKey, (typeof STATS_CARD_O
   STATS_CARD_OPTIONS.map((option) => [option.key, option])
 );
 
+const RESOURCE_CARD_OPTIONS: { key: SystemResourceCardKey; labelKey: TranslationKey }[] = [
+  { key: "system", labelKey: "systemResources.system" },
+  { key: "cpu", labelKey: "systemResources.cpu" },
+  { key: "memory", labelKey: "systemResources.memory" },
+  { key: "network", labelKey: "systemResources.network" },
+  { key: "disk", labelKey: "systemResources.disk" },
+  { key: "gpu", labelKey: "systemResources.gpu" },
+  { key: "processes", labelKey: "systemResources.topProcesses" },
+];
+
+const RESOURCE_CARD_OPTION_MAP = new Map<SystemResourceCardKey, (typeof RESOURCE_CARD_OPTIONS)[number]>(
+  RESOURCE_CARD_OPTIONS.map((option) => [option.key, option])
+);
+
 const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: TranslationKey }[] = [
   { key: "templates", labelKey: "settings.general.toolbar.templates" },
   { key: "commandHistory", labelKey: "settings.general.toolbar.commandHistory" },
@@ -107,6 +123,7 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: Trans
   { key: "files", labelKey: "settings.general.toolbar.files" },
   { key: "stats", labelKey: "settings.general.toolbar.stats" },
   { key: "gitChanges", labelKey: "settings.general.toolbar.gitChanges" },
+  { key: "systemResources", labelKey: "settings.general.toolbar.systemResources" },
 ];
 
 type TerminalToolbarOptionKey = keyof TerminalToolbarVisibilitySettings;
@@ -117,7 +134,7 @@ function SortableStatsCardRow({
   title,
   actions,
 }: {
-  id: TerminalStatsCardKey;
+  id: TerminalStatsCardKey | SystemResourceCardKey;
   dragLabel: string;
   title: ReactNode;
   actions: ReactNode;
@@ -167,13 +184,20 @@ export function SidebarSettingsPage() {
   const terminalSidePanelSkin = useSettingsStore((s) => s.terminalSidePanelSkin);
   const terminalStatsCardVisibility = useSettingsStore((s) => s.terminalStatsCardVisibility);
   const terminalStatsCardOrder = useSettingsStore((s) => s.terminalStatsCardOrder);
+  const systemResourceCardVisibility = useSettingsStore((s) => s.systemResourceCardVisibility);
+  const systemResourceCardOrder = useSettingsStore((s) => s.systemResourceCardOrder);
   const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
+  const systemResourceMonitoringEnabled = useSettingsStore((s) => s.systemResourceMonitoringEnabled);
   const update = useSettingsStore((s) => s.update);
 
   const visibleCardCount = TERMINAL_STATS_CARD_KEYS.filter((key) => terminalStatsCardVisibility[key]).length;
+  const visibleResourceCardCount = SYSTEM_RESOURCE_CARD_KEYS.filter((key) => systemResourceCardVisibility[key]).length;
   const orderedStatsCardOptions = terminalStatsCardOrder
     .map((key) => STATS_CARD_OPTION_MAP.get(key))
     .filter((option): option is (typeof STATS_CARD_OPTIONS)[number] => Boolean(option));
+  const orderedResourceCardOptions = systemResourceCardOrder
+    .map((key) => RESOURCE_CARD_OPTION_MAP.get(key))
+    .filter((option): option is (typeof RESOURCE_CARD_OPTIONS)[number] => Boolean(option));
   const statsCardSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const updateStatsCardVisibility = (key: TerminalStatsCardKey, checked: boolean) => {
@@ -203,6 +227,35 @@ export function SidebarSettingsPage() {
 
   const resetStatsCardOrder = () => {
     void update("terminalStatsCardOrder", [...TERMINAL_STATS_CARD_KEYS]);
+  };
+
+  const updateResourceCardVisibility = (key: SystemResourceCardKey, checked: boolean) => {
+    void update("systemResourceCardVisibility", { ...systemResourceCardVisibility, [key]: checked });
+  };
+
+  const handleResourceCardDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = systemResourceCardOrder.indexOf(String(active.id) as SystemResourceCardKey);
+    const newIndex = systemResourceCardOrder.indexOf(String(over.id) as SystemResourceCardKey);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    void update("systemResourceCardOrder", arrayMove(systemResourceCardOrder, oldIndex, newIndex));
+  };
+
+  const moveResourceCard = (key: SystemResourceCardKey, offset: -1 | 1) => {
+    const index = systemResourceCardOrder.indexOf(key);
+    const targetIndex = index + offset;
+    if (index < 0 || targetIndex < 0 || targetIndex >= systemResourceCardOrder.length) return;
+
+    const nextOrder = [...systemResourceCardOrder];
+    [nextOrder[index], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[index]];
+    void update("systemResourceCardOrder", nextOrder);
+  };
+
+  const resetResourceCardOrder = () => {
+    void update("systemResourceCardOrder", [...SYSTEM_RESOURCE_CARD_KEYS]);
   };
 
   const updateToolbarVisibility = (key: TerminalToolbarOptionKey, checked: boolean) => {
@@ -314,6 +367,29 @@ export function SidebarSettingsPage() {
                   terminalSidePanelSingleOpen
                     ? t("settings.general.disableSingleSidePanel")
                     : t("settings.general.enableSingleSidePanel")
+                }
+              />
+            </Group>
+          </Card>
+
+          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+              <Box>
+                <Text size="xs" c="var(--on-surface-variant)">
+                  {t("settings.sidebar.systemResources")}
+                </Text>
+                <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
+                  {t("settings.sidebar.systemResourcesDescription")}
+                </Text>
+              </Box>
+              <Switch
+                color="cliPrimary"
+                checked={systemResourceMonitoringEnabled}
+                onChange={(event) => void update("systemResourceMonitoringEnabled", event.currentTarget.checked)}
+                aria-label={
+                  systemResourceMonitoringEnabled
+                    ? t("settings.sidebar.disableSystemResources")
+                    : t("settings.sidebar.enableSystemResources")
                 }
               />
             </Group>
@@ -500,6 +576,113 @@ export function SidebarSettingsPage() {
               })}
             >
               {t("settings.sidebar.showAllStatsCards")}
+            </Button>
+          </Group>
+        </Stack>
+      </section>
+
+      <section className="ui-surface-card rounded-2xl border border-border p-4">
+        <Stack gap="sm">
+          <Group justify="space-between" align="center">
+            <Text size="sm" fw={600} c="var(--on-surface)">
+              {t("settings.sidebar.resourceCards")}
+            </Text>
+            <Badge variant="light" color="cliPrimary">
+              {t("settings.sidebar.visibleCardsCount", {
+                visible: visibleResourceCardCount,
+                total: SYSTEM_RESOURCE_CARD_KEYS.length,
+              })}
+            </Badge>
+          </Group>
+          <DndContext
+            sensors={statsCardSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleResourceCardDragEnd}
+          >
+            <SortableContext items={orderedResourceCardOptions.map((option) => option.key)} strategy={verticalListSortingStrategy}>
+              <Stack gap="xs">
+                {orderedResourceCardOptions.map((option, index) => {
+                  const label = t(option.labelKey);
+                  const isFirst = index === 0;
+                  const isLast = index === orderedResourceCardOptions.length - 1;
+                  return (
+                    <SortableStatsCardRow
+                      key={option.key}
+                      id={option.key}
+                      dragLabel={t("settings.sidebar.dragResourceCard", { item: label })}
+                      title={
+                        <Text size="xs" c="var(--on-surface-variant)" style={{ minWidth: 0 }}>
+                          {label}
+                        </Text>
+                      }
+                      actions={
+                        <Group gap="xs" wrap="nowrap">
+                          <Group gap={4} wrap="nowrap">
+                            <Tooltip label={t("settings.sidebar.moveResourceCardUp", { item: label })} withArrow>
+                              <ActionIcon
+                                variant="subtle"
+                                color="cliPrimary"
+                                size="sm"
+                                disabled={isFirst}
+                                onClick={() => moveResourceCard(option.key, -1)}
+                                aria-label={t("settings.sidebar.moveResourceCardUp", { item: label })}
+                              >
+                                <ArrowUp size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label={t("settings.sidebar.moveResourceCardDown", { item: label })} withArrow>
+                              <ActionIcon
+                                variant="subtle"
+                                color="cliPrimary"
+                                size="sm"
+                                disabled={isLast}
+                                onClick={() => moveResourceCard(option.key, 1)}
+                                aria-label={t("settings.sidebar.moveResourceCardDown", { item: label })}
+                              >
+                                <ArrowDown size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </Group>
+                          <Switch
+                            color="cliPrimary"
+                            checked={systemResourceCardVisibility[option.key]}
+                            onChange={(event) => updateResourceCardVisibility(option.key, event.currentTarget.checked)}
+                            aria-label={
+                              systemResourceCardVisibility[option.key]
+                                ? t("settings.sidebar.hideResourceCard", { item: label })
+                                : t("settings.sidebar.showResourceCard", { item: label })
+                            }
+                          />
+                        </Group>
+                      }
+                    />
+                  );
+                })}
+              </Stack>
+            </SortableContext>
+          </DndContext>
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={resetResourceCardOrder}
+            >
+              {t("settings.sidebar.resetResourceCardOrder")}
+            </Button>
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={() => void update("systemResourceCardVisibility", {
+                system: true,
+                cpu: true,
+                memory: true,
+                network: true,
+                disk: true,
+                gpu: true,
+                processes: true,
+              })}
+            >
+              {t("settings.sidebar.showAllResourceCards")}
             </Button>
           </Group>
         </Stack>

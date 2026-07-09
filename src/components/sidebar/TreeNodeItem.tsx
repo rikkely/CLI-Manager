@@ -75,6 +75,7 @@ function InlineRename({ initial, onConfirm, onCancel }: { initial: string; onCon
       }}
       className="ui-tree-inline-input ui-focus-ring h-8 flex-1 px-2 text-xs text-on-surface outline-none"
       onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
     />
   );
 }
@@ -161,6 +162,22 @@ function TreeNodeItemImpl({
               <AlertTriangle size={12} strokeWidth={1.5} />
             </span>
           )}
+          <span
+            className="ui-tree-item-actions hidden shrink-0 items-center gap-0.5 group-hover/item:flex group-focus-within/item:flex"
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                actions.onOpenWorktree(project, worktree);
+              }}
+              className="icon-btn"
+              style={{ color: "var(--success)", opacity: 0.7 }}
+              title={t("worktree.menu.open")}
+            >
+              <Play size={14} strokeWidth={1.5} />
+            </button>
+          </span>
         </div>
       </div>
     );
@@ -180,6 +197,42 @@ function TreeNodeItemImpl({
     const providerBadge = actions.providerBadges[p.id];
     const worktreeCollapseKey = worktreeListCollapseId(p.id);
     const worktreesOpen = forceExpanded || !actions.collapsedIds.has(worktreeCollapseKey);
+
+    if (actions.renamingProjectId === p.id) {
+      return (
+        <div
+          ref={setNodeRef}
+          style={{ ...sortableStyle }}
+          {...attributes}
+          role="treeitem"
+          data-tree-key={treeKey}
+          aria-level={depth + 1}
+          aria-expanded={hasWorktrees ? worktreesOpen : undefined}
+          aria-selected={isSelected || isMultiSelected}
+          tabIndex={focusedNodeKey === treeKey ? 0 : -1}
+          onFocus={() => onFocusNode(treeKey)}
+        >
+          <div
+            className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl ${
+              compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
+            }`}
+            data-selected={isSelected || isMultiSelected ? "true" : "false"}
+            data-status={status ?? "idle"}
+            data-invalid={pathInvalid ? "true" : "false"}
+            style={{ paddingLeft, paddingRight: compact ? 8 : 10 }}
+          >
+            <span className="ui-tree-leading-icon">
+              {cliVendor ? (
+                <VendorIcon vendor={cliVendor} size={14} />
+              ) : (
+                <Terminal size={14} strokeWidth={1.5} />
+              )}
+            </span>
+            <InlineRename initial={p.name} onConfirm={(name) => actions.onProjectRenameConfirm(p.id, name)} onCancel={actions.onCancelProjectRename} />
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div

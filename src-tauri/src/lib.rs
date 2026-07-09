@@ -534,6 +534,7 @@ pub fn run() {
             commands::sync::sync_download,
             commands::sync::sync_local_export,
             commands::sync::sync_local_import,
+            commands::system_resources::system_resources_get_snapshot,
             commands::version::get_app_version,
             commands::version::get_os_platform,
             app_open_devtools,

@@ -357,7 +357,11 @@ fn list_native_path_entries(
             .map_err(|err| format!("file_type_failed: {err}"))?;
         let is_symlink = file_type.is_symlink();
         let is_dir = if is_symlink {
-            entry.path().metadata().map(|metadata| metadata.is_dir()).unwrap_or(false)
+            entry
+                .path()
+                .metadata()
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false)
         } else {
             file_type.is_dir()
         };
@@ -391,7 +395,14 @@ fn list_wsl_path_entries(
         .arg("find")
         .arg("-H")
         .arg(linux_dir)
-        .args(["-mindepth", "1", "-maxdepth", "1", "-printf", "%f\\0%y\\0%Y\\0"])
+        .args([
+            "-mindepth",
+            "1",
+            "-maxdepth",
+            "1",
+            "-printf",
+            "%f\\0%y\\0%Y\\0",
+        ])
         .output()
         .map_err(|err| format!("read_dir_failed: {err}"))?;
     if !output.status.success() {
@@ -407,7 +418,9 @@ fn parse_wsl_path_entries(
     directories_only: bool,
     limit: usize,
 ) -> Result<Vec<CommandSuggestionPathEntry>, String> {
-    let mut fields = stdout.split(|byte| *byte == 0).filter(|field| !field.is_empty());
+    let mut fields = stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
     let mut entries = Vec::new();
     loop {
         let Some(name_raw) = fields.next() else {
@@ -1066,7 +1079,12 @@ mod tests {
     fn resolve_directory_canonicalizes_native_path() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("root").join("child")).unwrap();
-        let candidate = tmp.path().join("root").join("..").join("root").join("child");
+        let candidate = tmp
+            .path()
+            .join("root")
+            .join("..")
+            .join("root")
+            .join("child");
 
         let resolved = resolve_directory_path(&candidate.to_string_lossy())
             .unwrap()

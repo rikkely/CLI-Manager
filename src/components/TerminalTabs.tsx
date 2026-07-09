@@ -32,6 +32,7 @@ import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
 import { CommandHistoryPanel } from "./CommandHistoryPanel";
 import { TerminalStatsPanel } from "./terminal/TerminalStatsPanel";
+import { SystemResourcesPanel } from "./terminal/SystemResourcesPanel";
 import {
   ResizableTerminalPanelFrame,
   TerminalSidePanel,
@@ -46,11 +47,12 @@ import { openWindowsTerminal } from "../lib/externalTerminal";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { parseProjectEnvVars } from "../lib/providerSwitching";
-import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
+import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check, Cpu } from "./icons";
 import { WorktreeIcon } from "./WorktreeIcon";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { EmptyState } from "./ui/EmptyState";
 import { useHistoryStore } from "../stores/historyStore";
+import { useSystemResources } from "../hooks/useSystemResources";
 import {
   shouldConfirmTerminalTabClose,
   TERMINAL_TAB_CLOSE_REQUEST_EVENT,
@@ -309,7 +311,7 @@ function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
   return {
     projectId: project.id,
     cwd: project.path,
-    title: project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name,
+    title: project.name,
     startupCmd: cmd,
     envVars: parseProjectEnvVars(project),
     shell,
@@ -329,6 +331,7 @@ interface SortableTabProps {
   worktreeMenuContent?: (closeMenu: () => void) => ReactNode;
   hoverInfo: TerminalTabHoverInfo;
   onActivate: () => void;
+  onStartEdit: () => void;
   onClose: (anchor?: SplitPickerAnchor) => void;
   onSubmitEdit: (title: string) => void;
   onCancelEdit: () => void;
@@ -350,6 +353,7 @@ function SortableTab({
   worktreeMenuContent,
   hoverInfo,
   onActivate,
+  onStartEdit,
   onClose,
   onSubmitEdit,
   onCancelEdit,
@@ -488,7 +492,11 @@ function SortableTab({
           data-terminal-tab-id={id}
           data-session-kind={sessionKind}
           data-selected={isActive ? "true" : "false"}
-          onClick={onActivate}
+          onClick={() => {
+            hideHoverCard();
+            onActivate();
+            onStartEdit();
+          }}
           onPointerEnter={scheduleHoverCard}
           onPointerLeave={scheduleHideHoverCard}
           onDoubleClick={(event) => {
@@ -1048,6 +1056,7 @@ function PaneTabBar({
               } : undefined}
               hoverInfo={buildTerminalTabHoverInfo(session, session.projectId ? projectById.get(session.projectId) : undefined)}
               onActivate={() => onActivateSession(session.id)}
+              onStartEdit={() => onStartEdit(session.id)}
               onClose={(anchor) => closePaneSessions([session.id], anchor)}
               onSubmitEdit={(title) => onSubmitEdit(session.id, title)}
               onCancelEdit={onCancelEdit}
@@ -1735,6 +1744,62 @@ function SortableToolbarButton({
   );
 }
 
+function CpuCatIndicator({
+  enabled,
+  active,
+  pollingEnabled,
+  onClick,
+}: {
+  enabled: boolean;
+  active: boolean;
+  pollingEnabled: boolean;
+  onClick: () => void;
+}) {
+  const { t } = useI18n();
+  const lastUsageRef = useRef(0);
+  const cpuOnlyOptions = useMemo(() => ({ fullDetail: false, system: false, cpu: true, memory: false }), []);
+  const { snapshot } = useSystemResources(enabled && pollingEnabled, cpuOnlyOptions, 3000);
+  useEffect(() => {
+    if (!snapshot) return;
+    lastUsageRef.current = Math.max(0, Math.min(100, snapshot.cpu.usagePercent));
+  }, [snapshot]);
+  if (!enabled) return null;
+
+  const usage = snapshot ? Math.max(0, Math.min(100, snapshot.cpu.usagePercent)) : lastUsageRef.current;
+  const speed = `${Math.max(0.38, 1.6 - usage / 85).toFixed(2)}s`;
+  const color =
+    usage >= 75
+      ? "var(--term-panel-red, #f25e5e)"
+      : usage >= 45
+        ? "var(--term-panel-yellow, #e5c453)"
+        : "var(--term-panel-green, #3dd68c)";
+  const label = t("systemResources.cpuCatTitle", { usage: `${usage.toFixed(0)}%` });
+
+  return (
+    <button
+      type="button"
+      className="ui-focus-ring ui-cpu-cat"
+      data-active={active ? "true" : "false"}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      style={{ "--cpu-cat-speed": speed, "--cpu-cat-color": color } as CSSProperties}
+    >
+      <svg viewBox="0 0 48 34" aria-hidden="true">
+        <g className="ui-cpu-cat-run">
+          <path className="ui-cpu-cat-tail" d="M37 18c6-1 7-8 2-10" />
+          <path className="ui-cpu-cat-body" d="M13 14h19c4 0 7 3 7 7v1c0 3-3 5-6 5H14c-4 0-7-3-7-7s3-6 6-6Z" />
+          <path className="ui-cpu-cat-head" d="M10 9 14 3l4 6h7l4-6 4 6v11H10V9Z" />
+          <circle className="ui-cpu-cat-eye" cx="17" cy="13" r="1.3" />
+          <circle className="ui-cpu-cat-eye" cx="26" cy="13" r="1.3" />
+          <path className="ui-cpu-cat-leg ui-cpu-cat-leg-a" d="M16 27v5" />
+          <path className="ui-cpu-cat-leg ui-cpu-cat-leg-b" d="M29 27v5" />
+        </g>
+      </svg>
+    </button>
+  );
+}
+
 interface TerminalTabsProps {
   fullscreen?: boolean;
   onToggleFullscreen?: () => void;
@@ -1776,6 +1841,7 @@ export function TerminalTabs({
       tree: s.tree,
     }))
   );
+  const updateProject = useProjectStore((s) => s.updateProject);
   const worktrees = useWorktreeStore((s) => s.worktrees);
   const checkWorktreeDeps = useWorktreeStore((s) => s.checkDeps);
   const dismissWorktreeDepsPrompt = useWorktreeStore((s) => s.dismissDepsPrompt);
@@ -1791,6 +1857,8 @@ export function TerminalTabs({
   const terminalBackgroundImagePath = useSettingsStore((s) => s.terminalBackground.imagePath);
   const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
   const terminalToolbarOrder = useSettingsStore((s) => s.terminalToolbarOrder);
+  const systemResourceMonitoringEnabled = useSettingsStore((s) => s.systemResourceMonitoringEnabled);
+  const cpuResourceCardVisible = useSettingsStore((s) => s.systemResourceCardVisibility.cpu);
   const sidePanelMerged = useSettingsStore((s) => s.terminalSidePanelMerged);
   const terminalSidePanelSingleOpen = useSettingsStore((s) => s.terminalSidePanelSingleOpen);
   const terminalSidePanelSkin = useSettingsStore((s) => s.terminalSidePanelSkin);
@@ -1817,6 +1885,7 @@ export function TerminalTabs({
   const [gitOpen, setGitOpen] = useState(false);
   const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [systemResourcesOpen, setSystemResourcesOpen] = useState(false);
   const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [activeToolbarDragId, setActiveToolbarDragId] = useState<string | null>(null);
@@ -1976,6 +2045,9 @@ export function TerminalTabs({
   const replayPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "replay" : replayOpen;
   const gitPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "git" : gitOpen;
   const filesPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "files" : filesOpen;
+  const systemResourcesPanelActive = sidePanelMerged
+    ? sidePanelOpen && sidePanelTab === "systemResources"
+    : systemResourcesOpen;
 
   useEffect(() => {
     if (!historyOpen && activeWorkspaceTab === "history") setActiveWorkspaceTab("terminal");
@@ -1988,6 +2060,7 @@ export function TerminalTabs({
     setGitOpen(false);
     setReplayOpen(false);
     setFilesOpen(false);
+    setSystemResourcesOpen(false);
   }, [historyOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
@@ -2134,6 +2207,7 @@ export function TerminalTabs({
       setGitOpen(false);
       setReplayOpen(false);
       setFilesOpen(false);
+      setSystemResourcesOpen(false);
     }
     setActiveWorkspaceTab("history");
     void openHistory({
@@ -2305,10 +2379,35 @@ export function TerminalTabs({
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
+        setSystemResourcesOpen(false);
       }
       setStatsOpen(true);
     }
   }, [closeHistory, ensureStatsPanelAllowed, sidePanelMerged, statsPanelActive, terminalSidePanelSingleOpen]);
+
+  const handleToggleSystemResourcesPanel = useCallback(() => {
+    if (systemResourcesPanelActive) {
+      if (sidePanelMerged) setSidePanelOpen(false);
+      else setSystemResourcesOpen(false);
+      return;
+    }
+    if (terminalSidePanelSingleOpen) {
+      closeHistory();
+      setActiveWorkspaceTab("terminal");
+    }
+    if (sidePanelMerged) {
+      setSidePanelTab("systemResources");
+      setSidePanelOpen(true);
+    } else {
+      if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
+        setStatsOpen(false);
+        setGitOpen(false);
+        setReplayOpen(false);
+        setFilesOpen(false);
+      }
+      setSystemResourcesOpen(true);
+    }
+  }, [closeHistory, sidePanelMerged, systemResourcesPanelActive, terminalSidePanelSingleOpen]);
 
   const handleToggleGitChangesPanel = useCallback(() => {
     if (gitPanelActive) {
@@ -2332,6 +2431,7 @@ export function TerminalTabs({
         setStatsOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
+        setSystemResourcesOpen(false);
       }
       setGitOpen(true);
     }
@@ -2359,6 +2459,7 @@ export function TerminalTabs({
         setStatsOpen(false);
         setGitOpen(false);
         setFilesOpen(false);
+        setSystemResourcesOpen(false);
       }
       setReplayOpen(true);
     }
@@ -2409,6 +2510,7 @@ export function TerminalTabs({
         setStatsOpen(false);
         setGitOpen(false);
         setReplayOpen(false);
+        setSystemResourcesOpen(false);
       }
       setFilesOpen(true);
     }
@@ -2437,9 +2539,16 @@ export function TerminalTabs({
     if (sidePanelMerged) return;
     const enforce = () => {
       if (!terminalSidePanelSingleOpen && window.innerWidth >= 1100) return;
-      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen].filter(Boolean).length;
+      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen, systemResourcesOpen].filter(Boolean).length;
       if (openPanels <= 1) return;
       if (statsOpen) {
+        setGitOpen(false);
+        setReplayOpen(false);
+        setFilesOpen(false);
+        setSystemResourcesOpen(false);
+        return;
+      }
+      if (systemResourcesOpen) {
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
@@ -2448,16 +2557,18 @@ export function TerminalTabs({
       if (gitOpen) {
         setReplayOpen(false);
         setFilesOpen(false);
+        setSystemResourcesOpen(false);
         return;
       }
       if (replayOpen) {
         setFilesOpen(false);
+        setSystemResourcesOpen(false);
       }
     };
     enforce();
     window.addEventListener("resize", enforce);
     return () => window.removeEventListener("resize", enforce);
-  }, [filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, terminalSidePanelSingleOpen]);
+  }, [filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, systemResourcesOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
     if (!filesPanelActive) return;
@@ -2480,6 +2591,7 @@ export function TerminalTabs({
       setGitOpen(false);
       setReplayOpen(false);
       setFilesOpen(false);
+      setSystemResourcesOpen(false);
     }
     const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
     setActiveWorkspaceTab("history");
@@ -2744,12 +2856,27 @@ export function TerminalTabs({
           <BarChart3 size={13} strokeWidth={1.8} />
         </button>
       ),
+      systemResources: (
+        <button
+          onClick={handleToggleSystemResourcesPanel}
+          className="ui-focus-ring ui-icon-action ui-action-system-resources"
+          data-active={systemResourcesPanelActive ? "true" : "false"}
+          title={systemResourcesPanelActive ? t("terminal.toolbar.closeSystemResourcesPanel") : t("terminal.toolbar.openSystemResourcesPanel")}
+          aria-label={systemResourcesPanelActive ? t("terminal.toolbar.closeSystemResourcesPanel") : t("terminal.toolbar.openSystemResourcesPanel")}
+          aria-pressed={systemResourcesPanelActive}
+        >
+          <Cpu size={13} strokeWidth={1.8} />
+        </button>
+      ),
     };
 
     const visibleButtons = terminalToolbarOrder
       .filter((key) => {
         if (key === "new") return true;
         if (key === "fullscreen" && !onToggleFullscreen) return false;
+        if (key === "systemResources") {
+          return terminalToolbarVisibility.systemResources === true;
+        }
         return terminalToolbarVisibility[key as keyof typeof terminalToolbarVisibility] === true;
       })
       .map((key) => ({ id: key, element: buttonMap[key] }))
@@ -2776,6 +2903,14 @@ export function TerminalTabs({
               </SortableToolbarButton>
             ))}
           </SortableContext>
+          <div className="ui-terminal-action-cat-slot">
+            <CpuCatIndicator
+              enabled={systemResourceMonitoringEnabled && cpuResourceCardVisible}
+              active={systemResourcesPanelActive}
+              pollingEnabled={!systemResourcesPanelActive}
+              onClick={handleToggleSystemResourcesPanel}
+            />
+          </div>
         </nav>
         <DragOverlay dropAnimation={null}>
           {activeToolbarDragId && buttonMap[activeToolbarDragId] ? (
@@ -2788,6 +2923,7 @@ export function TerminalTabs({
     );
   }, [
     activeToolbarDragId,
+    cpuResourceCardVisible,
     fullscreen,
     filePanelProject,
     filesPanelActive,
@@ -2799,6 +2935,7 @@ export function TerminalTabs({
     handleToggleGlobalFullscreen,
     handleToggleReplayPanel,
     handleToggleStatsPanel,
+    handleToggleSystemResourcesPanel,
     handleToolbarDragCancel,
     handleToolbarDragEnd,
     handleToolbarDragStart,
@@ -2808,12 +2945,50 @@ export function TerminalTabs({
     sessionHistoryShortcutHint,
     sidePanelMerged,
     statsPanelActive,
+    systemResourceMonitoringEnabled,
+    systemResourcesPanelActive,
     t,
     terminalToolbarOrder,
     terminalToolbarVisibility,
     terminalActionSidebarStyle,
     toolbarSensors,
   ]);
+
+  const renameOpenProjectTabs = useCallback(
+    (projectId: string, title: string) => {
+      sessions
+        .filter((session) => session.projectId === projectId && !session.worktreeId && (session.kind ?? "pty") === "pty")
+        .forEach((session) => renameSession(session.id, title));
+    },
+    [renameSession, sessions]
+  );
+
+  const handleSubmitTabEdit = useCallback(
+    async (sessionId: string, title: string) => {
+      const trimmed = title.trim();
+      const session = sessions.find((item) => item.id === sessionId);
+      if (!session || !trimmed) {
+        setEditingSessionId(null);
+        return;
+      }
+
+      if (session.projectId && !session.worktreeId && (session.kind ?? "pty") === "pty") {
+        try {
+          await updateProject(session.projectId, { name: trimmed });
+          renameOpenProjectTabs(session.projectId, trimmed);
+        } catch (err) {
+          toast.error(t("terminal.tab.renameFailed"), { description: String(err) });
+        } finally {
+          setEditingSessionId(null);
+        }
+        return;
+      }
+
+      renameSession(sessionId, trimmed);
+      setEditingSessionId(null);
+    },
+    [renameOpenProjectTabs, renameSession, sessions, t, updateProject]
+  );
 
   const renderLeaf = useCallback((pane: TerminalPaneLeaf) => (
     <MemoPaneLeafView
@@ -2844,8 +3019,7 @@ export function TerminalTabs({
       onCloseSessions={handleCloseSessions}
       onStartEdit={setEditingSessionId}
       onSubmitEdit={(sessionId, title) => {
-        renameSession(sessionId, title);
-        setEditingSessionId(null);
+        void handleSubmitTabEdit(sessionId, title);
       }}
       onCancelEdit={() => setEditingSessionId(null)}
       onNewTab={() => void handleNewTab()}
@@ -2888,7 +3062,7 @@ export function TerminalTabs({
     lightThemePalette,
     moveSessionToPane,
     projects,
-    renameSession,
+    handleSubmitTabEdit,
     resolvedTheme,
     effectiveActiveSessionId,
     visibleSessions,
@@ -3081,6 +3255,7 @@ export function TerminalTabs({
               activeSessionId={panelSessionId}
               projectPath={sidePanelProjectPath}
               filesTabDisabled={!filePanelProject}
+              systemResourcesEnabled
               filesPanelContent={<FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />}
               onTabChange={handleSidePanelTabChange}
             />
@@ -3126,6 +3301,16 @@ export function TerminalTabs({
                   resizeTitle={t("terminal.panel.resizeFilesTitle")}
                 >
                   <FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />
+                </ResizableTerminalPanelFrame>
+              )}
+              {systemResourcesOpen && (
+                <ResizableTerminalPanelFrame
+                  widthKey="systemResources"
+                  defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources}
+                  resizeLabel={t("terminal.panel.resizeSystemResourcesLabel")}
+                  resizeTitle={t("terminal.panel.resizeSystemResourcesTitle")}
+                >
+                  <SystemResourcesPanel open={systemResourcesOpen} embedded />
                 </ResizableTerminalPanelFrame>
               )}
             </>

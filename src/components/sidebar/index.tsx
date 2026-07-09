@@ -124,13 +124,12 @@ function resolveHistorySourceFilter(cliTool: string | null | undefined): History
 }
 
 function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
-  const title = project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name;
   const envVars = parseProjectEnvVars(project);
 
   return {
     projectId: project.id,
     cwd: project.path,
-    title,
+    title: project.name,
     startupCmd: resolveProjectStartupCommand(project),
     envVars,
     shell: project.shell && project.shell !== "powershell" ? project.shell : undefined,
@@ -210,6 +209,7 @@ export function Sidebar({
   const createSession = useTerminalStore((s) => s.createSession);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
   const closeSession = useTerminalStore((s) => s.closeSession);
+  const renameSession = useTerminalStore((s) => s.renameSession);
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const setActiveSession = useTerminalStore((s) => s.setActive);
@@ -440,6 +440,7 @@ export function Sidebar({
   // 菜单真实位置：渲染后按实测尺寸做翻转/钳制，避免写死高度导致溢出遮挡。
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [newGroupParentId, setNewGroupParentId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -830,7 +831,7 @@ export function Sidebar({
       );
       return {
         cwd: project.path,
-        title: project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name,
+        title: project.name,
         startupCmd,
         shell: project.shell || undefined,
       };
@@ -1225,6 +1226,34 @@ export function Sidebar({
     [renameGroup]
   );
 
+  const renameOpenProjectTabs = useCallback(
+    (projectId: string, title: string) => {
+      sessions
+        .filter((session) => session.projectId === projectId && !session.worktreeId && (session.kind ?? "pty") === "pty")
+        .forEach((session) => renameSession(session.id, title));
+    },
+    [renameSession, sessions]
+  );
+
+  const handleProjectRenameConfirm = useCallback(
+    async (id: string, newName: string) => {
+      const trimmed = newName.trim();
+      if (!trimmed) {
+        setRenamingProjectId(null);
+        return;
+      }
+
+      try {
+        await updateProject(id, { name: trimmed });
+        renameOpenProjectTabs(id, trimmed);
+        setRenamingProjectId(null);
+      } catch (err) {
+        toast.error(t("sidebar.toast.projectRenameFailed"), { description: String(err) });
+      }
+    },
+    [renameOpenProjectTabs, t, updateProject]
+  );
+
   const handleCreateGroup = useCallback(
     (parentId: string | null, name: string) => {
       void createGroup({ name, parent_id: parentId });
@@ -1327,6 +1356,7 @@ export function Sidebar({
       newGroupParentId,
       collapsedIds,
       renamingGroupId,
+      renamingProjectId,
       providerBadges,
       onSelectProject: handleSelectProject,
       onSelectProjectByKeyboard: handleSelectProjectByKeyboard,
@@ -1337,6 +1367,8 @@ export function Sidebar({
       onRequestDeleteGroup: handleRequestDeleteGroup,
       onRenameConfirm: handleRenameConfirm,
       onCancelRename: () => setRenamingGroupId(null),
+      onProjectRenameConfirm: handleProjectRenameConfirm,
+      onCancelProjectRename: () => setRenamingProjectId(null),
       onContextMenuProject: handleContextMenuProject,
       onSelectWorktree: handleSelectWorktree,
       onOpenWorktree: handleOpenWorktree,
@@ -1358,6 +1390,7 @@ export function Sidebar({
       newGroupParentId,
       collapsedIds,
       renamingGroupId,
+      renamingProjectId,
       providerBadges,
       handleSelectProject,
       handleSelectProjectByKeyboard,
@@ -1367,6 +1400,7 @@ export function Sidebar({
       handleRequestDeleteProject,
       handleRequestDeleteGroup,
       handleRenameConfirm,
+      handleProjectRenameConfirm,
       handleContextMenuProject,
       handleSelectWorktree,
       handleOpenWorktree,
@@ -1695,6 +1729,18 @@ export function Sidebar({
                     {t("sidebar.menu.switchProvider")}
                   </button>
                 )}
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    ensureSidebarExpanded();
+                    setRenamingProjectId(contextMenu.project.id);
+                    setContextMenu(null);
+                  }}
+                >
+                  <Pencil size={14} strokeWidth={1.5} />
+                  {t("sidebar.menu.rename")}
+                </button>
                 <button
                   className="context-menu-item"
                   role="menuitem"
