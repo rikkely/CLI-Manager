@@ -381,6 +381,30 @@ const getTerminalCellWidth = (text: string) => {
   return width;
 };
 
+const lineHasVisibleTextAfterColumn = (line: IBufferLine, column: number, cols: number) => {
+  const width = Math.min(cols, line.length);
+  for (let index = Math.max(0, column); index < width; index += 1) {
+    if (line.getCell(index)?.getChars().trim()) return true;
+  }
+  return false;
+};
+
+const canShowSuggestionAtCurrentInputEnd = (terminal: Terminal, input: string) => {
+  const inputCellWidth = getTerminalCellWidth(input);
+  if (inputCellWidth <= 0) return false;
+
+  const buffer = terminal.buffer.active;
+  if (buffer.cursorX < inputCellWidth) return false;
+
+  const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+  if (!line) return false;
+
+  if (lineHasVisibleTextAfterColumn(line, buffer.cursorX, terminal.cols)) return false;
+
+  const beforeCursor = line.translateToString(false, 0, Math.min(buffer.cursorX, line.length));
+  return beforeCursor.endsWith(input);
+};
+
 const withVisibleSelectionTheme = (theme: ITheme): ITheme => {
   const isLight = isLightTerminalTheme(theme);
   return {
@@ -1975,6 +1999,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
     const updateSuggestionGhostPosition = (suggestion: TerminalInputSuggestion | null) => {
       if (!suggestion || suggestionDisposed || !isActiveRef.current || !isVisibleRef.current || isComposingRef.current) {
+        clearSuggestionGhost();
+        return;
+      }
+      if (!canShowSuggestionAtCurrentInputEnd(terminal, inputBuffer.current)) {
         clearSuggestionGhost();
         return;
       }
