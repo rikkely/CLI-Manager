@@ -331,7 +331,6 @@ interface SortableTabProps {
   worktreeMenuContent?: (closeMenu: () => void) => ReactNode;
   hoverInfo: TerminalTabHoverInfo;
   onActivate: () => void;
-  onStartEdit: () => void;
   onClose: (anchor?: SplitPickerAnchor) => void;
   onSubmitEdit: (title: string) => void;
   onCancelEdit: () => void;
@@ -353,7 +352,6 @@ function SortableTab({
   worktreeMenuContent,
   hoverInfo,
   onActivate,
-  onStartEdit,
   onClose,
   onSubmitEdit,
   onCancelEdit,
@@ -495,14 +493,9 @@ function SortableTab({
           onClick={() => {
             hideHoverCard();
             onActivate();
-            onStartEdit();
           }}
           onPointerEnter={scheduleHoverCard}
           onPointerLeave={scheduleHideHoverCard}
-          onDoubleClick={(event) => {
-            hideHoverCard();
-            onClose(event.currentTarget.getBoundingClientRect());
-          }}
           onContextMenu={(event) => {
             hideHoverCard();
             contextMenuPointRef.current = { x: event.clientX, y: event.clientY };
@@ -1056,7 +1049,6 @@ function PaneTabBar({
               } : undefined}
               hoverInfo={buildTerminalTabHoverInfo(session, session.projectId ? projectById.get(session.projectId) : undefined)}
               onActivate={() => onActivateSession(session.id)}
-              onStartEdit={() => onStartEdit(session.id)}
               onClose={(anchor) => closePaneSessions([session.id], anchor)}
               onSubmitEdit={(title) => onSubmitEdit(session.id, title)}
               onCancelEdit={onCancelEdit}
@@ -1065,7 +1057,14 @@ function PaneTabBar({
               menuContent={(getAnchor) => (
                 <>
                   <ContextMenuItem onSelect={() => closePaneSessions([session.id], getAnchor())}>{t("terminal.tab.closeCurrent")}</ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onStartEdit(session.id)}>{t("terminal.tab.rename", { title: session.title })}</ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => {
+                      // Radix 会在菜单关闭后恢复焦点；延后一拍进入编辑态，避免输入框刚挂载就被 blur 提交掉。
+                      window.setTimeout(() => onStartEdit(session.id), 0);
+                    }}
+                  >
+                    {t("terminal.tab.rename", { title: session.title })}
+                  </ContextMenuItem>
                   <ContextMenuItem onSelect={() => closeOtherPaneSessions(session.id, getAnchor())}>{t("terminal.tab.closeOthers")}</ContextMenuItem>
                   <ContextMenuItem onSelect={() => closePaneSessionsToLeft(session.id, getAnchor())}>{t("terminal.tab.closeLeft")}</ContextMenuItem>
                   <ContextMenuItem onSelect={() => closePaneSessionsToRight(session.id, getAnchor())}>{t("terminal.tab.closeRight")}</ContextMenuItem>
