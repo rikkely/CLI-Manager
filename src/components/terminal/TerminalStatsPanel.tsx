@@ -543,9 +543,29 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const projectName = project?.name || latestSession?.project_key || "—";
   const shellLabel = formatStatsShellLabel(terminalSession?.shell ?? project?.shell);
 
+  const emptyDisplaySession: HistorySessionDetail | null =
+    !latestSession && sourceFilter && displayProjectPath
+      ? {
+          session_id: terminalSession?.cliSessionId ?? "—",
+          source: sourceFilter,
+          project_key: projectName || displayProjectPath,
+          title: projectName || displayProjectPath,
+          file_path: "",
+          cwd: displayProjectPath,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          message_count: 0,
+          branch: null,
+          messages: [],
+          tool_events: [],
+          file_changes: [],
+        }
+      : null;
+  const displaySession = latestSession ?? emptyDisplaySession;
+
   const renderStatsCard = (cardKey: TerminalStatsCardKey) => {
     if (!terminalStatsCardVisibility[cardKey]) return null;
-    const session = latestSession;
+    const session = displaySession;
     const resolvedProjectPath = displayProjectPath;
     if (!session || !resolvedProjectPath) return null;
 
@@ -634,7 +654,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
         <EmptyHint text={t("termStats.noProject")} />
       ) : loadingSession && !latestSession ? (
         <EmptyHint text={t("common.loading")} />
-      ) : !latestSession ? (
+      ) : !displaySession ? (
         <EmptyHint text={t("termStats.noSessionRecord", { source: sourceFilter ?? "CLI" })} />
       ) : !hasVisibleCard ? (
         <EmptyHint text={t("termStats.noVisibleCards")} />

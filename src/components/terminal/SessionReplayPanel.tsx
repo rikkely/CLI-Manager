@@ -509,7 +509,6 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
   const eventsBySession = useReplayStore((state) => state.eventsBySession);
   const selectedSessionKey = useReplayStore((state) => state.selectedSessionKey);
   const loading = useReplayStore((state) => state.loading);
-  const ready = useReplayStore((state) => state.ready);
   const error = useReplayStore((state) => state.error);
   const loadRecentSessions = useReplayStore((state) => state.loadRecentSessions);
   const loadSession = useReplayStore((state) => state.loadSession);
@@ -758,7 +757,9 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
           <button
             type="button"
             disabled={historySessions.length === 0}
-            className="ui-focus-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+            title={t("aiReplay.history")}
+            aria-label={t("aiReplay.history")}
+            className="ui-focus-ring flex h-7 w-7 items-center justify-center rounded-lg border text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45"
             style={{
               color: historyOpen ? TERM_PANEL.yellow : TERM_PANEL.dim,
               borderColor: historyOpen ? panelColorTint(TERM_PANEL.yellow, 34) : TERM_PANEL.border,
@@ -767,12 +768,7 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
             onClick={() => setHistoryOpen((value) => !value)}
           >
             <Clock3 size={12} />
-            <span>{t("aiReplay.history")}</span>
-            {historySessions.length > 0 && <span className="tabular-nums">{historySessions.length}</span>}
           </button>
-          <HeaderPill color={error ? TERM_PANEL.red : ready ? TERM_PANEL.green : TERM_PANEL.yellow}>
-            {error ? t("aiReplay.health.error") : ready ? t("aiReplay.health.persisted") : t("aiReplay.health.pending")}
-          </HeaderPill>
         </div>
       </div>
 
