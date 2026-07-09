@@ -78,6 +78,12 @@ export interface UpdateProjectInput {
   worktree_deps_prompt_enabled?: number;
 }
 
+export type TerminalScope =
+  | { kind: "all" }
+  | { kind: "project"; projectId: string }
+  | { kind: "group"; groupId: string }
+  | { kind: "worktree"; projectId: string; worktreeId: string };
+
 export interface CreateGroupInput {
   name: string;
   parent_id?: string | null;

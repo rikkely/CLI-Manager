@@ -736,6 +736,17 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     });
   };
 
+  const scheduleViewportRefresh = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const terminal = terminalRef.current;
+        if (!terminal) return;
+        refreshTerminalViewport(terminal);
+        scheduleFit(true);
+      });
+    });
+  };
+
   useEffect(() => {
     const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
     const project = session?.projectId
@@ -1449,6 +1460,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     }
     // Wait one frame to ensure display:block has taken effect and layout is stable.
     scheduleFit(true);
+    scheduleViewportRefresh();
     if (terminalRef.current) {
       normalizeTuiComposerBackground(terminalRef.current);
       scheduleTuiComposerBackgroundNormalization(terminalRef.current);
@@ -1553,6 +1565,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     if (initialTerminalOutput) {
       terminal.write(initialTerminalOutput, () => {
         terminal.scrollToBottom();
+        refreshTerminalViewport(terminal);
+        scheduleViewportRefresh();
         writeDeferredStartup();
       });
     } else {
@@ -2906,6 +2920,17 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (writeRafId !== null) {
         cancelAnimationFrame(writeRafId);
         writeRafId = null;
+      }
+      try {
+        const serializedOutput = serializeAddon.serialize();
+        const pendingOutput = [
+          ...activeWriteQueueRef.current,
+          ...pendingChunks,
+          ...inactiveBufferRef.current,
+        ].join("");
+        useTerminalStore.getState().updateSessionTerminalSnapshot(sessionId, `${serializedOutput}${pendingOutput}`);
+      } catch (err) {
+        logError("Failed to snapshot terminal buffer before dispose", { sessionId, err });
       }
       if (activeWriteRafRef.current !== null) {
         cancelAnimationFrame(activeWriteRafRef.current);

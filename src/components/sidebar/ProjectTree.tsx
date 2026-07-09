@@ -1,7 +1,7 @@
 import { DndContext, DragOverlay, PointerSensor, closestCenter, useSensor, useSensors, type CollisionDetection, type DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import type { Project, TreeNode as TNode } from "../../lib/types";
+import type { Project, TerminalScope, TreeNode as TNode } from "../../lib/types";
 import type { SessionStatus } from "../../stores/terminalStore";
 import { SidebarSkeleton } from "../ui/Skeleton";
 import { EmptyState } from "../ui/EmptyState";
@@ -21,7 +21,7 @@ interface ProjectTreeProps {
   density: "compact" | "comfortable";
   newGroupParentId: string | null;
   projectScopedTerminalViewEnabled: boolean;
-  terminalScopeProjectId: string | null;
+  terminalScope: TerminalScope;
   onSelectAllTerminalScope: () => void;
   onCreateRootGroup: (name: string) => void;
   onCancelRootGroup: () => void;
@@ -246,7 +246,7 @@ export function ProjectTree({
   density,
   newGroupParentId,
   projectScopedTerminalViewEnabled,
-  terminalScopeProjectId,
+  terminalScope,
   onSelectAllTerminalScope,
   onCreateRootGroup,
   onCancelRootGroup,
@@ -286,15 +286,19 @@ export function ProjectTree({
     return map;
   }, [visibleNodes]);
   const selectedTreeKey = useMemo(() => {
+    if (projectScopedTerminalViewEnabled && terminalScope.kind === "group") {
+      const groupKey = `g:${terminalScope.groupId}`;
+      if (visibleNodeIndex.has(groupKey)) return groupKey;
+    }
     if (!actions.selectedId) return null;
     const worktreeKey = `wt:${actions.selectedId}`;
     if (visibleNodeIndex.has(worktreeKey)) return worktreeKey;
     const projectKey = `p:${actions.selectedId}`;
     if (visibleNodeIndex.has(projectKey)) return projectKey;
     return null;
-  }, [actions.selectedId, visibleNodeIndex]);
+  }, [actions.selectedId, projectScopedTerminalViewEnabled, terminalScope, visibleNodeIndex]);
   const allTerminalsSelected =
-    projectScopedTerminalViewEnabled && terminalScopeProjectId === null && actions.selectedId === null;
+    projectScopedTerminalViewEnabled && terminalScope.kind === "all";
   const projectById = useMemo(() => {
     const map = new Map<string, Extract<TNode, { type: "project" }>>();
     const walk = (nodes: TNode[]) => {
@@ -492,6 +496,7 @@ export function ProjectTree({
         return;
       }
       if (current.kind === "group" && current.groupId) {
+        actions.onSelectGroupScope(current.groupId);
         if (!forceExpanded) actions.toggleCollapsed(current.groupId);
         return;
       }

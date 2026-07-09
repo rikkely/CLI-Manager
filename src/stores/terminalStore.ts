@@ -181,6 +181,7 @@ interface TerminalStore {
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
   updateSessionCwd: (sessionId: string, cwd: string) => void;
+  updateSessionTerminalSnapshot: (sessionId: string, initialTerminalOutput: string) => void;
   markAttentionInputHandled: (sessionId: string) => void;
   handleCliHookEvent: (payload: CliHookPayload) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
@@ -857,6 +858,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   updateSessionCwd: (sessionId, cwd) => set((state) => ({
     sessions: state.sessions.map((session) => (
       session.id === sessionId ? { ...session, cwd } : session
+    )),
+  })),
+
+  updateSessionTerminalSnapshot: (sessionId, initialTerminalOutput) => set((state) => ({
+    sessions: state.sessions.map((session) => (
+      session.id === sessionId && (session.kind ?? "pty") === "pty" && session.initialTerminalOutput !== initialTerminalOutput
+        ? { ...session, initialTerminalOutput }
+        : session
     )),
   })),
 

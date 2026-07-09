@@ -16,7 +16,7 @@ import {
 } from "../../stores/worktreeStore";
 import { useExternalSessionSyncStore } from "../../stores/externalSessionSyncStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
-import type { HistorySourceFilter, Project, TreeNode as TNode, Group, WorktreeRecord } from "../../lib/types";
+import type { HistorySourceFilter, Project, TreeNode as TNode, Group, TerminalScope, WorktreeRecord } from "../../lib/types";
 import { ConfigModal } from "../ConfigModal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProviderSwitchModal } from "../ProviderSwitchModal";
@@ -26,6 +26,7 @@ import { resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
 import { isSameProjectFileContext, projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
+import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../../lib/terminalScope";
 import { appendSyncedHistoryContextArg } from "../../lib/syncedHistoryContext";
 import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
 import { Portal } from "../ui/Portal";
@@ -65,8 +66,8 @@ interface SidebarProps {
   onOpenStats: () => void;
   compactMode?: boolean;
   projectScopedTerminalViewEnabled?: boolean;
-  terminalScopeProjectId?: string | null;
-  onTerminalScopeChange?: (projectId: string | null) => void;
+  terminalScope?: TerminalScope;
+  onTerminalScopeChange?: (scope: TerminalScope) => void;
 }
 
 const SIDEBAR_COLLAPSED_WIDTH = 64;
@@ -169,31 +170,12 @@ async function buildSyncedAwareProjectSplitOptions(project: Project): Promise<Sp
   };
 }
 
-function collectGroupProjectIds(groupId: string, groups: Group[], projects: Project[]): Set<string> {
-  const groupIds = new Set<string>([groupId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const group of groups) {
-      if (group.parent_id && groupIds.has(group.parent_id) && !groupIds.has(group.id)) {
-        groupIds.add(group.id);
-        changed = true;
-      }
-    }
-  }
-  return new Set(
-    projects
-      .filter((project) => project.group_id && groupIds.has(project.group_id))
-      .map((project) => project.id)
-  );
-}
-
 export function Sidebar({
   onOpenSettings,
   onOpenStats,
   compactMode = false,
   projectScopedTerminalViewEnabled = true,
-  terminalScopeProjectId = null,
+  terminalScope = ALL_TERMINALS_SCOPE,
   onTerminalScopeChange,
 }: SidebarProps) {
   const { t } = useI18n();
@@ -325,23 +307,39 @@ export function Sidebar({
 
   useEffect(() => {
     if (!projectScopedTerminalViewEnabled) return;
-    const activeSessionInScope =
-      activeSessionProjectId !== null &&
-      (terminalScopeProjectId === null || activeSessionProjectId === terminalScopeProjectId);
+    if (terminalScope.kind === "all") {
+      setSelectedId(null);
+      selectionAnchorRef.current = null;
+      setSelectedProjectIds((prev) => prev.size === 0 ? prev : new Set());
+      return;
+    }
+
+    if (terminalScope.kind === "group") {
+      setSelectedId(null);
+      selectionAnchorRef.current = terminalScope.groupId;
+      setSelectedProjectIds((prev) => prev.size === 0 ? prev : new Set());
+      return;
+    }
+
+    if (terminalScope.kind === "worktree") {
+      setSelectedId(terminalScope.worktreeId);
+      selectionAnchorRef.current = terminalScope.projectId;
+      setSelectedProjectIds((prev) => prev.size === 0 ? prev : new Set());
+      return;
+    }
+
+    const activeSessionInScope = activeSessionProjectId === terminalScope.projectId;
     const scopedWorktreeId = activeSessionInScope ? activeSessionWorktreeId : null;
-    const scopedProjectId = activeSessionInScope ? activeSessionProjectId : terminalScopeProjectId;
-    const nextSelectedId = activeSessionInScope
-      ? scopedWorktreeId ?? scopedProjectId
-      : terminalScopeProjectId;
+    const scopedProjectId = terminalScope.projectId;
+    const nextSelectedId = scopedWorktreeId ?? scopedProjectId;
     setSelectedId(nextSelectedId);
-    selectionAnchorRef.current = scopedWorktreeId ? scopedProjectId : terminalScopeProjectId;
+    selectionAnchorRef.current = scopedWorktreeId ? scopedProjectId : terminalScope.projectId;
     setSelectedProjectIds((prev) => {
       if (scopedWorktreeId) return prev.size === 0 ? prev : new Set();
-      if (!scopedProjectId) return prev.size === 0 ? prev : new Set();
       if (prev.size === 1 && prev.has(scopedProjectId)) return prev;
       return new Set([scopedProjectId]);
     });
-  }, [activeSessionProjectId, activeSessionWorktreeId, projectScopedTerminalViewEnabled, terminalScopeProjectId]);
+  }, [activeSessionProjectId, activeSessionWorktreeId, projectScopedTerminalViewEnabled, terminalScope]);
 
   useEffect(() => {
     if (!activeSessionProjectId || !activeSessionWorktreeId) return;
@@ -356,10 +354,18 @@ export function Sidebar({
 
   useEffect(() => {
     if (!projectScopedTerminalViewEnabled) return;
-    if (!terminalScopeProjectId) return;
-    if (projects.some((project) => project.id === terminalScopeProjectId)) return;
-    onTerminalScopeChange?.(null);
-  }, [onTerminalScopeChange, projectScopedTerminalViewEnabled, projects, terminalScopeProjectId]);
+    if (terminalScope.kind === "all") return;
+    if (terminalScope.kind === "project" && projects.some((project) => project.id === terminalScope.projectId)) return;
+    if (terminalScope.kind === "group" && groups.some((group) => group.id === terminalScope.groupId)) return;
+    if (
+      terminalScope.kind === "worktree" &&
+      projects.some((project) => project.id === terminalScope.projectId) &&
+      worktrees.some((worktree) => worktree.id === terminalScope.worktreeId)
+    ) {
+      return;
+    }
+    onTerminalScopeChange?.(ALL_TERMINALS_SCOPE);
+  }, [groups, onTerminalScopeChange, projectScopedTerminalViewEnabled, projects, terminalScope, worktrees]);
 
   useEffect(() => {
     if (!fileProject) setShowFileExplorer(false);
@@ -380,6 +386,7 @@ export function Sidebar({
     walk(tree);
     return ids;
   }, [tree, collapsedIds]);
+  const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
 
   const activateFirstProjectSession = useCallback(
     (projectId: string): boolean => {
@@ -403,6 +410,22 @@ export function Sidebar({
       return true;
     },
     [activeSessionId, sessions, setActiveSession]
+  );
+
+  const activateFirstGroupSession = useCallback(
+    (groupId: string): boolean => {
+      const projectIds = collectProjectIdsForGroup(groups, projects, groupId);
+      const session = sessions.find((item) =>
+        (item.kind ?? "pty") === "pty" &&
+        sessionMatchesTerminalScope(item, { kind: "group", groupId }, sessions, projects, projectById, worktrees, projectIds)
+      );
+      if (!session) return false;
+      if (session.id !== activeSessionId) {
+        setActiveSession(session.id);
+      }
+      return true;
+    },
+    [activeSessionId, groups, projectById, projects, sessions, setActiveSession, worktrees]
   );
 
   const [contextMenu, setContextMenu] = useState<
@@ -952,6 +975,21 @@ export function Sidebar({
     [openProjects]
   );
 
+  const handleNewProjectTerminal = useCallback(
+    async (project: Project) => {
+      if (compactMode || useExternalTerminal) {
+        await openWindowsTerminal([{ title: project.name, cwd: project.path }]);
+      } else {
+        await createSession(project.id, project.path, project.name, undefined, undefined, project.shell || undefined);
+      }
+      if (projectScopedTerminalViewEnabled) {
+        onTerminalScopeChange?.({ kind: "project", projectId: project.id });
+      }
+      closeHistory();
+    },
+    [closeHistory, compactMode, createSession, onTerminalScopeChange, projectScopedTerminalViewEnabled, useExternalTerminal]
+  );
+
   const handleSplitProject = useCallback(
     async (project: Project, direction: TerminalPaneSplitDirection) => {
       if (!activeSessionId || compactMode || useExternalTerminal) return;
@@ -1021,7 +1059,7 @@ export function Sidebar({
     setSelectedProjectIds(new Set());
     selectionAnchorRef.current = worktree.project_id;
     if (projectScopedTerminalViewEnabled) {
-      onTerminalScopeChange?.(worktree.project_id);
+      onTerminalScopeChange?.({ kind: "worktree", projectId: worktree.project_id, worktreeId: worktree.id });
     }
     if (activateFirstWorktreeSession(worktree.id)) {
       closeHistory();
@@ -1093,7 +1131,7 @@ export function Sidebar({
   const handleSelectProject = useCallback((e: ReactMouseEvent, project: Project) => {
     setSelectedId(project.id);
     if (projectScopedTerminalViewEnabled) {
-      onTerminalScopeChange?.(project.id);
+      onTerminalScopeChange?.({ kind: "project", projectId: project.id });
     }
 
     const additive = e.ctrlKey || e.metaKey; // Ctrl(Win/Linux) / Cmd(Mac) 切换单项
@@ -1141,18 +1179,29 @@ export function Sidebar({
     setSelectedProjectIds(new Set([project.id]));
     selectionAnchorRef.current = project.id;
     if (projectScopedTerminalViewEnabled) {
-      onTerminalScopeChange?.(project.id);
+      onTerminalScopeChange?.({ kind: "project", projectId: project.id });
     }
     if (activateFirstProjectSession(project.id)) {
       closeHistory();
     }
   }, [activateFirstProjectSession, closeHistory, onTerminalScopeChange, projectScopedTerminalViewEnabled]);
 
+  const handleSelectGroupScope = useCallback((groupId: string) => {
+    if (!projectScopedTerminalViewEnabled) return;
+    setSelectedId(null);
+    setSelectedProjectIds(new Set());
+    selectionAnchorRef.current = groupId;
+    onTerminalScopeChange?.({ kind: "group", groupId });
+    if (activateFirstGroupSession(groupId)) {
+      closeHistory();
+    }
+  }, [activateFirstGroupSession, closeHistory, onTerminalScopeChange, projectScopedTerminalViewEnabled]);
+
   const handleSelectAllTerminalScope = useCallback(() => {
     setSelectedId(null);
     setSelectedProjectIds(new Set());
     selectionAnchorRef.current = null;
-    onTerminalScopeChange?.(null);
+    onTerminalScopeChange?.(ALL_TERMINALS_SCOPE);
   }, [onTerminalScopeChange]);
 
   const handleToggleSelection = useCallback((project: Project) => {
@@ -1273,12 +1322,15 @@ export function Sidebar({
     () => ({
       selectedId,
       selectedProjectIds,
+      projectScopedTerminalViewEnabled,
+      terminalScope,
       newGroupParentId,
       collapsedIds,
       renamingGroupId,
       providerBadges,
       onSelectProject: handleSelectProject,
       onSelectProjectByKeyboard: handleSelectProjectByKeyboard,
+      onSelectGroupScope: handleSelectGroupScope,
       onOpenProject: handleOpen,
       onStartGroup: handleStartGroup,
       onRequestDeleteProject: handleRequestDeleteProject,
@@ -1301,12 +1353,15 @@ export function Sidebar({
     [
       selectedId,
       selectedProjectIds,
+      projectScopedTerminalViewEnabled,
+      terminalScope,
       newGroupParentId,
       collapsedIds,
       renamingGroupId,
       providerBadges,
       handleSelectProject,
       handleSelectProjectByKeyboard,
+      handleSelectGroupScope,
       handleOpen,
       handleStartGroup,
       handleRequestDeleteProject,
@@ -1378,7 +1433,7 @@ export function Sidebar({
       danger: true,
       onConfirm: async () => {
         try {
-          const projectIds = collectGroupProjectIds(confirmAction.groupId, groups, projects);
+          const projectIds = collectProjectIdsForGroup(groups, projects, confirmAction.groupId);
           const groupProjects = projects.filter((project) => projectIds.has(project.id));
           const syncedKeys = groupProjects.flatMap((project) =>
             getSyncedSessionKeysForProject(project, useExternalSessionSyncStore.getState().syncedSessions)
@@ -1462,7 +1517,7 @@ export function Sidebar({
                 density={sidebarDensity}
                 newGroupParentId={newGroupParentId}
                 projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
-                terminalScopeProjectId={terminalScopeProjectId}
+                terminalScope={terminalScope}
                 onSelectAllTerminalScope={handleSelectAllTerminalScope}
                 onCreateRootGroup={(name) => handleCreateGroup(null, name)}
                 onCancelRootGroup={handleCancelNewGroup}
@@ -1523,6 +1578,17 @@ export function Sidebar({
                 >
                   <Play size={14} strokeWidth={1.5} />
                   {compactMode ? t("sidebar.menu.openExternalTerminal") : t("sidebar.menu.openTerminal")}
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    void handleNewProjectTerminal(contextMenu.project);
+                    setContextMenu(null);
+                  }}
+                >
+                  <Plus size={14} strokeWidth={1.5} />
+                  {t("sidebar.menu.newProjectTerminal")}
                 </button>
                 <button
                   className="context-menu-item"
@@ -1765,6 +1831,19 @@ export function Sidebar({
                   <Play size={14} strokeWidth={1.5} />
                   {compactMode ? t("sidebar.menu.openGroupExternal") : t("sidebar.menu.startGroup")}
                 </button>
+                {projectScopedTerminalViewEnabled && (
+                  <button
+                    className="context-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      handleSelectGroupScope(contextMenu.groupId);
+                      setContextMenu(null);
+                    }}
+                  >
+                    <TerminalSquare size={14} strokeWidth={1.5} />
+                    {t("sidebar.menu.focusGroupTerminals")}
+                  </button>
+                )}
                 <div className="context-menu-separator" role="separator" />
                 <button
                   className="context-menu-item"

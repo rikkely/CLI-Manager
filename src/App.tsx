@@ -43,8 +43,10 @@ import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contras
 import { translateCurrent, useI18n } from "./lib/i18n";
 import { getOsPlatform } from "./lib/shell";
 import { normalizeFontFamilyStack } from "./lib/systemFonts";
+import { ALL_TERMINALS_SCOPE } from "./lib/terminalScope";
 import { getTerminalTheme, isLightTerminalTheme } from "./lib/terminalThemes";
 import { resolveProjectForSession } from "./lib/terminalProject";
+import type { TerminalScope } from "./lib/types";
 import "./App.css";
 
 const appStartAt =
@@ -448,7 +450,7 @@ function App() {
   const [exitPhase, setExitPhase] = useState<ExitPhase | null>(null);
   const [exitNotice, setExitNotice] = useState<string | null>(null);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
-  const [terminalScopeProjectId, setTerminalScopeProjectId] = useState<string | null>(null);
+  const [terminalScope, setTerminalScope] = useState<TerminalScope>(ALL_TERMINALS_SCOPE);
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
   const [initError, setInitError] = useState<string | null>(null);
   const terminalFullscreenMaximizedRef = useRef(false);
@@ -479,7 +481,7 @@ function App() {
 
   useEffect(() => {
     if (!projectScopedTerminalViewEnabled) {
-      setTerminalScopeProjectId(null);
+      setTerminalScope(ALL_TERMINALS_SCOPE);
     }
   }, [projectScopedTerminalViewEnabled]);
 
@@ -617,7 +619,13 @@ function App() {
         projectById
       )?.id ?? null;
       flushSync(() => {
-        setTerminalScopeProjectId(targetProjectId);
+        setTerminalScope(
+          targetProjectId && targetSession.worktreeId
+            ? { kind: "worktree", projectId: targetProjectId, worktreeId: targetSession.worktreeId }
+            : targetProjectId
+              ? { kind: "project", projectId: targetProjectId }
+              : ALL_TERMINALS_SCOPE
+        );
       });
     }
     terminalStore.setActive(tabId);
@@ -1118,8 +1126,8 @@ function App() {
             onOpenStats={handleOpenStats}
             compactMode
             projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
-            terminalScopeProjectId={terminalScopeProjectId}
-            onTerminalScopeChange={setTerminalScopeProjectId}
+            terminalScope={terminalScope}
+            onTerminalScopeChange={setTerminalScope}
           />
         </div>
       ) : (
@@ -1129,8 +1137,8 @@ function App() {
               onOpenSettings={handleOpenSettings}
               onOpenStats={handleOpenStats}
               projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
-              terminalScopeProjectId={terminalScopeProjectId}
-              onTerminalScopeChange={setTerminalScopeProjectId}
+              terminalScope={terminalScope}
+              onTerminalScopeChange={setTerminalScope}
             />
           )}
           <main id="main-content" className="ui-main-shell flex min-w-0 flex-1 flex-col" tabIndex={-1}>
@@ -1138,7 +1146,7 @@ function App() {
               fullscreen={terminalFullscreen}
               onToggleFullscreen={handleToggleTerminalFullscreen}
               projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
-              projectScopeProjectId={terminalScopeProjectId}
+              terminalScope={terminalScope}
             />
           </main>
         </div>
