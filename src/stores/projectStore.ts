@@ -12,6 +12,7 @@ import type {
 } from "../lib/types";
 
 let inflightFetchAll: Promise<void> | null = null;
+let providerBadgeRefreshSeq = 0;
 
 interface CcSwitchProjectBadge {
   path: string;
@@ -252,6 +253,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   refreshProviderBadges: async () => {
+    const refreshSeq = ++providerBadgeRefreshSeq;
     const projects = get().projects;
     const worktrees = get().worktrees;
     const claudeProjects = projects.filter((p) => getProviderSwitchAppType(p) === "claude");
@@ -319,7 +321,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
     }
 
-    set({ providerBadges });
+    if (refreshSeq === providerBadgeRefreshSeq) {
+      set({ providerBadges });
+    }
   },
 
   cleanupUnusedCodexProfiles: async () => {

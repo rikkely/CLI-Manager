@@ -200,6 +200,7 @@ export function Sidebar({
   const {
     tree,
     projects,
+    worktrees,
     groups,
     projectStoreLoaded,
     projectHealth,
@@ -208,6 +209,7 @@ export function Sidebar({
     useShallow((s) => ({
       tree: s.tree,
       projects: s.projects,
+      worktrees: s.worktrees,
       groups: s.groups,
       projectStoreLoaded: s.loaded,
       projectHealth: s.projectHealth,
@@ -1413,6 +1415,14 @@ export function Sidebar({
       },
     };
   })();
+
+  const providerSwitchProject = providerSwitchTarget
+    ? projects.find((project) => project.id === providerSwitchTarget.project.id) ?? providerSwitchTarget.project
+    : null;
+  const providerSwitchWorktree = providerSwitchTarget?.kind === "worktree"
+    ? worktrees.find((worktree) => worktree.id === providerSwitchTarget.worktree.id) ?? providerSwitchTarget.worktree
+    : undefined;
+
   return (
     <aside
       className={`ui-sidebar-shell relative flex select-none flex-col overflow-hidden ${
@@ -1981,10 +1991,10 @@ export function Sidebar({
         />
       )}
       {editingProject && <ConfigModal project={editingProject} onClose={() => setEditingProject(null)} />}
-      {providerSwitchTarget && (
+      {providerSwitchTarget && providerSwitchProject && (
         <ProviderSwitchModal
-          project={providerSwitchTarget.project}
-          worktree={providerSwitchTarget.kind === "worktree" ? providerSwitchTarget.worktree : undefined}
+          project={providerSwitchProject}
+          worktree={providerSwitchWorktree}
           onClose={() => setProviderSwitchTarget(null)}
         />
       )}

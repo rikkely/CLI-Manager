@@ -506,12 +506,13 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
           providerId: provider.id,
           dbPath: ccSwitchDbPath ?? undefined,
         });
-        await updateTargetProviderOverrides(withClaudeProviderOverride(targetProviderOverrides, {
+        const nextProviderOverrides = withClaudeProviderOverride(targetProviderOverrides, {
           providerId: result.providerId,
           providerName: result.providerName,
           settingsPath: result.settingsPath,
           vendorHint: providerVendorHint(provider),
-        }));
+        });
+        await updateTargetProviderOverrides(nextProviderOverrides);
         setProbe({
           matchedProviderId: result.providerId,
           hasSettingsFile: true,
@@ -528,12 +529,13 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
           dbPath: ccSwitchDbPath ?? undefined,
           codexConfigDir: codexConfigDir ?? undefined,
         });
-        await updateTargetProviderOverrides(withCodexProviderOverride(targetProviderOverrides, {
+        const nextProviderOverrides = withCodexProviderOverride(targetProviderOverrides, {
           providerId: result.providerId,
           providerName: result.providerName,
           profileName: result.profileName,
           vendorHint: providerVendorHint(provider),
-        }));
+        });
+        await updateTargetProviderOverrides(nextProviderOverrides);
         setProbe({
           matchedProviderId: result.providerId,
           hasSettingsFile: true,
@@ -547,7 +549,7 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
         });
       }
       if (shouldReload) await load();
-      void useProjectStore.getState().refreshProviderBadges();
+      await useProjectStore.getState().refreshProviderBadges();
     } catch (err) {
       toast.error("切换供应商失败", { description: formatError(err) });
     } finally {
@@ -561,6 +563,9 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
     let shouldReload = true;
     try {
       if (appType === "claude") {
+        await invoke("ccswitch_reset_project_provider", {
+          projectPath: targetProject.path,
+        });
         await updateTargetProviderOverrides(withClaudeProviderOverride(targetProviderOverrides, null));
         setProbe({
           matchedProviderId: null,
@@ -582,7 +587,7 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
           : "已移除项目级供应商配置，新开终端后生效。",
       });
       if (shouldReload) await load();
-      void useProjectStore.getState().refreshProviderBadges();
+      await useProjectStore.getState().refreshProviderBadges();
     } catch (err) {
       toast.error("恢复全局失败", { description: formatError(err) });
     } finally {
