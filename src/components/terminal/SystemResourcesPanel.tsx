@@ -1,6 +1,7 @@
 import { type CSSProperties, type ReactNode, useCallback, useId, useMemo, useState } from "react";
 import {
   Activity,
+  AppWindow,
   ChevronDown,
   Copy,
   Cpu,
@@ -39,9 +40,11 @@ interface SystemResourcesPanelProps {
 }
 
 const PANEL_ACCENT = TERM_PANEL.green;
-const PANEL_ACCENT_MUTED = `color-mix(in srgb, ${PANEL_ACCENT} 48%, ${TERM_PANEL.dim})`;
 const PANEL_SOFT_FG = `color-mix(in srgb, ${TERM_PANEL.fg} 74%, ${TERM_PANEL.dim})`;
-const DOWNLOAD_MUTED = `color-mix(in srgb, ${TERM_PANEL.cyan} 52%, ${TERM_PANEL.dim})`;
+const NETWORK_UPLOAD_COLOR = `color-mix(in srgb, ${TERM_PANEL.green} 84%, ${TERM_PANEL.fg})`;
+const NETWORK_DOWNLOAD_COLOR = `color-mix(in srgb, ${TERM_PANEL.blue} 82%, ${TERM_PANEL.cyan})`;
+const DISK_READ_COLOR = `color-mix(in srgb, ${TERM_PANEL.green} 84%, ${TERM_PANEL.fg})`;
+const DISK_WRITE_COLOR = `color-mix(in srgb, ${TERM_PANEL.blue} 82%, ${TERM_PANEL.cyan})`;
 const MODULE_TITLE_COLOR = TERM_PANEL.green;
 
 const PANEL_SCROLLBAR_STYLE = {
@@ -78,6 +81,18 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 }
 
+function formatDiskBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0.0 B";
+  const units = ["B", "K", "M", "G", "T"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
 function formatRate(bytesPerSecond: number): string {
   return `${formatBytes(bytesPerSecond)}/s`;
 }
@@ -102,20 +117,6 @@ function usageTextColor(value: number): string {
   if (value >= 86) return TERM_PANEL.red;
   if (value >= 62) return TERM_PANEL.yellow;
   return TERM_PANEL.fg;
-}
-
-function rateColor(bytesPerSecond: number): string {
-  if (bytesPerSecond >= 100 * 1024 * 1024) return TERM_PANEL.red;
-  if (bytesPerSecond >= 10 * 1024 * 1024) return TERM_PANEL.yellow;
-  if (bytesPerSecond > 0) return PANEL_ACCENT_MUTED;
-  return PANEL_SOFT_FG;
-}
-
-function coreLoadColor(value: number): string {
-  if (value >= 86) return TERM_PANEL.red;
-  if (value >= 62) return TERM_PANEL.yellow;
-  if (value >= 35) return TERM_PANEL.green;
-  return PANEL_SOFT_FG;
 }
 
 function cpuSegmentColor(segmentRatio: number): string {
@@ -251,9 +252,9 @@ function TrendChart({
   height = 58,
   max,
   split = false,
-  areaOpacity = 0.72,
-  fadeStartOpacity = 0.42,
-  fadeEndOpacity = 0.02,
+  areaOpacity = 0.94,
+  fadeStartOpacity = 0.66,
+  fadeEndOpacity = 0.06,
 }: {
   series: TrendSeries[];
   height?: number;
@@ -270,6 +271,19 @@ function TrendChart({
     ...line,
     points: line.points.length >= 2 ? line.points : [line.points[0] ?? 0, line.points[0] ?? 0],
   }));
+  const guideLines = split
+    ? [
+        { y: 8, dashed: false, strong: false },
+        { y: 25, dashed: true, strong: false },
+        { y: 50, dashed: false, strong: true },
+        { y: 75, dashed: true, strong: false },
+        { y: 92, dashed: false, strong: false },
+      ]
+    : [
+        { y: 25, dashed: false, strong: false },
+        { y: 50, dashed: false, strong: false },
+        { y: 75, dashed: false, strong: false },
+      ];
 
   const toCoords = (points: number[], mode: TrendSeries["mode"] = "full") => points.map((point, index) => {
     const x = points.length === 1 ? 0 : (index / (points.length - 1)) * 100;
@@ -278,9 +292,26 @@ function TrendChart({
     return [x, y] as const;
   });
 
-  const linePath = (coords: ReadonlyArray<readonly [number, number]>) => coords
-    .map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
-    .join(" ");
+  const linePath = (coords: ReadonlyArray<readonly [number, number]>) => {
+    if (coords.length < 2) {
+      const [x = 0, y = 50] = coords[0] ?? [];
+      return `M${x.toFixed(2)},${y.toFixed(2)}`;
+    }
+
+    const parts = [`M${coords[0][0].toFixed(2)},${coords[0][1].toFixed(2)}`];
+    for (let index = 0; index < coords.length - 1; index += 1) {
+      const [p0x, p0y] = coords[index - 1] ?? coords[index];
+      const [p1x, p1y] = coords[index];
+      const [p2x, p2y] = coords[index + 1];
+      const [p3x, p3y] = coords[index + 2] ?? coords[index + 1];
+      const c1x = p1x + (p2x - p0x) / 6;
+      const c1y = p1y + (p2y - p0y) / 6;
+      const c2x = p2x - (p3x - p1x) / 6;
+      const c2y = p2y - (p3y - p1y) / 6;
+      parts.push(`C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2x.toFixed(2)},${p2y.toFixed(2)}`);
+    }
+    return parts.join(" ");
+  };
 
   const areaPath = (coords: ReadonlyArray<readonly [number, number]>, mode: TrendSeries["mode"] = "full") => {
     const baseY = mode === "up" || mode === "down" ? 50 : 96;
@@ -295,24 +326,25 @@ function TrendChart({
         <defs>
           <linearGradient id={`${gradientId}-fade`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="white" stopOpacity={fadeStartOpacity} />
+            <stop offset="52%" stopColor="white" stopOpacity={Math.max(fadeEndOpacity, fadeStartOpacity * 0.42)} />
             <stop offset="100%" stopColor="white" stopOpacity={fadeEndOpacity} />
           </linearGradient>
           <mask id={`${gradientId}-mask`}>
             <rect width="100" height="100" fill={`url(#${gradientId}-fade)`} />
           </mask>
         </defs>
-        {[25, 50, 75].map((y) => (
+        {guideLines.map((guide) => (
           <line
-            key={y}
+            key={guide.y}
             x1="0"
-            y1={y}
+            y1={guide.y}
             x2="100"
-            y2={y}
-            stroke={y === 50 && split ? TERM_PANEL.dim : TERM_PANEL.border}
-            strokeWidth={y === 50 && split ? "1" : "0.7"}
+            y2={guide.y}
+            stroke={guide.strong ? TERM_PANEL.dim : TERM_PANEL.border}
+            strokeWidth={guide.strong ? "1" : "0.7"}
             vectorEffect="non-scaling-stroke"
-            opacity={y === 50 && split ? "0.8" : "0.55"}
-            strokeDasharray={y === 50 && split ? "2 3" : undefined}
+            opacity={guide.strong ? "0.8" : "0.55"}
+            strokeDasharray={guide.dashed ? "2 4" : undefined}
           />
         ))}
         {safeSeries.map((line, index) => {
@@ -380,7 +412,7 @@ function CpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
       icon={<Cpu size={15} />}
       title={t("systemResources.cpu")}
       accent={MODULE_TITLE_COLOR}
-      right={<span className="text-[22px] font-bold leading-none tabular-nums" style={{ color: usageTextColor(snapshot.cpu.usagePercent) }}>{formatPercent(snapshot.cpu.usagePercent)}</span>}
+      right={<span className="text-[22px] font-bold leading-none tabular-nums" style={{ color: TERM_PANEL.dim }}>{formatPercent(snapshot.cpu.usagePercent)}</span>}
     >
       <TrendChart
         series={[{ points, color: PANEL_ACCENT }]}
@@ -439,7 +471,7 @@ function CpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
                     );
                   })}
                 </span>
-                <span className="text-right text-[10px] tabular-nums" style={{ color: coreLoadColor(core.usagePercent) }}>
+                <span className="text-right text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
                   {formatPercent(core.usagePercent)}
                 </span>
               </div>
@@ -473,10 +505,10 @@ function MemoryCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
       accent={MODULE_TITLE_COLOR}
       right={<span className="text-[12px] tabular-nums" style={{ color: TERM_PANEL.dim }}>{formatBytes(used)} / {formatBytes(total)}</span>}
     >
-      <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-8">
+      <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-6">
         <Donut
           size={86}
-          thickness={8}
+          thickness={10}
           segments={memoryRows.map((row) => ({ value: row.value, color: row.color }))}
         >
           <div className="text-center leading-tight">
@@ -513,9 +545,15 @@ function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; 
       title={t("systemResources.network")}
       accent={MODULE_TITLE_COLOR}
       right={(
-        <span className="flex items-center gap-2 text-[10px]">
-          <span className="inline-flex items-center gap-1" style={{ color: PANEL_ACCENT_MUTED }}>● {t("systemResources.upload")}</span>
-          <span className="inline-flex items-center gap-1" style={{ color: DOWNLOAD_MUTED }}>● {t("systemResources.download")}</span>
+        <span className="flex items-center gap-3 text-[10px]">
+          <span className="inline-flex items-center gap-1.5 leading-none" style={{ color: NETWORK_UPLOAD_COLOR }}>
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: NETWORK_UPLOAD_COLOR }} />
+            <span>{t("systemResources.upload")}</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 leading-none" style={{ color: NETWORK_DOWNLOAD_COLOR }}>
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: NETWORK_DOWNLOAD_COLOR }} />
+            <span>{t("systemResources.download")}</span>
+          </span>
         </span>
       )}
     >
@@ -524,9 +562,12 @@ function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; 
           height={78}
           max={maxRate}
           split
+          areaOpacity={0.98}
+          fadeStartOpacity={0.72}
+          fadeEndOpacity={0.08}
           series={[
-            { points: uploadPoints, color: PANEL_ACCENT_MUTED, mode: "up" },
-            { points: downloadPoints, color: DOWNLOAD_MUTED, mode: "down" },
+            { points: uploadPoints, color: NETWORK_UPLOAD_COLOR, mode: "up" },
+            { points: downloadPoints, color: NETWORK_DOWNLOAD_COLOR, mode: "down" },
           ]}
         />
         <div
@@ -538,7 +579,7 @@ function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; 
             title={`${t("systemResources.upload")} ${formatRate(snapshot.network.uploadBytesPerSec)} · ${todayLabel} ${formatBytes(snapshot.network.todayUploadedBytes)}`}
             aria-label={`${t("systemResources.upload")} ${formatRate(snapshot.network.uploadBytesPerSec)} ${todayLabel} ${formatBytes(snapshot.network.todayUploadedBytes)}`}
           >
-            <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold" style={{ color: PANEL_ACCENT_MUTED }}>
+            <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold" style={{ color: NETWORK_UPLOAD_COLOR }}>
               <Upload size={12} className="shrink-0" />
               <span className="truncate tabular-nums">{formatRate(snapshot.network.uploadBytesPerSec)}</span>
             </div>
@@ -551,7 +592,7 @@ function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; 
             title={`${t("systemResources.download")} ${formatRate(snapshot.network.downloadBytesPerSec)} · ${todayLabel} ${formatBytes(snapshot.network.todayDownloadedBytes)}`}
             aria-label={`${t("systemResources.download")} ${formatRate(snapshot.network.downloadBytesPerSec)} ${todayLabel} ${formatBytes(snapshot.network.todayDownloadedBytes)}`}
           >
-            <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold" style={{ color: DOWNLOAD_MUTED }}>
+            <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold" style={{ color: NETWORK_DOWNLOAD_COLOR }}>
               <Download size={12} className="shrink-0" />
               <span className="truncate tabular-nums">{formatRate(snapshot.network.downloadBytesPerSec)}</span>
             </div>
@@ -565,65 +606,90 @@ function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; 
   );
 }
 
-function DiskCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; history: SystemResourceSnapshot[] }) {
+function DiskCard({ snapshot }: { snapshot: SystemResourceSnapshot; history: SystemResourceSnapshot[] }) {
   const { t } = useI18n();
   const totals = getDiskTotals(snapshot);
   const ratio = clampRatio(totals.usedBytes / Math.max(1, totals.totalBytes));
   const usagePercent = ratio * 100;
-  const color = usageColor(usagePercent);
-  const readColor = rateColor(totals.readBytesPerSec);
-  const writeColor = rateColor(totals.writeBytesPerSec);
-  const diskHistory = history.length > 0 ? history.map(getDiskTotals) : [totals];
-  const readPoints = diskHistory.map((item) => item.readBytesPerSec);
-  const writePoints = diskHistory.map((item) => item.writeBytesPerSec);
-  const maxRate = Math.max(1, ...readPoints, ...writePoints);
+  const color = usagePercent >= 94 ? TERM_PANEL.red : usagePercent >= 86 ? TERM_PANEL.yellow : PANEL_ACCENT;
+  const percentColor = usagePercent >= 94 ? TERM_PANEL.red : usagePercent >= 86 ? TERM_PANEL.yellow : TERM_PANEL.fg;
+  const readColor = DISK_READ_COLOR;
+  const writeColor = DISK_WRITE_COLOR;
+  const fileSystemType = Array.from(
+    new Set(snapshot.disks.map((disk) => disk.fileSystem.trim()).filter(Boolean))
+  ).join(" / ") || t("systemResources.unavailable");
+  const usedBarBackground =
+    usagePercent >= 75
+      ? `linear-gradient(90deg, ${PANEL_ACCENT} 0%, ${PANEL_ACCENT} 82%, ${TERM_PANEL.yellow} 82%, ${TERM_PANEL.yellow} 100%)`
+      : color;
+  const diskRows = [
+    { label: t("systemResources.used"), value: formatDiskBytes(totals.usedBytes), color: PANEL_ACCENT },
+    { label: t("systemResources.available"), value: formatDiskBytes(totals.availableBytes), color: PANEL_SOFT_FG },
+    { label: t("systemResources.diskType"), value: fileSystemType, color: TERM_PANEL.yellow },
+  ];
 
   return (
     <ResourceCard
       icon={<HardDrive size={15} />}
       title={t("systemResources.disk")}
       accent={MODULE_TITLE_COLOR}
-      right={snapshot.disks.length > 0 ? <span className="text-[12px] tabular-nums" style={{ color: TERM_PANEL.dim }}>{formatBytes(totals.usedBytes)} / {formatBytes(totals.totalBytes)}</span> : null}
+      right={snapshot.disks.length > 0 ? <span className="text-[12px] tabular-nums" style={{ color: TERM_PANEL.dim }}>{formatDiskBytes(totals.usedBytes)} / {formatDiskBytes(totals.totalBytes)}</span> : null}
     >
       {snapshot.disks.length === 0 ? (
         <InlineEmpty text={t("systemResources.unavailable")} />
       ) : (
-        <div className="space-y-3">
-          <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex w-[86px] shrink-0 items-center justify-center">
             <Donut
-              size={70}
-              thickness={7}
+              size={86}
+              thickness={8}
               segments={[
                 { value: totals.usedBytes, color },
                 { value: totals.availableBytes, color: TERM_PANEL.track },
               ]}
             >
               <div className="text-center leading-tight">
-                <div className="text-[18px] font-bold tabular-nums" style={{ color: usageTextColor(usagePercent) }}>{formatPercent(usagePercent)}</div>
+                <div className="text-[19px] font-bold tabular-nums" style={{ color: percentColor }}>{formatPercent(usagePercent)}</div>
                 <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.used")}</div>
               </div>
             </Donut>
+          </div>
+
+          <div className="min-w-[104px] flex-1 space-y-2">
+            {diskRows.map((row) => (
+              <div key={row.label} className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-2 text-[11px]">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: row.color }} />
+                <span className="truncate" style={{ color: TERM_PANEL.dim }}>{row.label}</span>
+                <span className="max-w-[92px] truncate text-right font-semibold tabular-nums" style={{ color: TERM_PANEL.fg }}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="min-w-[132px] flex-[1.15] border-l pl-3" style={{ borderColor: TERM_PANEL.border }}>
+            <div className="mb-2 flex items-center justify-between gap-2 text-[11px]">
+              <span className="truncate font-semibold" style={{ color: TERM_PANEL.fg }}>{t("systemResources.total")}</span>
+              <span className="shrink-0 tabular-nums" style={{ color: TERM_PANEL.dim }}>{formatPercent(usagePercent)}</span>
+            </div>
+            <div className="mb-3 h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: TERM_PANEL.track }}>
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${usagePercent.toFixed(1)}%`,
+                  background: usedBarBackground,
+                }}
+              />
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg border p-2" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
                 <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.readPerSecond")}</div>
-                <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: readColor }}>{formatRate(totals.readBytesPerSec)}</div>
+                <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: readColor }}>{formatDiskBytes(totals.readBytesPerSec)}</div>
               </div>
               <div className="rounded-lg border p-2" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
                 <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.writePerSecond")}</div>
-                <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: writeColor }}>{formatRate(totals.writeBytesPerSec)}</div>
+                <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: writeColor }}>{formatDiskBytes(totals.writeBytesPerSec)}</div>
               </div>
             </div>
           </div>
-
-          <TrendChart
-            height={78}
-            max={maxRate}
-            split
-            series={[
-              { points: readPoints, color: readColor, mode: "up" },
-              { points: writePoints, color: writeColor, mode: "down" },
-            ]}
-          />
         </div>
       )}
     </ResourceCard>
@@ -728,23 +794,32 @@ function ProcessCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
         <InlineEmpty text={t("systemResources.noProcesses")} />
       ) : (
         <div className="overflow-hidden rounded-lg border" style={{ borderColor: TERM_PANEL.border }}>
-          <div className="grid grid-cols-[48px_48px_minmax(0,1fr)_48px] gap-2 border-b px-2 py-1.5 text-[10px] font-semibold" style={{ color: TERM_PANEL.dim, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
+          <div className="grid grid-cols-[42px_42px_minmax(0,1fr)_44px] gap-2 border-b px-2 py-1.5 text-[10px] font-semibold" style={{ color: TERM_PANEL.dim, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
             <span>CPU</span>
             <span>{t("systemResources.memoryShort")}</span>
-            <span>{t("systemResources.command")}</span>
+            <span>{t("systemResources.software")}</span>
             <span className="text-right">PID</span>
           </div>
           {rows.map((process) => {
             const command = process.command || process.name;
+            const displayName = process.displayName?.trim() || command;
+            const title = displayName === command ? displayName : `${displayName}\n${command}`;
             return (
               <div
                 key={`${process.pid}-${process.name}`}
-                className="grid grid-cols-[48px_48px_minmax(0,1fr)_48px] gap-2 border-b px-2 py-1.5 text-[11px] last:border-b-0"
+                className="grid grid-cols-[42px_42px_minmax(0,1fr)_44px] gap-2 border-b px-2 py-1.5 text-[11px] last:border-b-0"
                 style={{ borderColor: panelColorTint(TERM_PANEL.border, 78), backgroundColor: TERM_PANEL.card }}
               >
-                <span className="tabular-nums" style={{ color: usageTextColor(process.cpuUsagePercent) }}>{formatPercent(process.cpuUsagePercent)}</span>
+                <span className="tabular-nums" style={{ color: TERM_PANEL.fg }}>{formatPercent(process.cpuUsagePercent)}</span>
                 <span className="tabular-nums" style={{ color: TERM_PANEL.fg }}>{formatPercent(process.memoryUsagePercent)}</span>
-                <span className="truncate" title={command} style={{ color: TERM_PANEL.fg }}>{command}</span>
+                <span className="flex min-w-0 items-center gap-1.5" title={title} style={{ color: TERM_PANEL.fg }}>
+                  {process.iconDataUrl ? (
+                    <img src={process.iconDataUrl} alt="" width={16} height={16} className="shrink-0 rounded-[2px]" draggable={false} />
+                  ) : (
+                    <AppWindow size={14} className="shrink-0" aria-hidden="true" style={{ color: TERM_PANEL.dim }} />
+                  )}
+                  <span className="truncate">{displayName}</span>
+                </span>
                 <span className="truncate text-right tabular-nums" title={process.pid} style={{ color: TERM_PANEL.dim }}>{process.pid}</span>
               </div>
             );
@@ -831,8 +906,8 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false }:
       }}
     >
       <div className="flex items-center justify-between px-1 py-1">
-        <span className="flex min-w-0 items-center gap-2 text-[15px] font-bold tracking-wide" style={{ color: TERM_PANEL.fg }}>
-          <span className="flex h-6 w-6 items-center justify-center rounded-md border" style={{ color: PANEL_SOFT_FG, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
+        <span className="flex min-w-0 items-center gap-2 text-[15px] font-bold tracking-wide" style={{ color: MODULE_TITLE_COLOR }}>
+          <span className="flex h-6 w-6 items-center justify-center rounded-md border" style={{ color: MODULE_TITLE_COLOR, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
             <Server size={15} />
           </span>
           <span className="truncate">{t("systemResources.title")}</span>

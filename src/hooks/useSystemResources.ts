@@ -47,6 +47,8 @@ export interface SystemResourceSnapshot {
     pid: string;
     name: string;
     command: string;
+    displayName: string | null;
+    iconDataUrl: string | null;
     cpuUsagePercent: number;
     memoryBytes: number;
     memoryUsagePercent: number;

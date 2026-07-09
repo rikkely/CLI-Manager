@@ -1,15 +1,37 @@
+#[cfg(target_os = "windows")]
+use base64::{engine::general_purpose, Engine as _};
 use chrono::{Local, NaiveDate};
 use local_ip_address::local_ip;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "windows")]
+use std::{ffi::c_void, mem::size_of, os::windows::ffi::OsStrExt, ptr, slice};
 use sysinfo::{
     CpuRefreshKind, Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind,
     System, UpdateKind,
 };
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Graphics::Gdi::{
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_SMALLICON};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL, HICON};
 
 const TOP_PROCESS_LIMIT: usize = 5;
 const EXPENSIVE_REFRESH_INTERVAL: Duration = Duration::from_secs(8);
+const PROCESS_PRESENTATION_CACHE_LIMIT: usize = 96;
+#[cfg(target_os = "windows")]
+const PROCESS_ICON_SIZE: i32 = 16;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,9 +170,17 @@ pub struct ProcessSnapshot {
     pid: String,
     name: String,
     command: String,
+    display_name: Option<String>,
+    icon_data_url: Option<String>,
     cpu_usage_percent: f32,
     memory_bytes: u64,
     memory_usage_percent: f32,
+}
+
+#[derive(Clone, Default)]
+struct ProcessPresentation {
+    display_name: Option<String>,
+    icon_data_url: Option<String>,
 }
 
 struct ResourceCollector {
@@ -165,6 +195,7 @@ struct ResourceCollector {
     cached_disks: Vec<DiskSnapshot>,
     cached_gpu: Option<GpuSnapshot>,
     cached_top_processes: Vec<ProcessSnapshot>,
+    process_presentation_cache: HashMap<String, ProcessPresentation>,
     last_system_refresh: Option<Instant>,
     last_network_refresh: Option<Instant>,
     last_disk_refresh: Option<Instant>,
@@ -188,6 +219,7 @@ impl ResourceCollector {
             cached_disks: Vec::new(),
             cached_gpu: None,
             cached_top_processes: Vec::new(),
+            process_presentation_cache: HashMap::new(),
             last_system_refresh: None,
             last_network_refresh: None,
             last_disk_refresh: None,
@@ -225,10 +257,15 @@ impl ResourceCollector {
                     false,
                     ProcessRefreshKind::nothing()
                         .with_cmd(UpdateKind::OnlyIfNotSet)
+                        .with_exe(UpdateKind::OnlyIfNotSet)
                         .without_tasks(),
                 );
             }
-            self.cached_top_processes = collect_top_processes(&self.system, &top_pids);
+            self.cached_top_processes = collect_top_processes(
+                &self.system,
+                &top_pids,
+                &mut self.process_presentation_cache,
+            );
             self.last_process_refresh = Some(now);
         }
         if options.disk && self.should_refresh_disks(now) {
@@ -470,7 +507,11 @@ fn collect_top_process_pids(system: &System) -> Vec<Pid> {
         .collect()
 }
 
-fn collect_top_processes(system: &System, top_pids: &[Pid]) -> Vec<ProcessSnapshot> {
+fn collect_top_processes(
+    system: &System,
+    top_pids: &[Pid],
+    presentation_cache: &mut HashMap<String, ProcessPresentation>,
+) -> Vec<ProcessSnapshot> {
     let total_memory = system.total_memory().max(1);
 
     top_pids
@@ -478,16 +519,20 @@ fn collect_top_processes(system: &System, top_pids: &[Pid]) -> Vec<ProcessSnapsh
         .filter_map(|pid| system.process(*pid).map(|process| (*pid, process)))
         .map(|(pid, process)| {
             let memory_bytes = process.memory();
+            let name = process.name().to_string_lossy().to_string();
             let command = process
                 .cmd()
                 .iter()
                 .map(|part| part.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join(" ");
+            let presentation = process_presentation(process.exe(), &name, presentation_cache);
             ProcessSnapshot {
                 pid: pid.to_string(),
-                name: process.name().to_string_lossy().to_string(),
+                name,
                 command,
+                display_name: presentation.display_name,
+                icon_data_url: presentation.icon_data_url,
                 cpu_usage_percent: process.cpu_usage().max(0.0),
                 memory_bytes,
                 memory_usage_percent: clamp_percent(
@@ -495,6 +540,282 @@ fn collect_top_processes(system: &System, top_pids: &[Pid]) -> Vec<ProcessSnapsh
                 ),
             }
         })
+        .collect()
+}
+
+fn process_presentation(
+    exe_path: Option<&Path>,
+    process_name: &str,
+    cache: &mut HashMap<String, ProcessPresentation>,
+) -> ProcessPresentation {
+    let cache_key = exe_path
+        .map(|path| path.to_string_lossy().to_string())
+        .or_else(|| normalize_display_text(process_name).map(|name| format!("name:{name}")));
+
+    if let Some(key) = cache_key.as_ref() {
+        if let Some(cached) = cache.get(key) {
+            return cached.clone();
+        }
+    }
+
+    let presentation = ProcessPresentation {
+        display_name: process_display_name(exe_path),
+        icon_data_url: process_icon_data_url(exe_path),
+    };
+
+    if let Some(key) = cache_key {
+        if cache.len() >= PROCESS_PRESENTATION_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, presentation.clone());
+    }
+
+    presentation
+}
+
+fn process_display_name(exe_path: Option<&Path>) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    if let Some(path) = exe_path {
+        if let Some(display_name) = windows_file_display_name(path) {
+            return Some(display_name);
+        }
+    }
+
+    exe_path
+        .and_then(|path| path.file_stem())
+        .and_then(|stem| normalize_display_text(&stem.to_string_lossy()))
+}
+
+#[cfg(target_os = "windows")]
+fn process_icon_data_url(exe_path: Option<&Path>) -> Option<String> {
+    let path = exe_path?;
+    windows_file_icon_bmp(path).map(|bytes| {
+        format!(
+            "data:image/bmp;base64,{}",
+            general_purpose::STANDARD.encode(bytes)
+        )
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn process_icon_data_url(_exe_path: Option<&Path>) -> Option<String> {
+    None
+}
+
+fn normalize_display_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct LangAndCodePage {
+    language: u16,
+    code_page: u16,
+}
+
+#[cfg(target_os = "windows")]
+fn windows_file_display_name(path: &Path) -> Option<String> {
+    let wide_path = path_wide_null(path);
+    let mut handle = 0_u32;
+    let size = unsafe { GetFileVersionInfoSizeW(wide_path.as_ptr(), &mut handle) };
+    if size == 0 {
+        return None;
+    }
+
+    let mut data = vec![0_u8; size as usize];
+    if unsafe {
+        GetFileVersionInfoW(
+            wide_path.as_ptr(),
+            0,
+            size,
+            data.as_mut_ptr() as *mut c_void,
+        )
+    } == 0
+    {
+        return None;
+    }
+
+    let mut pairs = windows_version_translations(&data);
+    pairs.extend([(0x0409, 0x04b0), (0x0409, 0x04e4)]);
+    for (language, code_page) in pairs {
+        for field in ["FileDescription", "ProductName"] {
+            let key = format!("\\StringFileInfo\\{language:04x}{code_page:04x}\\{field}");
+            if let Some(value) = windows_version_string(&data, &key) {
+                return Some(value);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn windows_version_translations(data: &[u8]) -> Vec<(u16, u16)> {
+    let mut value_ptr: *mut c_void = ptr::null_mut();
+    let mut len = 0_u32;
+    let subblock = wide_null("\\VarFileInfo\\Translation");
+    if unsafe {
+        VerQueryValueW(
+            data.as_ptr() as *const c_void,
+            subblock.as_ptr(),
+            &mut value_ptr,
+            &mut len,
+        )
+    } == 0
+        || value_ptr.is_null()
+    {
+        return Vec::new();
+    }
+
+    let count = (len as usize) / size_of::<LangAndCodePage>();
+    if count == 0 {
+        return Vec::new();
+    }
+
+    unsafe { slice::from_raw_parts(value_ptr as *const LangAndCodePage, count) }
+        .iter()
+        .map(|pair| (pair.language, pair.code_page))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_version_string(data: &[u8], key: &str) -> Option<String> {
+    let mut value_ptr: *mut c_void = ptr::null_mut();
+    let mut len = 0_u32;
+    let subblock = wide_null(key);
+    if unsafe {
+        VerQueryValueW(
+            data.as_ptr() as *const c_void,
+            subblock.as_ptr(),
+            &mut value_ptr,
+            &mut len,
+        )
+    } == 0
+        || value_ptr.is_null()
+        || len == 0
+    {
+        return None;
+    }
+
+    let raw = unsafe { slice::from_raw_parts(value_ptr as *const u16, len as usize) };
+    let end = raw
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(raw.len());
+    normalize_display_text(&String::from_utf16_lossy(&raw[..end]))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_file_icon_bmp(path: &Path) -> Option<Vec<u8>> {
+    let wide_path = path_wide_null(path);
+    let mut info = SHFILEINFOW::default();
+    let result = unsafe {
+        SHGetFileInfoW(
+            wide_path.as_ptr(),
+            0,
+            &mut info,
+            size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_SMALLICON,
+        )
+    };
+    if result == 0 || info.hIcon.is_null() {
+        return None;
+    }
+
+    let bytes = unsafe { icon_to_bmp_bytes(info.hIcon, PROCESS_ICON_SIZE) };
+    unsafe {
+        DestroyIcon(info.hIcon);
+    }
+    bytes
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn icon_to_bmp_bytes(icon: HICON, size: i32) -> Option<Vec<u8>> {
+    let hdc = CreateCompatibleDC(ptr::null_mut());
+    if hdc.is_null() {
+        return None;
+    }
+
+    let mut bitmap_info = BITMAPINFO::default();
+    bitmap_info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+    bitmap_info.bmiHeader.biWidth = size;
+    bitmap_info.bmiHeader.biHeight = -size;
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+
+    let mut bits: *mut c_void = ptr::null_mut();
+    let bitmap = CreateDIBSection(
+        hdc,
+        &bitmap_info,
+        DIB_RGB_COLORS,
+        &mut bits,
+        ptr::null_mut(),
+        0,
+    );
+    if bitmap.is_null() || bits.is_null() {
+        DeleteDC(hdc);
+        return None;
+    }
+
+    let previous = SelectObject(hdc, bitmap as HGDIOBJ);
+    let drawn = DrawIconEx(hdc, 0, 0, icon, size, size, 0, ptr::null_mut(), DI_NORMAL) != 0;
+
+    let bytes = if drawn {
+        let pixel_len = (size as usize) * (size as usize) * 4;
+        let pixels = slice::from_raw_parts(bits as *const u8, pixel_len).to_vec();
+        Some(build_bmp_data(size, &pixels))
+    } else {
+        None
+    };
+
+    if !previous.is_null() {
+        SelectObject(hdc, previous);
+    }
+    DeleteObject(bitmap as HGDIOBJ);
+    DeleteDC(hdc);
+
+    bytes
+}
+
+#[cfg(target_os = "windows")]
+fn build_bmp_data(size: i32, pixels: &[u8]) -> Vec<u8> {
+    let header_size = 14_u32 + size_of::<BITMAPINFOHEADER>() as u32;
+    let file_size = header_size + pixels.len() as u32;
+    let mut out = Vec::with_capacity(file_size as usize);
+
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&file_size.to_le_bytes());
+    out.extend_from_slice(&0_u16.to_le_bytes());
+    out.extend_from_slice(&0_u16.to_le_bytes());
+    out.extend_from_slice(&header_size.to_le_bytes());
+    out.extend_from_slice(&(size_of::<BITMAPINFOHEADER>() as u32).to_le_bytes());
+    out.extend_from_slice(&size.to_le_bytes());
+    out.extend_from_slice(&(-size).to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&32_u16.to_le_bytes());
+    out.extend_from_slice(&BI_RGB.to_le_bytes());
+    out.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0_i32.to_le_bytes());
+    out.extend_from_slice(&0_i32.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(pixels);
+
+    out
+}
+
+#[cfg(target_os = "windows")]
+fn path_wide_null(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
         .collect()
 }
 
