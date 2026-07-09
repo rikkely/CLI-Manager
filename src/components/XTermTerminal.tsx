@@ -11,7 +11,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useShallow } from "zustand/shallow";
 import {
@@ -114,6 +113,7 @@ const IME_PROCESS_KEY_RECOVERY_WINDOW_MS = 400;
 const IME_COMPOSITION_END_SUPPRESS_WINDOW_MS = 80;
 const IME_CROSS_SOURCE_DUPLICATE_WINDOW_MS = 80;
 const NATIVE_TEXT_INPUT_DEDUP_WINDOW_MS = 16;
+const CJK_NATIVE_PUNCTUATION_PATTERN = /^[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]+$/u;
 
 type SpecialColorQueryId = 10 | 11;
 type TerminalInputSource = "onData" | "nativeTextInput";
@@ -336,6 +336,8 @@ const copyTextToClipboard = async (text: string) => {
   }
 };
 
+const readClipboardText = async () => navigator.clipboard.readText();
+
 const trimTerminalPasteBoundaryLineBreaks = (text: string) => (
   text.replace(/^(?:\r\n?|\n)+|(?:\r\n?|\n)+$/gu, "")
 );
@@ -381,13 +383,65 @@ const getTerminalCellWidth = (text: string) => {
   return width;
 };
 
+const getTextCursorLength = (text: string) => Array.from(text).length;
+
+const sliceTextByCursor = (text: string, start: number, end?: number) => (
+  Array.from(text).slice(start, end).join("")
+);
+
+const clampTextCursorIndex = (text: string, index: number) => (
+  Math.min(Math.max(0, index), getTextCursorLength(text))
+);
+
+const insertTextAtCursor = (text: string, cursorIndex: number, insertion: string) => {
+  const chars = Array.from(text);
+  const index = Math.min(Math.max(0, cursorIndex), chars.length);
+  chars.splice(index, 0, ...Array.from(insertion));
+  return chars.join("");
+};
+
+const removeTextBeforeCursor = (text: string, cursorIndex: number) => {
+  const chars = Array.from(text);
+  const index = Math.min(Math.max(0, cursorIndex), chars.length);
+  if (index <= 0) return { text, cursorIndex: index };
+  chars.splice(index - 1, 1);
+  return { text: chars.join(""), cursorIndex: index - 1 };
+};
+
+const removeTextAtCursor = (text: string, cursorIndex: number) => {
+  const chars = Array.from(text);
+  const index = Math.min(Math.max(0, cursorIndex), chars.length);
+  if (index >= chars.length) return { text, cursorIndex: index };
+  chars.splice(index, 1);
+  return { text: chars.join(""), cursorIndex: index };
+};
+
+const resolveCursorIndexFromCellOffset = (text: string, cellOffset: number) => {
+  const chars = Array.from(text);
+  if (cellOffset <= 0) return 0;
+  let consumedCells = 0;
+  for (let index = 0; index < chars.length; index += 1) {
+    const charWidth = Math.max(1, getTerminalCellWidth(chars[index]));
+    consumedCells += charWidth;
+    if (cellOffset < consumedCells) return index + 1;
+  }
+  return chars.length;
+};
+
+const repeatControlSequence = (sequence: string, count: number) => (
+  count > 0 ? sequence.repeat(count) : ""
+);
+
+const isLikelyMacPlatform = (os: OsPlatform) => (
+  os === "macos" || (os === "unknown" && navigator.platform.toLowerCase().includes("mac"))
+);
+
 const withVisibleSelectionTheme = (theme: ITheme): ITheme => {
   const isLight = isLightTerminalTheme(theme);
   return {
     ...theme,
     selectionBackground: isLight ? "rgba(37, 99, 235, 0.28)" : "rgba(56, 189, 248, 0.52)",
     selectionInactiveBackground: isLight ? "rgba(37, 99, 235, 0.18)" : "rgba(56, 189, 248, 0.34)",
-    selectionForeground: isLight ? "#0f172a" : "#f8fafc",
   };
 };
 
@@ -525,6 +579,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const webglDisposeTimerRef = useRef<number | null>(null);
   const inputBuffer = useRef("");
+  const inputCursorIndexRef = useRef(0);
   const fitRafRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
   const isActiveRef = useRef(isActive);
@@ -1732,10 +1787,89 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     };
     contextMenuTarget.addEventListener("contextmenu", onContextMenu);
 
+    const moveInputCursorToClick = (e: MouseEvent) => {
+      if (
+        e.defaultPrevented ||
+        e.button !== 0 ||
+        e.detail !== 1 ||
+        e.shiftKey ||
+        e.ctrlKey ||
+        e.altKey ||
+        e.metaKey ||
+        isComposingRef.current ||
+        terminal.hasSelection()
+      ) {
+        return;
+      }
+
+      const currentInput = inputBuffer.current;
+      if (!currentInput) return;
+
+      const terminalContainer = containerRef.current;
+      const screen = terminalContainer?.querySelector(".xterm-screen") as HTMLElement | null;
+      if (!terminalContainer || !screen) return;
+
+      const screenRect = screen.getBoundingClientRect();
+      if (
+        e.clientX < screenRect.left ||
+        e.clientX > screenRect.right ||
+        e.clientY < screenRect.top ||
+        e.clientY > screenRect.bottom
+      ) {
+        return;
+      }
+
+      const cell = getTerminalRenderedCellSize(terminal, terminalContainer, fontSize);
+      const clickColumn = Math.min(
+        Math.max(0, Math.floor((e.clientX - screenRect.left) / Math.max(1, cell.width))),
+        Math.max(0, terminal.cols)
+      );
+      const clickRow = Math.min(
+        Math.max(0, Math.floor((e.clientY - screenRect.top) / Math.max(1, cell.height))),
+        Math.max(0, terminal.rows - 1)
+      );
+
+      const buffer = terminal.buffer.active;
+      const currentCursorIndex = clampTextCursorIndex(currentInput, inputCursorIndexRef.current);
+      const cursorPrefixWidth = getTerminalCellWidth(sliceTextByCursor(currentInput, 0, currentCursorIndex));
+      const cursorCellIndex = ((buffer.baseY + buffer.cursorY) * terminal.cols) + buffer.cursorX;
+      const inputStartCellIndex = cursorCellIndex - cursorPrefixWidth;
+      const inputEndCellIndex = inputStartCellIndex + getTerminalCellWidth(currentInput);
+      const clickCellIndex = ((buffer.viewportY + clickRow) * terminal.cols) + clickColumn;
+      const inputStartRow = Math.floor(inputStartCellIndex / terminal.cols);
+      const inputEndRow = Math.floor(inputEndCellIndex / terminal.cols);
+      const clickRowAbsolute = buffer.viewportY + clickRow;
+      if (clickRowAbsolute < inputStartRow || clickRowAbsolute > inputEndRow) return;
+
+      const targetCellOffset = Math.min(
+        Math.max(0, clickCellIndex - inputStartCellIndex),
+        Math.max(0, inputEndCellIndex - inputStartCellIndex)
+      );
+      const targetCursorIndex = resolveCursorIndexFromCellOffset(currentInput, targetCellOffset);
+      const delta = targetCursorIndex - currentCursorIndex;
+      if (delta === 0) {
+        terminal.focus();
+        return;
+      }
+
+      const data = delta > 0
+        ? repeatControlSequence("\x1b[C", delta)
+        : repeatControlSequence("\x1b[D", -delta);
+      inputCursorIndexRef.current = targetCursorIndex;
+      selectedInputSnapshot = null;
+      clearSuggestionGhost();
+      cancelAiSuggestionRefresh();
+      markAttentionInputHandled();
+      invoke("pty_write", { sessionId, data }).catch((err) => reportPtyWriteError("click_cursor", err));
+      terminal.focus();
+    };
+    contextMenuTarget.addEventListener("click", moveInputCursorToClick);
+
     let selectedInputSnapshot: string | null = null;
 
     const rewriteCurrentInput = (nextInput: string, stage: string) => {
       inputBuffer.current = nextInput;
+      inputCursorIndexRef.current = getTextCursorLength(nextInput);
       terminal.clearSelection();
       selectedInputSnapshot = null;
       markAttentionInputHandled();
@@ -1761,9 +1895,78 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
 
       inputBuffer.current = "";
+      inputCursorIndexRef.current = 0;
       selectedInputSnapshot = null;
       terminal.clearSelection();
       return true;
+    };
+
+    const resolveVisibleInputSelection = () => {
+      const buffer = terminal.buffer.active;
+      const rowText = (row: number) => {
+        const line = buffer.getLine(buffer.viewportY + row);
+        return line ? line.translateToString(true) : null;
+      };
+      const rowIsHorizontalRule = (row: number) => {
+        const text = rowText(row);
+        if (text === null) return false;
+        const trimmed = text.trim();
+        return trimmed.length > 0 && /^[─━═╌╍┄┅┈┉╴╶]+$/u.test(trimmed);
+      };
+      const findPromptContentStartColumn = (line: IBufferLine) => {
+        const limit = Math.min(terminal.cols, line.length);
+        for (let x = 0; x < limit; x += 1) {
+          const cell = line.getCell(x);
+          const chars = cell?.getChars() ?? "";
+          if (!cell || !chars.trim() || TUI_BORDER_CHAR_PATTERN.test(chars)) continue;
+          if (!TUI_COMPOSER_PROMPT_PATTERN.test(chars)) return null;
+          let start = x + Math.max(1, cell.getWidth());
+          while (start < limit) {
+            const nextCell = line.getCell(start);
+            const nextChars = nextCell?.getChars() ?? "";
+            if (nextChars !== " ") break;
+            start += Math.max(1, nextCell?.getWidth() ?? 1);
+          }
+          return start;
+        }
+        return null;
+      };
+      const getContentEndColumn = (line: IBufferLine, minColumn: number) => {
+        const limit = Math.min(terminal.cols, line.length);
+        for (let x = limit - 1; x >= minColumn; x -= 1) {
+          const cell = line.getCell(x);
+          const chars = cell?.getChars() ?? "";
+          if (!cell || cell.getWidth() === 0 || !chars.trim() || TUI_BORDER_CHAR_PATTERN.test(chars)) continue;
+          return Math.min(terminal.cols, x + Math.max(1, cell.getWidth()));
+        }
+        return minColumn;
+      };
+
+      for (let row = terminal.rows - 1; row >= 0; row -= 1) {
+        const line = buffer.getLine(buffer.viewportY + row);
+        if (!line) continue;
+        const startColumn = findPromptContentStartColumn(line);
+        if (startColumn === null) continue;
+
+        let endRow = row;
+        let endColumn = getContentEndColumn(line, startColumn);
+        for (let nextRow = row + 1; nextRow < terminal.rows; nextRow += 1) {
+          const nextLine = buffer.getLine(buffer.viewportY + nextRow);
+          if (!nextLine || rowIsHorizontalRule(nextRow) || !nextLine.isWrapped) break;
+          const nextEndColumn = getContentEndColumn(nextLine, 0);
+          if (nextEndColumn <= 0) break;
+          endRow = nextRow;
+          endColumn = nextEndColumn;
+        }
+
+        const startCellIndex = ((buffer.viewportY + row) * terminal.cols) + startColumn;
+        const endCellIndex = ((buffer.viewportY + endRow) * terminal.cols) + endColumn;
+        const length = endCellIndex - startCellIndex;
+        if (length <= 0) return null;
+        return { startColumn, startRow: buffer.viewportY + row, length };
+      }
+
+      return null;
     };
 
     const selectCurrentInputText = () => {
@@ -1781,9 +1984,17 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         return true;
       }
 
+      const visibleSelection = resolveVisibleInputSelection();
+      if (visibleSelection) {
+        terminal.select(visibleSelection.startColumn, visibleSelection.startRow, visibleSelection.length);
+        terminal.focus();
+        return true;
+      }
+
       const buffer = terminal.buffer.active;
       const cursorCellIndex = ((buffer.baseY + buffer.cursorY) * terminal.cols) + buffer.cursorX;
-      const startCellIndex = Math.max(0, cursorCellIndex - inputCellWidth);
+      const cursorPrefixWidth = getTerminalCellWidth(sliceTextByCursor(currentInput, 0, inputCursorIndexRef.current));
+      const startCellIndex = Math.max(0, cursorCellIndex - cursorPrefixWidth);
       const startRow = Math.floor(startCellIndex / terminal.cols);
       const startColumn = startCellIndex % terminal.cols;
       terminal.select(startColumn, startRow, inputCellWidth);
@@ -1922,6 +2133,19 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         }).catch((err) => {
           logError("Failed to read clipboard text", { sessionId, err });
         });
+        return false;
+      }
+      if (
+        e.type === "keydown" &&
+        e.key.toLowerCase() === "c" &&
+        !e.shiftKey &&
+        !e.altKey &&
+        ((isMacSelectAll && e.metaKey && !e.ctrlKey) || (!isMacSelectAll && e.ctrlKey && !e.metaKey)) &&
+        terminal.hasSelection()
+      ) {
+        e.preventDefault();
+        void copySelection();
+        terminal.clearSelection();
         return false;
       }
       if (e.type !== "keydown" || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return true;
@@ -2275,18 +2499,39 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           useTerminalStore.getState().handleShellRuntimeEvent({ sessionId, event: "command_started", origin: "input" });
         }
         inputBuffer.current = "";
+        inputCursorIndexRef.current = 0;
         cancelAiSuggestionRefresh();
         clearSuggestionGhost();
       } else if (data === "\x7f" || data === "\b") {
-        inputBuffer.current = inputBuffer.current.slice(0, -1);
+        const next = removeTextBeforeCursor(inputBuffer.current, inputCursorIndexRef.current);
+        inputBuffer.current = next.text;
+        inputCursorIndexRef.current = next.cursorIndex;
         scheduleSuggestionRefresh();
       } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-        inputBuffer.current += data;
+        const cursorIndex = clampTextCursorIndex(inputBuffer.current, inputCursorIndexRef.current);
+        inputBuffer.current = insertTextAtCursor(inputBuffer.current, cursorIndex, data);
+        inputCursorIndexRef.current = cursorIndex + getTextCursorLength(data);
         scheduleSuggestionRefresh();
       } else if (data.length > 1) {
         const pastedText = data.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, "");
         if (!pastedText.startsWith("\x1b")) {
-          inputBuffer.current += pastedText.replace(/\r\n?/g, "\n");
+          const normalizedPaste = pastedText.replace(/\r\n?/g, "\n");
+          const cursorIndex = clampTextCursorIndex(inputBuffer.current, inputCursorIndexRef.current);
+          inputBuffer.current = insertTextAtCursor(inputBuffer.current, cursorIndex, normalizedPaste);
+          inputCursorIndexRef.current = cursorIndex + getTextCursorLength(normalizedPaste);
+          scheduleSuggestionRefresh();
+        } else if (data === "\x1b[D" || data === "\x1bOD") {
+          inputCursorIndexRef.current = clampTextCursorIndex(inputBuffer.current, inputCursorIndexRef.current - 1);
+          cancelAiSuggestionRefresh();
+          clearSuggestionGhost();
+        } else if (data === "\x1b[C" || data === "\x1bOC") {
+          inputCursorIndexRef.current = clampTextCursorIndex(inputBuffer.current, inputCursorIndexRef.current + 1);
+          cancelAiSuggestionRefresh();
+          clearSuggestionGhost();
+        } else if (data === "\x1b[3~") {
+          const next = removeTextAtCursor(inputBuffer.current, inputCursorIndexRef.current);
+          inputBuffer.current = next.text;
+          inputCursorIndexRef.current = next.cursorIndex;
           scheduleSuggestionRefresh();
         } else {
           cancelAiSuggestionRefresh();
@@ -2325,6 +2570,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
       markAttentionInputHandled();
       const replacingSelectedInput = consumeSelectedInputForReplacement(data);
+      if (!replacingSelectedInput) {
+        selectedInputSnapshot = null;
+      }
       const inputBufferBefore = inputBuffer.current;
       const manualDirectCodexOverride = resolveManualDirectCodexEnterData({
         data,
@@ -2737,8 +2985,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       scheduleCompositionAnchorFix();
     });
 
-    // Windows 中文 IME 的直出标点会经过 keyCode 229，但部分 Chromium/WebView2 版本不会让
-    // xterm 的 textarea diff 兜底稳定触发。这里仅延迟补交那一小段原生 text input，
+    // 中文 IME 的直出标点可能不会稳定进入 xterm 的 textarea diff：
+    // Windows 常见信号是 keyCode 229；macOS 中文输入法的全角标点（如 "（"）
+    // 可能只有 insertText。这里仅延迟补交这类小范围原生 text input，
     // 不阻断 xterm 自己的 composition / input 事件链，避免单字提交被吞或空格确认候选残留。
     const nowForImeInput = () => performance.now();
     const isHelperTextareaEvent = (event: Event) => Boolean(textarea) && event.target === textarea;
@@ -2748,6 +2997,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (isComposingRef.current || event.isComposing) return false;
       const now = nowForImeInput();
       if (lastCompositionEndAt >= 0 && now - lastCompositionEndAt <= IME_COMPOSITION_END_SUPPRESS_WINDOW_MS) return false;
+      if (isLikelyMacPlatform(osPlatformRef.current) && CJK_NATIVE_PUNCTUATION_PATTERN.test(event.data)) return true;
       const hasRecentImeProcessKey = lastImeProcessKeyAt >= 0 && now - lastImeProcessKeyAt <= IME_PROCESS_KEY_RECOVERY_WINDOW_MS;
       return hasRecentImeProcessKey;
     };
@@ -2882,6 +3132,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       fileDropCancelled = true;
       unlistenFileDrop?.();
       contextMenuTarget.removeEventListener("contextmenu", onContextMenu);
+      contextMenuTarget.removeEventListener("click", moveInputCursorToClick);
       terminalContainer.removeEventListener("keydown", onImeProcessKeyDown, nativeTextInputListenerOptions);
       terminalContainer.removeEventListener("beforeinput", onNativeTextBeforeInput, nativeTextInputListenerOptions);
       terminalContainer.removeEventListener("input", onNativeTextInput, nativeTextInputListenerOptions);
