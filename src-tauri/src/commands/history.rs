@@ -157,7 +157,7 @@ fn log_history_stats_oom_diagnostic(
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
-struct HistoryRoots {
+pub(crate) struct HistoryRoots {
     claude_config_dir: Option<PathBuf>,
     codex_config_dir: Option<PathBuf>,
 }
@@ -179,10 +179,10 @@ impl HistoryRoots {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct SessionFileRef {
-    source: String,
-    project_key: String,
-    path: PathBuf,
+pub(crate) struct SessionFileRef {
+    pub(crate) source: String,
+    pub(crate) project_key: String,
+    pub(crate) path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -267,9 +267,9 @@ struct CachedSessionProjectCacheEntry {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct SessionFileFingerprint {
-    created_at: i64,
-    updated_at: i64,
+pub(crate) struct SessionFileFingerprint {
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
     size: u64,
 }
 
@@ -372,6 +372,15 @@ pub struct HistoryMessage {
     pub output_tokens: Option<u64>,
     pub cache_creation_tokens: Option<u64>,
     pub cache_read_tokens: Option<u64>,
+    /// 该消息对应源 JSONL 文件的物理行号（0-based，含被解析跳过的行）。
+    /// 仅单文件 detail 路径填充；子任务聚合合并的消息为 None（跨文件行号无意义）。
+    pub line_index: Option<usize>,
+    /// 是否允许消息级编辑/删除：仅当该行存在规范文本块（Claude text / Codex input_text|output_text）。
+    /// tool_use、function_call、thinking 等结构行为 false，避免写坏协议配对。
+    pub editable: bool,
+    /// 编辑时应预填/替换的规范文本。与展示用 content 一致时省略以控制 payload 体积。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable_text: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1026,7 +1035,7 @@ pub async fn history_convert_session(
     Ok(result)
 }
 
-fn validate_session_file_ref(
+pub(crate) fn validate_session_file_ref(
     file_path: &str,
     source: &str,
     project_key: &str,
@@ -2234,7 +2243,7 @@ fn get_history_index() -> &'static RwLock<HistorySessionIndex> {
     HISTORY_SESSION_INDEX.get_or_init(|| RwLock::new(HistorySessionIndex::default()))
 }
 
-fn invalidate_history_caches() {
+pub(crate) fn invalidate_history_caches() {
     if let Ok(mut cache) = get_files_cache().lock() {
         cache.by_source.clear();
     }
@@ -2559,7 +2568,7 @@ fn can_reuse_session_scan(
     previous.updated_at == current.updated_at && previous.size == current.size
 }
 
-fn session_file_fingerprint(path: &Path) -> SessionFileFingerprint {
+pub(crate) fn session_file_fingerprint(path: &Path) -> SessionFileFingerprint {
     let path_str = path.to_string_lossy();
     if crate::wsl::is_wsl_config_dir(&path_str) {
         if let Ok(cache) = get_wsl_session_fingerprint_cache().lock() {
@@ -2736,7 +2745,7 @@ fn finalize_session_detail(
     }
 }
 
-fn build_session_detail(
+pub(crate) fn build_session_detail(
     file_ref: &SessionFileRef,
     aggregate_subtasks: bool,
 ) -> Result<HistorySessionDetail, String> {
@@ -2848,7 +2857,14 @@ fn merge_session_detail_parts(
             let sort_ts = event.timestamp_ms.unwrap_or(part.computed.updated_at);
             usage_events.push((sort_ts, part_index * 10_000 + event_index, event));
         }
-        for (message_index, message) in part.messages.into_iter().enumerate() {
+        for (message_index, mut message) in part.messages.into_iter().enumerate() {
+            // 子任务聚合消息来自兄弟 transcript 文件，行号对父会话文件无意义；
+            // 清空行映射与编辑标记，聚合视图（实时统计）不提供消息编辑。
+            if part_index > 0 {
+                message.line_index = None;
+                message.editable = false;
+                message.editable_text = None;
+            }
             let ts = message
                 .timestamp
                 .as_deref()
@@ -3156,7 +3172,7 @@ fn conversion_timestamp(message: &HistoryMessage) -> String {
         .unwrap_or_else(now_rfc3339)
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
@@ -3625,7 +3641,7 @@ fn is_subagent_transcript_path(path: &Path) -> bool {
     is_subagents_dir && is_agent_file
 }
 
-fn history_roots(
+pub(crate) fn history_roots(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
 ) -> HistoryRoots {
@@ -4573,9 +4589,10 @@ fn scan_session_inner(
     let mut messages: Vec<HistoryMessage> = Vec::new();
     let mut msg_seen_usage_keys: HashSet<String> = HashSet::new();
 
-    for line in BufReader::with_capacity(READ_BUF_CAPACITY, file)
+    for (physical_line_index, line) in BufReader::with_capacity(READ_BUF_CAPACITY, file)
         .lines()
         .map_while(Result::ok)
+        .enumerate()
     {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -4633,6 +4650,13 @@ fn scan_session_inner(
                         msg.cache_creation_tokens = None;
                         msg.cache_read_tokens = None;
                     }
+                }
+                msg.line_index = Some(physical_line_index);
+                msg.editable_text = extract_editable_text(&value);
+                msg.editable = msg.editable_text.is_some();
+                // 规范文本与展示 content 一致时省略，避免 detail payload 体积翻倍。
+                if msg.editable_text.as_deref() == Some(msg.content.as_str()) {
+                    msg.editable_text = None;
                 }
                 messages.push(msg);
             }
@@ -6523,7 +6547,7 @@ fn is_tool_result_message(value: &Value) -> bool {
     }
 }
 
-fn parse_message(value: &Value) -> Option<HistoryMessage> {
+pub(crate) fn parse_message(value: &Value) -> Option<HistoryMessage> {
     if let Some(root_type) = value.get("type").and_then(Value::as_str) {
         if root_type == "response_item" {
             let payload = value.get("payload");
@@ -6569,6 +6593,9 @@ fn parse_message(value: &Value) -> Option<HistoryMessage> {
                 output_tokens: None,
                 cache_creation_tokens: None,
                 cache_read_tokens: None,
+                line_index: None,
+                editable: false,
+                editable_text: None,
             });
         } else if matches!(
             root_type,
@@ -6657,7 +6684,56 @@ fn parse_message(value: &Value) -> Option<HistoryMessage> {
         output_tokens,
         cache_creation_tokens,
         cache_read_tokens,
+        line_index: None,
+        editable: false,
+        editable_text: None,
     })
+}
+
+/// 提取"消息级编辑"允许替换的规范文本：
+/// - Claude 根行（type=user/assistant）：message.content 为字符串时取整串；为块数组时取全部 `text` 块。
+/// - Codex response_item 消息行：payload.content 中的 `input_text` / `output_text` 块。
+/// 返回 None 表示该行没有可安全编辑的文本载体（tool_use / function_call / thinking / tool_result 等），
+/// 前端据此禁用编辑与删除入口。与展示用 extract_content 的有损提取口径刻意分离。
+pub(crate) fn extract_editable_text(value: &Value) -> Option<String> {
+    let root_type = value.get("type").and_then(Value::as_str)?;
+    if root_type == "user" || root_type == "assistant" {
+        let content = value.get("message").and_then(|message| message.get("content"))?;
+        return editable_text_from_content(content, &["text"]);
+    }
+    if root_type == "response_item" {
+        let payload = value.get("payload")?;
+        if payload.get("type").and_then(Value::as_str) != Some("message") {
+            return None;
+        }
+        return editable_text_from_content(payload.get("content")?, &["input_text", "output_text"]);
+    }
+    None
+}
+
+fn editable_text_from_content(content: &Value, text_block_types: &[&str]) -> Option<String> {
+    match content {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => {
+            let parts: Vec<&str> = blocks
+                .iter()
+                .filter_map(|block| {
+                    let block_type = block.get("type").and_then(Value::as_str)?;
+                    if text_block_types.contains(&block_type) {
+                        block.get("text").and_then(Value::as_str)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n\n"))
+            }
+        }
+        _ => None,
+    }
 }
 
 fn message_title_candidate(message: &HistoryMessage) -> Option<String> {
@@ -7002,7 +7078,7 @@ fn extract_text_from_value(value: &Value) -> Option<String> {
     }
 }
 
-fn extract_timestamp(value: &Value) -> Option<String> {
+pub(crate) fn extract_timestamp(value: &Value) -> Option<String> {
     let candidates = [
         value.get("timestamp").and_then(Value::as_str),
         value.get("time").and_then(Value::as_str),
@@ -7185,6 +7261,9 @@ mod tests {
                     output_tokens: None,
                     cache_creation_tokens: None,
                     cache_read_tokens: None,
+                    line_index: None,
+                    editable: false,
+                    editable_text: None,
                 },
                 HistoryMessage {
                     role: "assistant".to_string(),
@@ -7195,6 +7274,9 @@ mod tests {
                     output_tokens: None,
                     cache_creation_tokens: None,
                     cache_read_tokens: None,
+                    line_index: None,
+                    editable: false,
+                    editable_text: None,
                 },
             ],
         }
@@ -8508,6 +8590,109 @@ mod tests {
         assert_eq!(stats.input_tokens, 100);
         assert_eq!(stats.output_tokens, 50);
         assert_eq!(stats.token_trend.len(), 1);
+    }
+
+    #[test]
+    fn scan_session_detail_maps_claude_messages_to_physical_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("session.jsonl");
+        write_text(
+            &file,
+            concat!(
+                r#"{"type":"summary","summary":"noise"}"#,
+                "\n",
+                r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"hello world"}}"#,
+                "\n\n",
+                r#"{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"text","text":"part one"},{"type":"text","text":"part two"}]}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"a2","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"content":"file body"}}]}}"#,
+                "\n",
+            ),
+        );
+
+        let (_, _, messages) = scan_session_detail(&file);
+
+        assert_eq!(messages.len(), 3);
+        // 物理行号包含被跳过的 summary 行与空行
+        assert_eq!(messages[0].line_index, Some(1));
+        assert!(messages[0].editable);
+        // 规范文本与展示 content 一致时省略 editable_text
+        assert_eq!(messages[0].editable_text, None);
+        assert_eq!(messages[1].line_index, Some(3));
+        assert!(messages[1].editable);
+        // 多 text 块：展示 content 以 \n 连接，规范文本以 \n\n 连接，不一致时必须显式返回
+        assert_eq!(messages[1].editable_text.as_deref(), Some("part one\n\npart two"));
+        // tool_use 行没有规范文本块，禁止编辑但保留行号（供只读定位）
+        assert_eq!(messages[2].line_index, Some(4));
+        assert!(!messages[2].editable);
+        assert_eq!(messages[2].editable_text, None);
+    }
+
+    #[test]
+    fn scan_session_detail_maps_codex_messages_to_physical_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-session.jsonl");
+        write_text(
+            &file,
+            concat!(
+                r#"{"type":"session_meta","payload":{"id":"s1","cwd":"D:\\work"}}"#,
+                "\n",
+                r#"{"type":"response_item","timestamp":"2026-03-08T06:31:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"question"}]}}"#,
+                "\n",
+                r#"{"type":"event_msg","timestamp":"2026-03-08T06:31:00Z","payload":{"type":"user_message","message":"question"}}"#,
+                "\n",
+                r#"{"type":"response_item","timestamp":"2026-03-08T06:32:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}"#,
+                "\n",
+            ),
+        );
+
+        let (_, _, messages) = scan_session_detail(&file);
+
+        // event_msg 行不产生消息，但仍占物理行号
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].line_index, Some(1));
+        assert!(messages[0].editable);
+        assert_eq!(messages[0].editable_text, None);
+        assert_eq!(messages[1].line_index, Some(3));
+        assert!(messages[1].editable);
+    }
+
+    #[test]
+    fn build_session_detail_blanks_line_mapping_for_aggregated_subtask_messages() {
+        let temp_dir = TempDir::new().unwrap();
+        let parent_file = temp_dir.path().join("rollout-session.jsonl");
+        let child_file = temp_dir.path().join("subagents").join("agent-child.jsonl");
+        write_text(
+            &parent_file,
+            concat!(
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-06-26T10:00:00Z","message":{"role":"user","content":"parent"}}"#,
+                "\n",
+            ),
+        );
+        write_text(
+            &child_file,
+            concat!(
+                r#"{"type":"user","uuid":"c1","timestamp":"2026-06-26T10:01:00Z","message":{"role":"user","content":"child"}}"#,
+                "\n",
+            ),
+        );
+        let file_ref = SessionFileRef {
+            source: "claude".to_string(),
+            project_key: "CLI-Manager".to_string(),
+            path: parent_file,
+        };
+
+        let detail = build_session_detail(&file_ref, true).unwrap();
+
+        assert_eq!(detail.messages.len(), 2);
+        let parent = detail.messages.iter().find(|m| m.content == "parent").unwrap();
+        let child = detail.messages.iter().find(|m| m.content == "child").unwrap();
+        // 父会话消息保留行映射；子任务消息属于其他文件，必须清空行映射并禁用编辑
+        assert_eq!(parent.line_index, Some(0));
+        assert!(parent.editable);
+        assert_eq!(child.line_index, None);
+        assert!(!child.editable);
+        assert_eq!(child.editable_text, None);
     }
 
     #[test]

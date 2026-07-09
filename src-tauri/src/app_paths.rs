@@ -232,6 +232,11 @@ pub fn history_cache_dir() -> Result<PathBuf, String> {
     Ok(cli_manager_data_dir()?.join("history-cache"))
 }
 
+/// 会话历史消息编辑前的整文件备份目录（首改备份 + 一键还原）。
+pub fn history_backups_dir() -> Result<PathBuf, String> {
+    Ok(cli_manager_data_dir()?.join("history-backups"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

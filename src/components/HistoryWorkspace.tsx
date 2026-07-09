@@ -12,6 +12,7 @@ import { useI18n } from "../lib/i18n";
 import { findWorktreeByPath, projectWithWorktreeProviderOverrides } from "../lib/terminalProject";
 import { PromptLibrary } from "./prompts/PromptLibrary";
 import { DiffModal } from "./history/DiffModal";
+import { EditAuditModal } from "./history/EditAuditModal";
 import { HistoryListPane } from "./history/HistoryListPane";
 import { SessionDetailPane, type HistoryDetailView } from "./history/SessionDetailPane";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -208,6 +209,9 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const openSessionAtMessage = useHistoryStore((s) => s.openSessionAtMessage);
   const clearFocusedMessage = useHistoryStore((s) => s.clearFocusedMessage);
   const updateMeta = useHistoryStore((s) => s.updateMeta);
+  const updateMessage = useHistoryStore((s) => s.updateMessage);
+  const deleteMessage = useHistoryStore((s) => s.deleteMessage);
+  const insertMessage = useHistoryStore((s) => s.insertMessage);
   const storedHistorySidebarWidth = useSettingsStore((s) => s.historySidebarWidth);
   const claudeConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
@@ -243,6 +247,10 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedSessionKeys, setSelectedSessionKeys] = useState<Set<string>>(new Set());
   const [deleteIntent, setDeleteIntent] = useState<DeleteIntent | null>(null);
+  const [editAuditOpen, setEditAuditOpen] = useState(false);
+  const [deleteMessageIntent, setDeleteMessageIntent] = useState<HistoryMessage | null>(null);
+  const [liveEditWarningOpen, setLiveEditWarningOpen] = useState(false);
+  const liveEditResolverRef = useRef<((allowed: boolean) => void) | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSessionQuery(sessionQuery), 150);
@@ -254,8 +262,15 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
       if (document.querySelector(".ui-history-transcript-image-preview")) return;
+      // 行内消息编辑/插入表单自行处理 Esc（取消编辑），不关闭历史工作区。
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".ui-history-message-edit, .ui-history-message-insert")) return;
       event.preventDefault();
       event.stopPropagation();
+      if (editAuditOpen) {
+        setEditAuditOpen(false);
+        return;
+      }
       if (diffOpen) {
         setDiffOpen(false);
         return;
@@ -269,7 +284,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [active, closeHistory, diffOpen, promptOpen]);
+  }, [active, closeHistory, diffOpen, editAuditOpen, promptOpen]);
 
   const activeView = useMemo(
     () => sessions.find((item) => item.sessionKey === activeSessionKey) ?? null,
@@ -625,6 +640,95 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     }
   };
 
+  // ---- 消息级编辑（聊天式操作） ----
+
+  const canEditMessages = Boolean(activeSession) && !loadingSessionDetail && !activeView?.favoriteSnapshot;
+
+  const isActiveSessionLive = useCallback(() => {
+    const sessionId = activeSession?.session_id?.trim();
+    if (!sessionId) return false;
+    return useTerminalStore.getState().sessions.some((session) => session.cliSessionId === sessionId);
+  }, [activeSession?.session_id]);
+
+  // 活跃会话（终端里 CLI 正在使用）编辑前的警告闸门：确认后才进入编辑/插入态。
+  const confirmMessageEditAllowed = useCallback((): Promise<boolean> => {
+    if (!isActiveSessionLive()) return Promise.resolve(true);
+    liveEditResolverRef.current?.(false);
+    setLiveEditWarningOpen(true);
+    return new Promise<boolean>((resolve) => {
+      liveEditResolverRef.current = resolve;
+    });
+  }, [isActiveSessionLive]);
+
+  const resolveLiveEditWarning = useCallback((allowed: boolean) => {
+    setLiveEditWarningOpen(false);
+    liveEditResolverRef.current?.(allowed);
+    liveEditResolverRef.current = null;
+  }, []);
+
+  const handleMessageEditError = useCallback(
+    (err: unknown) => {
+      const message = String(err);
+      if (message.includes("history_file_changed") || message.includes("history_line_conflict")) {
+        toast.error(t("history.edit.conflict"), { description: t("history.edit.conflictDescription") });
+      } else if (message.includes("message_not_editable")) {
+        toast.error(t("history.edit.notEditable"));
+      } else {
+        toast.error(t("history.edit.failed"), { description: message });
+      }
+    },
+    [t]
+  );
+
+  const handleSaveMessageEdit = useCallback(
+    async (message: HistoryMessage, newText: string): Promise<boolean> => {
+      if (!activeSessionKey) return false;
+      try {
+        await updateMessage(activeSessionKey, message, newText);
+        toast.success(t("history.edit.editSuccess"));
+        return true;
+      } catch (err) {
+        handleMessageEditError(err);
+        return false;
+      }
+    },
+    [activeSessionKey, handleMessageEditError, t, updateMessage]
+  );
+
+  const handleInsertMessage = useCallback(
+    async (message: HistoryMessage, role: "user" | "assistant", text: string): Promise<boolean> => {
+      if (!activeSessionKey) return false;
+      try {
+        await insertMessage(activeSessionKey, message, role, text);
+        toast.success(t("history.edit.insertSuccess"));
+        return true;
+      } catch (err) {
+        handleMessageEditError(err);
+        return false;
+      }
+    },
+    [activeSessionKey, handleMessageEditError, insertMessage, t]
+  );
+
+  const confirmDeleteMessage = useCallback(async () => {
+    const message = deleteMessageIntent;
+    setDeleteMessageIntent(null);
+    if (!message || !activeSessionKey) return;
+    try {
+      await deleteMessage(activeSessionKey, message);
+      toast.success(t("history.edit.deleteSuccess"));
+    } catch (err) {
+      handleMessageEditError(err);
+    }
+  }, [activeSessionKey, deleteMessage, deleteMessageIntent, handleMessageEditError, t]);
+
+  const deleteMessageDialogMessage = useMemo(() => {
+    const base = t("history.edit.deleteConfirmMessage");
+    return deleteMessageIntent && isActiveSessionLive()
+      ? `${base} ${t("history.edit.liveWarningMessage")}`
+      : base;
+  }, [deleteMessageIntent, isActiveSessionLive, t]);
+
   const resumeConversation = useCallback(async () => {
     if (!activeSession) {
       toast.error("会话详情尚未加载完成");
@@ -962,6 +1066,12 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
             onLoadMoreMessages={() =>
               setVisibleMessageCount((prev) => Math.min(activeSession?.messages.length ?? 0, prev + MESSAGE_PAGE_SIZE))
             }
+            canEditMessages={canEditMessages}
+            onRequestMessageEdit={confirmMessageEditAllowed}
+            onSaveMessageEdit={handleSaveMessageEdit}
+            onDeleteMessage={setDeleteMessageIntent}
+            onInsertMessage={handleInsertMessage}
+            onOpenEditAudit={() => setEditAuditOpen(true)}
           />
         </div>
 
@@ -997,6 +1107,32 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
         onConfirm={confirmDeleteSession}
         onClose={() => setDeleteIntent(null)}
       />
+
+      <ConfirmDialog
+        open={deleteMessageIntent !== null}
+        title={t("history.edit.deleteConfirmTitle")}
+        message={deleteMessageDialogMessage}
+        confirmText={t("common.delete")}
+        cancelText={t("common.cancel")}
+        danger
+        onConfirm={() => {
+          void confirmDeleteMessage();
+        }}
+        onClose={() => setDeleteMessageIntent(null)}
+      />
+
+      <ConfirmDialog
+        open={liveEditWarningOpen}
+        title={t("history.edit.liveWarningTitle")}
+        message={t("history.edit.liveWarningMessage")}
+        confirmText={t("common.confirm")}
+        cancelText={t("common.cancel")}
+        danger
+        onConfirm={() => resolveLiveEditWarning(true)}
+        onClose={() => resolveLiveEditWarning(false)}
+      />
+
+      <EditAuditModal open={editAuditOpen} sessionKey={activeSessionKey} onClose={() => setEditAuditOpen(false)} />
     </>
   );
 }

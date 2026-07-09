@@ -115,6 +115,26 @@ const MIGRATION_ADD_WORKTREE_PROVIDER_OVERRIDES_DESCRIPTION: &str =
 const MIGRATION_ADD_WORKTREE_PROVIDER_OVERRIDES_SQL: &str =
     "ALTER TABLE worktrees ADD COLUMN provider_overrides TEXT NOT NULL DEFAULT '{}';";
 
+const MIGRATION_CREATE_HISTORY_EDIT_AUDIT_VERSION: i64 = 18;
+const MIGRATION_CREATE_HISTORY_EDIT_AUDIT_DESCRIPTION: &str = "create_history_edit_audit_table";
+const MIGRATION_CREATE_HISTORY_EDIT_AUDIT_SQL: &str = "
+                CREATE TABLE IF NOT EXISTS history_edit_audit (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_key TEXT NOT NULL,
+                    session_id  TEXT NOT NULL,
+                    source      TEXT NOT NULL,
+                    file_path   TEXT NOT NULL,
+                    op          TEXT NOT NULL,
+                    line_index  INTEGER,
+                    role        TEXT,
+                    before_text TEXT,
+                    after_text  TEXT,
+                    backup_path TEXT,
+                    created_at  INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_history_edit_audit_session ON history_edit_audit(session_key, created_at DESC);
+            ";
+
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -323,6 +343,12 @@ fn migrations() -> Vec<Migration> {
             sql: MIGRATION_ADD_WORKTREE_PROVIDER_OVERRIDES_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: MIGRATION_CREATE_HISTORY_EDIT_AUDIT_VERSION,
+            description: MIGRATION_CREATE_HISTORY_EDIT_AUDIT_DESCRIPTION,
+            sql: MIGRATION_CREATE_HISTORY_EDIT_AUDIT_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -523,6 +549,11 @@ pub fn run() {
             commands::history::history_get_session,
             commands::history::history_convert_session,
             commands::history::history_delete_session,
+            commands::history_edit::history_update_message,
+            commands::history_edit::history_delete_message,
+            commands::history_edit::history_insert_message,
+            commands::history_edit::history_restore_session_backup,
+            commands::history_edit::history_get_backup_status,
             commands::history::history_search,
             commands::history::history_list_prompts,
             commands::history::history_list_stats_projects,

@@ -8,6 +8,7 @@ pub mod fs;
 pub mod git;
 pub mod git_worktree;
 pub mod history;
+pub mod history_edit;
 pub mod hook_settings;
 pub mod logging;
 pub mod model_pricing;

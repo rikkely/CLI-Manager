@@ -4,8 +4,11 @@ import { getDb } from "../lib/db";
 import { createPerfMarker, logInfo, logWarn } from "../lib/logger";
 import { useSettingsStore } from "./settingsStore";
 import type {
+  HistoryBackupStatus,
+  HistoryEditAuditEntry,
   HistoryFileChangeOperation,
   HistoryFileChangeSummary,
+  HistoryMessage,
   HistoryPromptItem,
   HistorySearchHit,
   HistorySessionDetail,
@@ -109,6 +112,17 @@ interface HistoryStore {
   openSessionAtMessage: (sessionKey: string, messageIndex: number) => Promise<void>;
   clearFocusedMessage: () => void;
   updateMeta: (sessionKey: string, patch: MetaPatchInput) => Promise<void>;
+  updateMessage: (sessionKey: string, message: HistoryMessage, newText: string) => Promise<void>;
+  deleteMessage: (sessionKey: string, message: HistoryMessage) => Promise<void>;
+  insertMessage: (
+    sessionKey: string,
+    afterMessage: HistoryMessage,
+    role: "user" | "assistant",
+    text: string
+  ) => Promise<void>;
+  restoreSessionBackup: (sessionKey: string) => Promise<void>;
+  fetchBackupStatus: (sessionKey: string) => Promise<HistoryBackupStatus>;
+  listEditAudit: (sessionKey: string, limit?: number) => Promise<HistoryEditAuditEntry[]>;
   triggerGlobalSearchFocus: () => void;
   triggerSessionSearchFocus: () => void;
 }
@@ -225,6 +239,8 @@ function normalizeDetail(raw: unknown): HistorySessionDetail {
   const messagesRaw = Array.isArray(rec.messages) ? rec.messages : [];
   const messages = messagesRaw.map((msg) => {
     const m = msg as Record<string, unknown>;
+    const rawLineIndex = m.line_index ?? m.lineIndex;
+    const rawEditableText = m.editable_text ?? m.editableText;
     return {
       role: normalizeRole(m.role),
       content: asString(m.content),
@@ -234,6 +250,13 @@ function normalizeDetail(raw: unknown): HistorySessionDetail {
       output_tokens: asNumber(m.output_tokens ?? m.outputTokens),
       cache_creation_tokens: asNumber(m.cache_creation_tokens ?? m.cacheCreationTokens),
       cache_read_tokens: asNumber(m.cache_read_tokens ?? m.cacheReadTokens),
+      // 行号 0 合法，不能走 asNumber 的 0 兜底；缺失/非法一律 null（禁编辑）。
+      line_index:
+        typeof rawLineIndex === "number" && Number.isFinite(rawLineIndex) && rawLineIndex >= 0
+          ? rawLineIndex
+          : null,
+      editable: m.editable === true,
+      editable_text: typeof rawEditableText === "string" ? rawEditableText : null,
     };
   });
   return {
@@ -1022,6 +1045,169 @@ async function deleteFavoriteSnapshot(sessionKey: string): Promise<void> {
   await db.execute("DELETE FROM session_favorite_snapshots WHERE session_key = $1", [sessionKey]);
 }
 
+type HistoryEditOp = "edit" | "delete" | "insert" | "restore";
+
+interface HistoryEditOutcome {
+  detail: HistorySessionDetail;
+  beforeText: string | null;
+  afterText: string | null;
+  backupPath: string | null;
+}
+
+function normalizeEditOutcome(raw: unknown): HistoryEditOutcome {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  return {
+    detail: normalizeDetail(rec.detail),
+    beforeText: asString(rec.beforeText ?? rec.before_text ?? "") || null,
+    afterText: asString(rec.afterText ?? rec.after_text ?? "") || null,
+    backupPath: asString(rec.backupPath ?? rec.backup_path ?? "") || null,
+  };
+}
+
+function normalizeBackupStatus(raw: unknown): HistoryBackupStatus {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  const backupAtRaw = rec.backupAt ?? rec.backup_at;
+  return {
+    hasBackup: rec.hasBackup === true || rec.has_backup === true,
+    backupPath: asString(rec.backupPath ?? rec.backup_path ?? "") || null,
+    backupAt: typeof backupAtRaw === "number" && Number.isFinite(backupAtRaw) ? backupAtRaw : null,
+  };
+}
+
+async function insertEditAuditRecord(entry: {
+  sessionKey: string;
+  sessionId: string;
+  source: string;
+  filePath: string;
+  op: HistoryEditOp;
+  lineIndex: number | null;
+  role: string | null;
+  beforeText: string | null;
+  afterText: string | null;
+  backupPath: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO history_edit_audit
+      (session_key, session_id, source, file_path, op, line_index, role, before_text, after_text, backup_path, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [
+      entry.sessionKey,
+      entry.sessionId,
+      entry.source,
+      entry.filePath,
+      entry.op,
+      entry.lineIndex,
+      entry.role,
+      entry.beforeText,
+      entry.afterText,
+      entry.backupPath,
+      Date.now(),
+    ]
+  );
+}
+
+function mergeDetailIntoSessions(
+  sessions: HistorySessionView[],
+  sessionKey: string,
+  detail: HistorySessionDetail
+): HistorySessionView[] {
+  return sortSessionViews(
+    sessions.map((item) =>
+      item.sessionKey === sessionKey
+        ? {
+            ...item,
+            title: detail.title,
+            updated_at: detail.updated_at,
+            message_count: detail.message_count,
+            displayTitle: item.alias.trim() || detail.title,
+          }
+        : item
+    )
+  );
+}
+
+/** 编辑命令成功后的统一收尾：原地替换 detail、更新列表摘要、写审计、同步收藏快照。 */
+async function finalizeEditOutcome(options: {
+  sessionKey: string;
+  target: HistorySessionView;
+  op: HistoryEditOp;
+  lineIndex: number | null;
+  role: string | null;
+  outcome: HistoryEditOutcome;
+}): Promise<void> {
+  const { sessionKey, target, op, lineIndex, role, outcome } = options;
+  const detail = outcome.detail;
+  useHistoryStore.setState((state) => ({
+    activeSession: state.activeSessionKey === sessionKey ? detail : state.activeSession,
+    sessions: mergeDetailIntoSessions(state.sessions, sessionKey, detail),
+  }));
+  try {
+    await insertEditAuditRecord({
+      sessionKey,
+      sessionId: detail.session_id,
+      source: detail.source,
+      filePath: detail.file_path,
+      op,
+      lineIndex,
+      role,
+      beforeText: outcome.beforeText,
+      afterText: outcome.afterText,
+      backupPath: outcome.backupPath,
+    });
+  } catch (err) {
+    // 审计失败不阻断编辑结果，但要留日志可查。
+    logWarn("history.edit.auditWriteFailed", { sessionKey, op, error: String(err) });
+  }
+  if (target.starred) {
+    try {
+      await writeFavoriteSnapshot(sessionKey, detail);
+    } catch (err) {
+      logWarn("history.edit.snapshotSyncFailed", { sessionKey, op, error: String(err) });
+    }
+  }
+}
+
+/** 守卫失败（文件被外部改动/行漂移）时自动重载会话，让用户基于最新内容重试。 */
+async function reloadAfterEditConflict(sessionKey: string, err: unknown): Promise<never> {
+  const message = String(err);
+  if (message.includes("history_file_changed") || message.includes("history_line_conflict")) {
+    try {
+      await useHistoryStore.getState().openSession(sessionKey);
+    } catch (reloadErr) {
+      logWarn("history.edit.conflictReloadFailed", { sessionKey, error: String(reloadErr) });
+    }
+  }
+  throw err instanceof Error ? err : new Error(message);
+}
+
+function requireActiveEditContext(sessionKey: string): {
+  target: HistorySessionView;
+  active: HistorySessionDetail;
+} {
+  const state = useHistoryStore.getState();
+  const target = state.sessions.find((item) => item.sessionKey === sessionKey);
+  const active = state.activeSession;
+  if (!target || !active || state.activeSessionKey !== sessionKey) {
+    throw new Error("session_not_loaded");
+  }
+  if (target.favoriteSnapshot) {
+    // 快照兜底会话没有可写的源文件
+    throw new Error("favorite_snapshot_readonly");
+  }
+  return { target, active };
+}
+
+function requireMessageLocator(message: HistoryMessage): { lineIndex: number; expectedText: string } {
+  if (!message.editable || message.line_index === null || message.line_index === undefined) {
+    throw new Error("message_not_editable");
+  }
+  return {
+    lineIndex: message.line_index,
+    expectedText: message.editable_text ?? message.content,
+  };
+}
+
 async function loadDetailForSnapshot(sessionKey: string, session: HistorySessionView): Promise<HistorySessionDetail> {
   const active = useHistoryStore.getState().activeSession;
   if (useHistoryStore.getState().activeSessionKey === sessionKey && active) {
@@ -1139,6 +1325,26 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     );
     await db.execute(
       "CREATE INDEX IF NOT EXISTS idx_session_favorite_snapshots_updated ON session_favorite_snapshots(updated_at DESC)"
+    );
+    // 与 lib.rs migration v18 同构，双保险（老库升级顺序不确定时仍可用）。
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS history_edit_audit (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_key TEXT NOT NULL,
+        session_id  TEXT NOT NULL,
+        source      TEXT NOT NULL,
+        file_path   TEXT NOT NULL,
+        op          TEXT NOT NULL,
+        line_index  INTEGER,
+        role        TEXT,
+        before_text TEXT,
+        after_text  TEXT,
+        backup_path TEXT,
+        created_at  INTEGER NOT NULL
+      )
+    `);
+    await db.execute(
+      "CREATE INDEX IF NOT EXISTS idx_history_edit_audit_session ON history_edit_audit(session_key, created_at DESC)"
     );
   },
 
@@ -1739,6 +1945,129 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     });
     const sessions = await applyFavoriteSnapshots(summaries, nextMetaMap, get().sourceFilter, effectiveProjectPathFilter(get()), sourceSessionKeys);
     set({ metaMap: nextMetaMap, sessions });
+  },
+
+  updateMessage: async (sessionKey, message, newText) => {
+    const { target, active } = requireActiveEditContext(sessionKey);
+    const { lineIndex, expectedText } = requireMessageLocator(message);
+    try {
+      const raw = await invoke<unknown>("history_update_message", {
+        filePath: active.file_path,
+        ...getHistoryPathArgs(),
+        source: active.source,
+        projectKey: active.project_key,
+        lineIndex,
+        expectedRole: message.role,
+        expectedText,
+        newText,
+        expectedUpdatedAt: active.updated_at,
+      });
+      await finalizeEditOutcome({
+        sessionKey,
+        target,
+        op: "edit",
+        lineIndex,
+        role: message.role,
+        outcome: normalizeEditOutcome(raw),
+      });
+    } catch (err) {
+      await reloadAfterEditConflict(sessionKey, err);
+    }
+  },
+
+  deleteMessage: async (sessionKey, message) => {
+    const { target, active } = requireActiveEditContext(sessionKey);
+    const { lineIndex, expectedText } = requireMessageLocator(message);
+    try {
+      const raw = await invoke<unknown>("history_delete_message", {
+        filePath: active.file_path,
+        ...getHistoryPathArgs(),
+        source: active.source,
+        projectKey: active.project_key,
+        lineIndex,
+        expectedRole: message.role,
+        expectedText,
+        expectedUpdatedAt: active.updated_at,
+      });
+      await finalizeEditOutcome({
+        sessionKey,
+        target,
+        op: "delete",
+        lineIndex,
+        role: message.role,
+        outcome: normalizeEditOutcome(raw),
+      });
+    } catch (err) {
+      await reloadAfterEditConflict(sessionKey, err);
+    }
+  },
+
+  insertMessage: async (sessionKey, afterMessage, role, text) => {
+    const { target, active } = requireActiveEditContext(sessionKey);
+    const { lineIndex } = requireMessageLocator(afterMessage);
+    try {
+      const raw = await invoke<unknown>("history_insert_message", {
+        filePath: active.file_path,
+        ...getHistoryPathArgs(),
+        source: active.source,
+        projectKey: active.project_key,
+        afterLineIndex: lineIndex,
+        role,
+        text,
+        expectedUpdatedAt: active.updated_at,
+      });
+      await finalizeEditOutcome({
+        sessionKey,
+        target,
+        op: "insert",
+        lineIndex,
+        role,
+        outcome: normalizeEditOutcome(raw),
+      });
+    } catch (err) {
+      await reloadAfterEditConflict(sessionKey, err);
+    }
+  },
+
+  restoreSessionBackup: async (sessionKey) => {
+    const { target, active } = requireActiveEditContext(sessionKey);
+    const raw = await invoke<unknown>("history_restore_session_backup", {
+      filePath: active.file_path,
+      ...getHistoryPathArgs(),
+      source: active.source,
+      projectKey: active.project_key,
+    });
+    await finalizeEditOutcome({
+      sessionKey,
+      target,
+      op: "restore",
+      lineIndex: null,
+      role: null,
+      outcome: normalizeEditOutcome(raw),
+    });
+  },
+
+  fetchBackupStatus: async (sessionKey) => {
+    const { active } = requireActiveEditContext(sessionKey);
+    const raw = await invoke<unknown>("history_get_backup_status", {
+      filePath: active.file_path,
+      ...getHistoryPathArgs(),
+      source: active.source,
+      projectKey: active.project_key,
+    });
+    return normalizeBackupStatus(raw);
+  },
+
+  listEditAudit: async (sessionKey, limit) => {
+    await get().ensureMetaTable();
+    const db = await getDb();
+    return db.select<HistoryEditAuditEntry[]>(
+      `SELECT * FROM history_edit_audit
+       WHERE session_key = $1
+       ORDER BY created_at DESC, id DESC
+       LIMIT $2`,
+      [sessionKey, limit ?? 200]
+    );
   },
 
   triggerGlobalSearchFocus: () => {

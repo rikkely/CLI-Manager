@@ -1,6 +1,21 @@
 ﻿import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowRightLeft, BookCopy, ChevronDown, ChevronRight, Copy, GitCompare, Star, Terminal } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  ArrowRightLeft,
+  BookCopy,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  CornerDownRight,
+  GitCompare,
+  History,
+  Pencil,
+  Star,
+  Terminal,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { toast } from "sonner";
 import aiAvatarUrl from "../../assets/history-ai-avatar.svg";
 import userAvatarUrl from "../../assets/history-user-avatar.svg";
@@ -55,6 +70,16 @@ interface SessionDetailPaneProps {
   onJumpToMessage: (messageIndex: number) => void;
   onToggleStar: () => void;
   onLoadMoreMessages: () => void;
+  /** 会话级编辑开关：快照兜底会话/未加载完成时为 false。 */
+  canEditMessages: boolean;
+  /** 编辑/插入进入前的活跃会话警告闸门；返回 false 中止。 */
+  onRequestMessageEdit: () => Promise<boolean>;
+  /** 保存编辑；返回 true 表示成功（关闭编辑态）。 */
+  onSaveMessageEdit: (message: HistoryMessage, newText: string) => Promise<boolean>;
+  onDeleteMessage: (message: HistoryMessage) => void;
+  /** 插入消息；返回 true 表示成功（关闭插入表单）。 */
+  onInsertMessage: (message: HistoryMessage, role: "user" | "assistant", text: string) => Promise<boolean>;
+  onOpenEditAudit: () => void;
 }
 
 const DETAIL_VIEWS: Array<{ id: HistoryDetailView; labelKey: TranslationKey }> = [
@@ -186,6 +211,37 @@ function ConversationMessageContent({
   );
 }
 
+type InsertRole = "user" | "assistant";
+
+interface HistoryMessageCardProps {
+  message: HistoryMessage;
+  index: number;
+  isMatched: boolean;
+  isFocused: boolean;
+  query: string;
+  messageRefs: RefObject<Record<number, HTMLDivElement | null>>;
+  measureElement: (element: Element) => void;
+  canEdit: boolean;
+  isEditing: boolean;
+  editDraft: string;
+  editSaving: boolean;
+  onEditDraftChange: (value: string) => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: () => void;
+  isInserting: boolean;
+  insertRole: InsertRole;
+  insertDraft: string;
+  insertSaving: boolean;
+  onInsertRoleChange: (role: InsertRole) => void;
+  onInsertDraftChange: (value: string) => void;
+  onStartInsert: () => void;
+  onCancelInsert: () => void;
+  onSubmitInsert: () => void;
+  onCopyMessage: () => void;
+  onDeleteMessage: () => void;
+}
+
 function HistoryMessageCard({
   message,
   index,
@@ -194,15 +250,26 @@ function HistoryMessageCard({
   query,
   messageRefs,
   measureElement,
-}: {
-  message: HistoryMessage;
-  index: number;
-  isMatched: boolean;
-  isFocused: boolean;
-  query: string;
-  messageRefs: RefObject<Record<number, HTMLDivElement | null>>;
-  measureElement: (element: Element) => void;
-}) {
+  canEdit,
+  isEditing,
+  editDraft,
+  editSaving,
+  onEditDraftChange,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
+  isInserting,
+  insertRole,
+  insertDraft,
+  insertSaving,
+  onInsertRoleChange,
+  onInsertDraftChange,
+  onStartInsert,
+  onCancelInsert,
+  onSubmitInsert,
+  onCopyMessage,
+  onDeleteMessage,
+}: HistoryMessageCardProps) {
   const { t } = useI18n();
   const roleKind = normalizeMessageRole(message.role);
   const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
@@ -211,6 +278,8 @@ function HistoryMessageCard({
   const messageMeta = formatMessageMeta(message);
   const [open, setOpen] = useState(forceOpen);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const messageEditable =
+    canEdit && message.editable === true && message.line_index !== null && message.line_index !== undefined;
 
   useEffect(() => {
     if (forceOpen) setOpen(true);
@@ -218,7 +287,7 @@ function HistoryMessageCard({
 
   useEffect(() => {
     if (cardRef.current) measureElement(cardRef.current);
-  }, [measureElement, open]);
+  }, [measureElement, open, isEditing, isInserting]);
 
   const setCardRef = (element: HTMLDivElement | null) => {
     cardRef.current = element;
@@ -226,6 +295,26 @@ function HistoryMessageCard({
     if (element) measureElement(element);
   };
   const toggleTitle = open ? t("history.detail.collapseFull") : t("history.detail.expandFull");
+
+  const handleEditKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCancelEdit();
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      onSubmitEdit();
+    }
+  };
+
+  const handleInsertKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCancelInsert();
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      onSubmitInsert();
+    }
+  };
 
   return (
     <div
@@ -243,28 +332,172 @@ function HistoryMessageCard({
         </span>
       )}
       <div className="ui-history-message-stack">
-        {messageMeta && (
-          <div className="ui-history-message-meta" title={messageMeta}>
-            {messageMeta}
-          </div>
-        )}
-        <div className="ui-history-message-bubble">
-          <ConversationMessageContent message={message} query={query} open={open} collapsible={collapsible} />
-          {collapsible && (
-            <button
-              type="button"
-              className="ui-history-message-expand"
-              onClick={() => setOpen((current) => !current)}
-              aria-expanded={open}
-              title={toggleTitle}
-            >
-              <span className="ui-history-message-collapse-icon" aria-hidden="true">
-                {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-              </span>
-              {toggleTitle}
-            </button>
+        <div className="ui-history-message-header">
+          {messageMeta && (
+            <div className="ui-history-message-meta" title={messageMeta}>
+              {messageMeta}
+            </div>
+          )}
+          {!isEditing && (
+            <div className="ui-history-message-actions">
+              <button
+                type="button"
+                className="ui-history-message-action"
+                onClick={onCopyMessage}
+                title={t("history.edit.copyMessage")}
+                aria-label={t("history.edit.copyMessage")}
+              >
+                <Copy size={12} />
+              </button>
+              {messageEditable && (
+                <>
+                  <button
+                    type="button"
+                    className="ui-history-message-action"
+                    onClick={onStartEdit}
+                    title={t("history.edit.editMessage")}
+                    aria-label={t("history.edit.editMessage")}
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-history-message-action"
+                    onClick={onStartInsert}
+                    title={t("history.edit.insertAfter")}
+                    aria-label={t("history.edit.insertAfter")}
+                  >
+                    <CornerDownRight size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-history-message-action"
+                    data-danger="true"
+                    onClick={onDeleteMessage}
+                    title={t("history.edit.deleteMessage")}
+                    aria-label={t("history.edit.deleteMessage")}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </>
+              )}
+            </div>
           )}
         </div>
+        <div className="ui-history-message-bubble">
+          {isEditing ? (
+            <div className="ui-history-message-edit">
+              <textarea
+                autoFocus
+                value={editDraft}
+                onChange={(event) => onEditDraftChange(event.target.value)}
+                onKeyDown={handleEditKeyDown}
+                disabled={editSaving}
+                aria-label={t("history.edit.editMessage")}
+              />
+              <div className="ui-history-message-edit-footer">
+                <span className="ui-history-message-edit-hint">{t("history.edit.editHint")}</span>
+                <span className="ui-history-message-edit-buttons">
+                  <button
+                    type="button"
+                    className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                    onClick={onCancelEdit}
+                    disabled={editSaving}
+                  >
+                    <X size={12} />
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                    style={{ color: "var(--success)" }}
+                    onClick={onSubmitEdit}
+                    disabled={editSaving || !editDraft.trim()}
+                  >
+                    <Check size={12} />
+                    {t("common.save")}
+                  </button>
+                </span>
+              </div>
+            </div>
+          ) : (
+            <>
+              <ConversationMessageContent message={message} query={query} open={open} collapsible={collapsible} />
+              {collapsible && (
+                <button
+                  type="button"
+                  className="ui-history-message-expand"
+                  onClick={() => setOpen((current) => !current)}
+                  aria-expanded={open}
+                  title={toggleTitle}
+                >
+                  <span className="ui-history-message-collapse-icon" aria-hidden="true">
+                    {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </span>
+                  {toggleTitle}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+        {isInserting && (
+          <div className="ui-history-message-insert">
+            <div className="ui-history-message-insert-header">
+              <span>{t("history.edit.insertTitle")}</span>
+              <span className="ui-history-message-insert-roles">
+                <button
+                  type="button"
+                  className="ui-history-message-insert-role"
+                  data-active={insertRole === "user"}
+                  onClick={() => onInsertRoleChange("user")}
+                >
+                  {t("history.edit.roleUser")}
+                </button>
+                <button
+                  type="button"
+                  className="ui-history-message-insert-role"
+                  data-active={insertRole === "assistant"}
+                  onClick={() => onInsertRoleChange("assistant")}
+                >
+                  {t("history.edit.roleAssistant")}
+                </button>
+              </span>
+            </div>
+            <textarea
+              autoFocus
+              placeholder={t("history.edit.insertPlaceholder")}
+              value={insertDraft}
+              onChange={(event) => onInsertDraftChange(event.target.value)}
+              onKeyDown={handleInsertKeyDown}
+              disabled={insertSaving}
+              aria-label={t("history.edit.insertTitle")}
+            />
+            <div className="ui-history-message-edit-footer">
+              <span className="ui-history-message-edit-hint">{t("history.edit.editHint")}</span>
+              <span className="ui-history-message-edit-buttons">
+                <button
+                  type="button"
+                  className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                  onClick={onCancelInsert}
+                  disabled={insertSaving}
+                >
+                  <X size={12} />
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                  style={{ color: "var(--success)" }}
+                  onClick={onSubmitInsert}
+                  disabled={insertSaving || !insertDraft.trim()}
+                >
+                  <Check size={12} />
+                  {t("common.save")}
+                </button>
+              </span>
+            </div>
+          </div>
+        )}
       </div>
       {roleKind === "user" && (
         <span className="ui-history-message-avatar" aria-hidden="true">
@@ -311,8 +544,32 @@ export function SessionDetailPane({
   onJumpToMessage,
   onToggleStar,
   onLoadMoreMessages,
+  canEditMessages,
+  onRequestMessageEdit,
+  onSaveMessageEdit,
+  onDeleteMessage,
+  onInsertMessage,
+  onOpenEditAudit,
 }: SessionDetailPaneProps) {
   const { t, language } = useI18n();
+  // 消息编辑/插入的交互态：draft 提升到 pane，避免虚拟滚动卸载卡片时丢失输入。
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [insertIndex, setInsertIndex] = useState<number | null>(null);
+  const [insertRole, setInsertRole] = useState<InsertRole>("user");
+  const [insertDraft, setInsertDraft] = useState("");
+  const [insertSaving, setInsertSaving] = useState(false);
+
+  useEffect(() => {
+    setEditingIndex(null);
+    setEditDraft("");
+    setEditSaving(false);
+    setInsertIndex(null);
+    setInsertRole("user");
+    setInsertDraft("");
+    setInsertSaving(false);
+  }, [activeView?.sessionKey]);
   // matchIndices.includes(idx) 在 visibleMessages.map 内对每个可见消息做 O(N) 扫描，
   // 当匹配数 N 和可见消息数 M 都达到几百时累计 O(N·M)。改 Set 后是 O(1) lookup。
   const matchSet = useMemo(() => new Set(matchIndices), [matchIndices]);
@@ -354,6 +611,54 @@ export function SessionDetailPane({
       .writeText(text)
       .then(() => toast.success(t("history.detail.copySuccess", { label })))
       .catch((err) => toast.error(t("history.detail.copyFailed"), { description: String(err) }));
+  };
+
+  const copyMessageContent = (message: HistoryMessage) => {
+    void navigator.clipboard
+      .writeText(message.editable_text ?? message.content)
+      .then(() => toast.success(t("history.edit.copySuccess")))
+      .catch((err) => toast.error(t("history.detail.copyFailed"), { description: String(err) }));
+  };
+
+  const startEditMessage = async (index: number, message: HistoryMessage) => {
+    if (!(await onRequestMessageEdit())) return;
+    setInsertIndex(null);
+    setEditingIndex(index);
+    setEditDraft(message.editable_text ?? message.content);
+  };
+
+  const submitEditMessage = async (message: HistoryMessage) => {
+    if (editSaving || !editDraft.trim()) return;
+    setEditSaving(true);
+    try {
+      if (await onSaveMessageEdit(message, editDraft)) {
+        setEditingIndex(null);
+        setEditDraft("");
+      }
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const startInsertMessage = async (index: number) => {
+    if (!(await onRequestMessageEdit())) return;
+    setEditingIndex(null);
+    setInsertIndex(index);
+    setInsertRole("user");
+    setInsertDraft("");
+  };
+
+  const submitInsertMessage = async (message: HistoryMessage) => {
+    if (insertSaving || !insertDraft.trim()) return;
+    setInsertSaving(true);
+    try {
+      if (await onInsertMessage(message, insertRole, insertDraft)) {
+        setInsertIndex(null);
+        setInsertDraft("");
+      }
+    } finally {
+      setInsertSaving(false);
+    }
   };
 
   const locationText = [
@@ -439,6 +744,16 @@ export function SessionDetailPane({
               Diff
             </button>
             <button
+              onClick={onOpenEditAudit}
+              aria-label={t("history.edit.auditTitle")}
+              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+              style={{ color: "var(--text-secondary)" }}
+              title={t("history.edit.auditTitle")}
+            >
+              <History size={12} />
+              {t("history.edit.auditOpen")}
+            </button>
+            <button
               onClick={onToggleStar}
               aria-label={activeView.starred ? t("history.detail.unstar") : t("history.detail.star")}
               className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
@@ -517,6 +832,33 @@ export function SessionDetailPane({
                     query={sessionQuery}
                     messageRefs={messageRefs}
                     measureElement={messageVirtualizer.measureElement}
+                    canEdit={canEditMessages}
+                    isEditing={editingIndex === virtualRow.index}
+                    editDraft={editDraft}
+                    editSaving={editSaving}
+                    onEditDraftChange={setEditDraft}
+                    onStartEdit={() => {
+                      void startEditMessage(virtualRow.index, msg);
+                    }}
+                    onCancelEdit={() => setEditingIndex(null)}
+                    onSubmitEdit={() => {
+                      void submitEditMessage(msg);
+                    }}
+                    isInserting={insertIndex === virtualRow.index}
+                    insertRole={insertRole}
+                    insertDraft={insertDraft}
+                    insertSaving={insertSaving}
+                    onInsertRoleChange={setInsertRole}
+                    onInsertDraftChange={setInsertDraft}
+                    onStartInsert={() => {
+                      void startInsertMessage(virtualRow.index);
+                    }}
+                    onCancelInsert={() => setInsertIndex(null)}
+                    onSubmitInsert={() => {
+                      void submitInsertMessage(msg);
+                    }}
+                    onCopyMessage={() => copyMessageContent(msg)}
+                    onDeleteMessage={() => onDeleteMessage(msg)}
                   />
                 </div>
               );

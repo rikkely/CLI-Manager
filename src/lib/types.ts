@@ -261,6 +261,34 @@ export interface HistoryMessage {
   output_tokens?: number;
   cache_creation_tokens?: number;
   cache_read_tokens?: number;
+  /** 源 JSONL 文件物理行号（0-based）；子任务聚合消息/旧快照为 null，不可编辑。 */
+  line_index?: number | null;
+  /** 该行存在规范文本块（Claude text / Codex input_text|output_text）时才允许编辑与删除。 */
+  editable?: boolean;
+  /** 编辑预填与写回守卫用的规范文本；与展示 content 一致时后端省略（用 content 兜底）。 */
+  editable_text?: string | null;
+}
+
+/** 会话历史消息编辑审计记录（history_edit_audit 表行）。 */
+export interface HistoryEditAuditEntry {
+  id: number;
+  session_key: string;
+  session_id: string;
+  source: string;
+  file_path: string;
+  op: "edit" | "delete" | "insert" | "restore" | string;
+  line_index: number | null;
+  role: string | null;
+  before_text: string | null;
+  after_text: string | null;
+  backup_path: string | null;
+  created_at: number;
+}
+
+export interface HistoryBackupStatus {
+  hasBackup: boolean;
+  backupPath: string | null;
+  backupAt: number | null;
 }
 
 export interface HistoryToolCount {

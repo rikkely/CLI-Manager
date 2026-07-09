@@ -5203,6 +5203,164 @@
   padding: 0.1rem 0 0;
 }
 
+/* 消息级编辑：气泡头部 hover 操作栏 */
+.ui-history-message-header {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.ui-history-message-card[data-role="user"] .ui-history-message-header {
+  flex-direction: row-reverse;
+}
+
+.ui-history-message-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.06rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 130ms ease;
+}
+
+.ui-history-message-card:hover .ui-history-message-actions,
+.ui-history-message-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ui-history-message-action {
+  display: inline-flex;
+  height: 1.3rem;
+  width: 1.3rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 130ms ease, background-color 130ms ease;
+}
+
+.ui-history-message-action:hover {
+  background-color: color-mix(in srgb, var(--on-surface) 7%, transparent);
+  color: var(--text-secondary);
+}
+
+.ui-history-message-action[data-danger="true"]:hover {
+  background-color: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.ui-history-message-action:focus-visible {
+  outline: 2px solid var(--interactive-focus-ring);
+  outline-offset: 1px;
+}
+
+/* 气泡内行内编辑态 */
+.ui-history-message-edit {
+  display: flex;
+  min-width: min(30rem, 62vw);
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ui-history-message-edit textarea,
+.ui-history-message-insert textarea {
+  width: 100%;
+  min-height: 4.6rem;
+  max-height: 16rem;
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 92%, transparent);
+  color: var(--on-surface);
+  padding: 0.45rem 0.55rem;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.ui-history-message-edit textarea:focus-visible,
+.ui-history-message-insert textarea:focus-visible {
+  outline: 2px solid var(--interactive-focus-ring);
+  outline-offset: 1px;
+}
+
+.ui-history-message-edit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ui-history-message-edit-hint {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-ui-mono);
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-history-message-edit-buttons {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* 在此后插入：气泡下方的行内小表单 */
+.ui-history-message-insert {
+  display: flex;
+  width: min(34rem, 100%);
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border) 55%);
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--accent) 4%, var(--surface-container-lowest) 96%);
+  padding: 0.55rem 0.65rem;
+}
+
+.ui-history-message-insert-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.ui-history-message-insert-roles {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.ui-history-message-insert-role {
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: 999px;
+  background-color: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  transition: color 130ms ease, background-color 130ms ease, border-color 130ms ease;
+}
+
+.ui-history-message-insert-role[data-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-primary);
+}
+
 @media (max-width: 720px) {
   .ui-history-message-stack {
     max-width: calc(100% - 3rem);
