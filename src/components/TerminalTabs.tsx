@@ -710,6 +710,7 @@ function DragOverlayTab({
 interface PaneTabBarProps {
   pane: TerminalPaneLeaf;
   sessions: TerminalSession[];
+  visibleSessionIds?: Set<string> | null;
   projects: Project[];
   worktrees: WorktreeRecord[];
   allPanes: TerminalPaneLeaf[];
@@ -749,6 +750,7 @@ interface PaneTabBarProps {
 function PaneTabBar({
   pane,
   sessions,
+  visibleSessionIds,
   projects,
   worktrees,
   allPanes,
@@ -815,7 +817,13 @@ function PaneTabBar({
   }, [worktrees]);
   const paneSessions = pane.sessionIds
     .map((id) => sessions.find((session) => session.id === id))
+    .filter((session) => !visibleSessionIds || (session && visibleSessionIds.has(session.id)))
     .filter((session): session is TerminalSession => Boolean(session));
+  const paneSessionIds = paneSessions.map((session) => session.id);
+  const activePaneTabId =
+    activeSessionId && paneSessionIds.includes(activeSessionId)
+      ? activeSessionId
+      : paneSessionIds[0] ?? null;
   const otherPanes = allPanes.filter((item) => item.id !== pane.id && item.sessionIds.length > 0);
   const paneFullscreenLabel = isPaneFullscreen
     ? t("terminal.toolbar.exitImmersiveFullscreen")
@@ -869,14 +877,13 @@ function PaneTabBar({
 
   const scrollActivePaneTabIntoView = useCallback(() => {
     const element = tabScrollRef.current;
-    const activeSessionId = pane.activeSessionId;
-    if (!element || !activeSessionId) {
+    if (!element || !activePaneTabId) {
       updateTabScrollState();
       return;
     }
 
     const activeTab = Array.from(element.querySelectorAll<HTMLElement>("[data-terminal-tab-id]"))
-      .find((node) => node.dataset.terminalTabId === activeSessionId);
+      .find((node) => node.dataset.terminalTabId === activePaneTabId);
     if (!activeTab) {
       updateTabScrollState();
       return;
@@ -893,7 +900,7 @@ function PaneTabBar({
     }
 
     const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
-    const isLastTab = pane.sessionIds[pane.sessionIds.length - 1] === activeSessionId;
+    const isLastTab = paneSessionIds[paneSessionIds.length - 1] === activePaneTabId;
     // 末尾标签吸附到最右，避免容器 padding / 标签 margin 残留导致右滚按钮仍可点
     const clampedScrollLeft = isLastTab
       ? maxScrollLeft
@@ -908,7 +915,7 @@ function PaneTabBar({
       tabScrollUpdateTimeoutRef.current = null;
       updateTabScrollState();
     }, 220);
-  }, [pane.activeSessionId, pane.id, pane.sessionIds, updateTabScrollState]);
+  }, [activePaneTabId, pane.id, paneSessionIds, updateTabScrollState]);
 
   const activatePaneSessionAt = useCallback((index: number) => {
     const session = paneSessions[index];
@@ -921,22 +928,22 @@ function PaneTabBar({
   }, [onCloseSessions]);
 
   const closeOtherPaneSessions = useCallback((sessionId: string, anchor?: SplitPickerAnchor) => {
-    const index = pane.sessionIds.indexOf(sessionId);
+    const index = paneSessionIds.indexOf(sessionId);
     if (index < 0) return;
-    closePaneSessions(pane.sessionIds.filter((id) => id !== sessionId), anchor);
-  }, [closePaneSessions, pane.sessionIds]);
+    closePaneSessions(paneSessionIds.filter((id) => id !== sessionId), anchor);
+  }, [closePaneSessions, paneSessionIds]);
 
   const closePaneSessionsToLeft = useCallback((sessionId: string, anchor?: SplitPickerAnchor) => {
-    const index = pane.sessionIds.indexOf(sessionId);
+    const index = paneSessionIds.indexOf(sessionId);
     if (index <= 0) return;
-    closePaneSessions(pane.sessionIds.slice(0, index), anchor);
-  }, [closePaneSessions, pane.sessionIds]);
+    closePaneSessions(paneSessionIds.slice(0, index), anchor);
+  }, [closePaneSessions, paneSessionIds]);
 
   const closePaneSessionsToRight = useCallback((sessionId: string, anchor?: SplitPickerAnchor) => {
-    const index = pane.sessionIds.indexOf(sessionId);
+    const index = paneSessionIds.indexOf(sessionId);
     if (index < 0) return;
-    closePaneSessions(pane.sessionIds.slice(index + 1), anchor);
-  }, [closePaneSessions, pane.sessionIds]);
+    closePaneSessions(paneSessionIds.slice(index + 1), anchor);
+  }, [closePaneSessions, paneSessionIds]);
 
   useEffect(() => {
     setTabListOpen(false);
@@ -994,7 +1001,7 @@ function PaneTabBar({
 
   useEffect(() => {
     scrollActivePaneTabIntoView();
-  }, [pane.activeSessionId, pane.sessionIds.length, scrollActivePaneTabIntoView]);
+  }, [activePaneTabId, paneSessionIds.length, scrollActivePaneTabIntoView]);
 
   return (
     <div
@@ -1021,7 +1028,7 @@ function PaneTabBar({
         data-can-scroll-left={tabScrollState.canScrollLeft ? "true" : "false"}
         data-can-scroll-right={tabScrollState.canScrollRight ? "true" : "false"}
       >
-        <SortableContext items={pane.sessionIds} strategy={horizontalListSortingStrategy}>
+        <SortableContext items={paneSessionIds} strategy={horizontalListSortingStrategy}>
           {paneSessions.map((session) => (
             <SortableTab
               key={session.id}
@@ -1198,6 +1205,7 @@ function PaneTabBar({
 interface PaneLeafViewProps {
   pane: TerminalPaneLeaf;
   sessions: TerminalSession[];
+  visibleSessionIds?: Set<string> | null;
   projects: Project[];
   worktrees: WorktreeRecord[];
   allPanes: TerminalPaneLeaf[];
@@ -1243,6 +1251,7 @@ interface PaneLeafViewProps {
 function PaneLeafView({
   pane,
   sessions,
+  visibleSessionIds,
   projects,
   worktrees,
   allPanes,
@@ -1287,6 +1296,13 @@ function PaneLeafView({
   const paneSessions = pane.sessionIds
     .map((id) => sessions.find((session) => session.id === id))
     .filter((session): session is TerminalSession => Boolean(session));
+  const visiblePaneSessionIds = visibleSessionIds
+    ? pane.sessionIds.filter((id) => visibleSessionIds.has(id))
+    : pane.sessionIds;
+  const effectivePaneActiveSessionId =
+    pane.activeSessionId && visiblePaneSessionIds.includes(pane.activeSessionId)
+      ? pane.activeSessionId
+      : visiblePaneSessionIds[0] ?? null;
 
   return (
     <div className="ui-terminal-pane flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
@@ -1294,6 +1310,7 @@ function PaneLeafView({
         <PaneTabBar
           pane={pane}
           sessions={sessions}
+          visibleSessionIds={visibleSessionIds}
           projects={projects}
           worktrees={worktrees}
           allPanes={allPanes}
@@ -1332,14 +1349,16 @@ function PaneLeafView({
       <div
         className="ui-terminal-pane-content relative min-h-0 flex-1 overflow-hidden"
         onMouseDownCapture={() => {
-          if (pane.activeSessionId && pane.activeSessionId !== activeSessionId) onActivateSession(pane.activeSessionId);
+          if (effectivePaneActiveSessionId && effectivePaneActiveSessionId !== activeSessionId) {
+            onActivateSession(effectivePaneActiveSessionId);
+          }
         }}
       >
         {paneSessions.map((session) => (
           <div
             key={session.id}
             className="absolute inset-0"
-            style={{ display: session.id === pane.activeSessionId ? "block" : "none" }}
+            style={{ display: session.id === effectivePaneActiveSessionId ? "block" : "none" }}
           >
             {session.kind === "file-editor" ? (
               <FileEditorPane
@@ -1352,13 +1371,13 @@ function PaneLeafView({
               <SubagentTranscriptView
                 sessionId={session.id}
                 title={session.title}
-                isVisible={!historyActive && isLayoutVisible && session.id === pane.activeSessionId}
+                isVisible={!historyActive && isLayoutVisible && session.id === effectivePaneActiveSessionId}
               />
             ) : (
               <XTermTerminal
                 sessionId={session.id}
                 isActive={!historyActive && session.id === activeSessionId}
-                isVisible={!historyActive && isLayoutVisible && session.id === pane.activeSessionId}
+                isVisible={!historyActive && isLayoutVisible && session.id === effectivePaneActiveSessionId}
                 fontSize={fontSize}
                 fontFamily={fontFamily}
                 resolvedTheme={resolvedTheme}
@@ -1368,18 +1387,18 @@ function PaneLeafView({
                 onNewTab={onNewTab}
                 onCloseSession={() => onCloseSessions([session.id])}
                 onCloseOthers={
-                  pane.sessionIds.length > 1
-                    ? () => onCloseSessions(pane.sessionIds.filter((id) => id !== session.id))
+                  visiblePaneSessionIds.length > 1
+                    ? () => onCloseSessions(visiblePaneSessionIds.filter((id) => id !== session.id))
                     : undefined
                 }
                 onCloseToLeft={
-                  pane.sessionIds.indexOf(session.id) > 0
-                    ? () => onCloseSessions(pane.sessionIds.slice(0, pane.sessionIds.indexOf(session.id)))
+                  visiblePaneSessionIds.indexOf(session.id) > 0
+                    ? () => onCloseSessions(visiblePaneSessionIds.slice(0, visiblePaneSessionIds.indexOf(session.id)))
                     : undefined
                 }
                 onCloseToRight={
-                  pane.sessionIds.indexOf(session.id) < pane.sessionIds.length - 1
-                    ? () => onCloseSessions(pane.sessionIds.slice(pane.sessionIds.indexOf(session.id) + 1))
+                  visiblePaneSessionIds.indexOf(session.id) < visiblePaneSessionIds.length - 1
+                    ? () => onCloseSessions(visiblePaneSessionIds.slice(visiblePaneSessionIds.indexOf(session.id) + 1))
                     : undefined
                 }
                 onSplitRight={(point) => onOpenSplitPicker(session.id, "horizontal", point)}
@@ -1457,6 +1476,16 @@ function didPaneHiddenBackgroundChange(prevHidden: Set<string>, nextHidden: Set<
   return false;
 }
 
+function areSessionIdSetsEqual(prev?: Set<string> | null, next?: Set<string> | null): boolean {
+  if (prev === next) return true;
+  if (!prev || !next) return false;
+  if (prev.size !== next.size) return false;
+  for (const id of prev) {
+    if (!next.has(id)) return false;
+  }
+  return true;
+}
+
 function getPaneSiblingsSignature(panes: TerminalPaneLeaf[]): string {
   return panes.map((pane) => `${pane.id}:${pane.sessionIds.length}`).join("|");
 }
@@ -1477,6 +1506,7 @@ function arePaneLeafViewPropsEqual(prevProps: PaneLeafViewProps, nextProps: Pane
   if (prevProps.terminalBackgroundEnabled !== nextProps.terminalBackgroundEnabled) return false;
   if (prevProps.terminalBackgroundImagePath !== nextProps.terminalBackgroundImagePath) return false;
   if (prevProps.hideTabBar !== nextProps.hideTabBar) return false;
+  if (!areSessionIdSetsEqual(prevProps.visibleSessionIds, nextProps.visibleSessionIds)) return false;
   if (getPaneSiblingsSignature(prevProps.allPanes) !== getPaneSiblingsSignature(nextProps.allPanes)) return false;
   if ((prevProps.activeDropPreview?.paneId ?? null) !== (nextProps.activeDropPreview?.paneId ?? null)) return false;
   if ((prevProps.activeDropPreview?.edge ?? null) !== (nextProps.activeDropPreview?.edge ?? null)) return false;
@@ -1918,24 +1948,28 @@ export function TerminalTabs({
     }
     return next;
   }, [projectScopeProjectId, projectScopedTerminalViewEnabled, sessionProjectIds, sessions]);
-  const visiblePaneTree = useMemo(
+  const scopedPaneTree = useMemo(
     () => (scopedSessionIds ? filterPaneTreeBySessionIds(paneTree, scopedSessionIds) : paneTree),
     [paneTree, scopedSessionIds]
   );
+  const renderPaneTree = paneTree;
   const visibleSessions = useMemo(
     () => (scopedSessionIds ? sessions.filter((session) => scopedSessionIds.has(session.id)) : sessions),
     [scopedSessionIds, sessions]
   );
-  const allPanes = useMemo(() => collectPaneLeaves(visiblePaneTree), [visiblePaneTree]);
+  const allPanes = useMemo(() => collectPaneLeaves(renderPaneTree), [renderPaneTree]);
   const activeFullscreenPaneId = useMemo(() => {
     if (!fullscreenPaneId) return null;
-    return allPanes.some((pane) => pane.id === fullscreenPaneId) ? fullscreenPaneId : null;
-  }, [allPanes, fullscreenPaneId]);
+    const pane = allPanes.find((item) => item.id === fullscreenPaneId);
+    if (!pane) return null;
+    if (scopedSessionIds && !pane.sessionIds.some((sessionId) => scopedSessionIds.has(sessionId))) return null;
+    return fullscreenPaneId;
+  }, [allPanes, fullscreenPaneId, scopedSessionIds]);
   const preferredScopedSessionId = useMemo(() => {
     if (!scopedSessionIds) return null;
     if (activeSessionId && scopedSessionIds.has(activeSessionId)) return activeSessionId;
-    return findFirstSessionId(visiblePaneTree);
-  }, [activeSessionId, scopedSessionIds, visiblePaneTree]);
+    return findFirstSessionId(scopedPaneTree);
+  }, [activeSessionId, scopedPaneTree, scopedSessionIds]);
   const effectiveActiveSessionId = preferredScopedSessionId ?? activeSessionId;
   const activeSession = useMemo(
     () => {
@@ -2955,7 +2989,8 @@ export function TerminalTabs({
     <MemoPaneLeafView
       key={pane.id}
       pane={pane}
-      sessions={visibleSessions}
+      sessions={sessions}
+      visibleSessionIds={scopedSessionIds}
       projects={projects}
       worktrees={worktrees}
       allPanes={allPanes}
@@ -3026,7 +3061,8 @@ export function TerminalTabs({
     handleSubmitTabEdit,
     resolvedTheme,
     effectiveActiveSessionId,
-    visibleSessions,
+    scopedSessionIds,
+    sessions,
     worktrees,
     showBackgroundForSession,
     tabNotifications,
@@ -3101,7 +3137,7 @@ export function TerminalTabs({
           style={{ display: historyActive ? "none" : "flex" }}
         >
           <div className="flex-1 min-h-0 min-w-0">
-            {visiblePaneTree && visibleSessions.length > 0 ? (
+            {renderPaneTree && visibleSessions.length > 0 ? (
               <DndContext
                 sensors={sensors}
                 collisionDetection={terminalTabCollisionDetection}
@@ -3110,7 +3146,7 @@ export function TerminalTabs({
                 onDragCancel={clearDragState}
                 onDragEnd={handleDragEnd}
               >
-                <SplitTerminalView node={visiblePaneTree} renderLeaf={renderLeaf} fullscreenLeafId={activeFullscreenPaneId} />
+                <SplitTerminalView node={renderPaneTree} renderLeaf={renderLeaf} fullscreenLeafId={activeFullscreenPaneId} />
                 <DragOverlay dropAnimation={null}>
                   {activeDragSession ? (
                     <DragOverlayTab
