@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
+import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
@@ -80,6 +80,7 @@ interface HistoryListPaneProps {
   onToggleSessionSelection: (sessionKey: string) => void;
   onOpenSession: (sessionKey: string) => void;
   onResumeSession: (session: HistorySessionView) => void;
+  onConvertSession: (session: HistorySessionView) => void;
   onDeleteSession: (session: HistorySessionView) => void;
   onDeleteSelected: () => void;
   onOpenHit: (hit: HistorySearchHit) => void;
@@ -330,6 +331,7 @@ export function HistoryListPane({
   onToggleSessionSelection,
   onOpenSession,
   onResumeSession,
+  onConvertSession,
   onDeleteSession,
   onDeleteSelected,
   onOpenHit,
@@ -447,6 +449,13 @@ export function HistoryListPane({
     setContextMenu(null);
     onResumeSession(session);
   }, [contextMenu, onResumeSession]);
+
+  const handleContextMenuConvert = useCallback(() => {
+    if (!contextMenu) return;
+    const session = contextMenu.session;
+    setContextMenu(null);
+    onConvertSession(session);
+  }, [contextMenu, onConvertSession]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -1031,6 +1040,14 @@ export function HistoryListPane({
             <button className="context-menu-item" role="menuitem" onClick={handleContextMenuResume}>
               <RefreshCw size={13} aria-hidden="true" />
               <span>{t("history.menu.resumeInTerminal")}</span>
+            </button>
+            <button className="context-menu-item" role="menuitem" onClick={handleContextMenuConvert}>
+              <ArrowRightLeft size={13} aria-hidden="true" />
+              <span>
+                {contextMenu.session.source === "claude"
+                  ? t("history.menu.convertToCodex")
+                  : t("history.menu.convertToClaude")}
+              </span>
             </button>
             <button className="context-menu-item danger" role="menuitem" onClick={handleContextMenuDelete}>
               <Trash2 size={13} aria-hidden="true" />

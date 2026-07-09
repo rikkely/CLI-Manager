@@ -1,18 +1,16 @@
 import type { ComponentType } from "react";
-import {
-  Claude,
-  DeepSeek,
-  Gemini,
-  Grok,
-  Kimi,
-  Meta,
-  Mistral,
-  Ollama,
-  OpenAI,
-  OpenRouter,
-  Qwen,
-  Zhipu,
-} from "@lobehub/icons";
+import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
+import DeepSeekColor from "@lobehub/icons/es/DeepSeek/components/Color";
+import GeminiColor from "@lobehub/icons/es/Gemini/components/Color";
+import Grok from "@lobehub/icons/es/Grok/components/Mono";
+import KimiColor from "@lobehub/icons/es/Kimi/components/Color";
+import MetaColor from "@lobehub/icons/es/Meta/components/Color";
+import MistralColor from "@lobehub/icons/es/Mistral/components/Color";
+import Ollama from "@lobehub/icons/es/Ollama/components/Mono";
+import OpenAI from "@lobehub/icons/es/OpenAI/components/Mono";
+import OpenRouter from "@lobehub/icons/es/OpenRouter/components/Mono";
+import QwenColor from "@lobehub/icons/es/Qwen/components/Color";
+import ZhipuColor from "@lobehub/icons/es/Zhipu/components/Color";
 import type { LucideIcon } from "lucide-react";
 
 /**
@@ -41,16 +39,16 @@ type BrandColorIcon = ComponentType<{ size?: number | string; className?: string
 // 有彩色 logo 的厂商用 `.Color`；本身是单色 logo 的（OpenAI / Grok / Ollama / OpenRouter）
 // 用基础组件，由 currentColor 上色（调用处给 --on-surface）。
 const VENDOR_ICON: Record<VendorKey, BrandColorIcon> = {
-  claude: Claude.Color,
+  claude: ClaudeColor,
   openai: OpenAI,
-  gemini: Gemini.Color,
-  deepseek: DeepSeek.Color,
-  qwen: Qwen.Color,
-  kimi: Kimi.Color,
-  zhipu: Zhipu.Color,
-  mistral: Mistral.Color,
+  gemini: GeminiColor,
+  deepseek: DeepSeekColor,
+  qwen: QwenColor,
+  kimi: KimiColor,
+  zhipu: ZhipuColor,
+  mistral: MistralColor,
   grok: Grok,
-  meta: Meta.Color,
+  meta: MetaColor,
   ollama: Ollama,
   openrouter: OpenRouter,
 };

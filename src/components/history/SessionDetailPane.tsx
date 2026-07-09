@@ -1,5 +1,5 @@
 ﻿import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookCopy, ChevronDown, ChevronRight, Copy, GitCompare, Star, Terminal } from "lucide-react";
+import { ArrowRightLeft, BookCopy, ChevronDown, ChevronRight, Copy, GitCompare, Star, Terminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { toast } from "sonner";
 import aiAvatarUrl from "../../assets/history-ai-avatar.svg";
@@ -51,6 +51,7 @@ interface SessionDetailPaneProps {
   onOpenPrompt: () => void;
   onOpenDiff: () => void;
   onResumeSession: () => void;
+  onConvertSession: () => void;
   onJumpToMessage: (messageIndex: number) => void;
   onToggleStar: () => void;
   onLoadMoreMessages: () => void;
@@ -306,6 +307,7 @@ export function SessionDetailPane({
   onOpenPrompt,
   onOpenDiff,
   onResumeSession,
+  onConvertSession,
   onJumpToMessage,
   onToggleStar,
   onLoadMoreMessages,
@@ -404,6 +406,17 @@ export function SessionDetailPane({
             >
               <Terminal size={12} />
               {t("history.detail.resume")}
+            </button>
+            <button
+              onClick={onConvertSession}
+              disabled={loadingSessionDetail || !activeSession}
+              aria-label={activeView?.source === "claude" ? t("history.detail.convertToCodex") : t("history.detail.convertToClaude")}
+              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+              style={{ color: "var(--accent)" }}
+              title={activeView?.source === "claude" ? t("history.detail.convertToCodexTitle") : t("history.detail.convertToClaudeTitle")}
+            >
+              <ArrowRightLeft size={12} />
+              {activeView?.source === "claude" ? t("history.detail.convertToCodexShort") : t("history.detail.convertToClaudeShort")}
             </button>
             <button
               onClick={onOpenPrompt}

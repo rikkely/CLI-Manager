@@ -521,6 +521,7 @@ pub fn run() {
             commands::shell::open_folder_in_explorer,
             commands::history::history_list_sessions,
             commands::history::history_get_session,
+            commands::history::history_convert_session,
             commands::history::history_delete_session,
             commands::history::history_search,
             commands::history::history_list_prompts,

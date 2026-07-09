@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useHistoryStore } from "../stores/historyStore";
 import { useTerminalStore } from "../stores/terminalStore";
@@ -129,6 +130,31 @@ type DeleteIntent =
   | { type: "single"; session: HistorySessionView }
   | { type: "bulk"; sessionKeys: string[] };
 
+type HistoryTargetSource = "claude" | "codex";
+
+interface HistoryConversionResult {
+  source: string;
+  targetSource: HistoryTargetSource;
+  sessionId: string;
+  projectKey: string;
+  filePath: string;
+  cwd?: string | null;
+  messageCount: number;
+  resumeCommand: string;
+  summary: unknown;
+}
+
+function oppositeHistorySource(source: string): HistoryTargetSource | null {
+  const normalized = source.trim().toLowerCase();
+  if (normalized === "claude") return "codex";
+  if (normalized === "codex") return "claude";
+  return null;
+}
+
+function makeConvertedSessionKey(result: HistoryConversionResult): string {
+  return `${result.targetSource}:${result.sessionId}:${result.filePath}`;
+}
+
 export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const { t } = useI18n();
   const loadingSessions = useHistoryStore((s) => s.loadingSessions);
@@ -156,6 +182,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const loadSessions = useHistoryStore((s) => s.loadSessions);
   const loadMoreSessions = useHistoryStore((s) => s.loadMoreSessions);
   const openSession = useHistoryStore((s) => s.openSession);
+  const addConvertedSession = useHistoryStore((s) => s.addConvertedSession);
   const deleteSession = useHistoryStore((s) => s.deleteSession);
   const openSearchHit = useHistoryStore((s) => s.openSearchHit);
   const setGlobalQuery = useHistoryStore((s) => s.setGlobalQuery);
@@ -165,6 +192,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const clearFocusedMessage = useHistoryStore((s) => s.clearFocusedMessage);
   const updateMeta = useHistoryStore((s) => s.updateMeta);
   const storedHistorySidebarWidth = useSettingsStore((s) => s.historySidebarWidth);
+  const claudeConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
+  const codexConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const historySidebarWidth = normalizeHistorySidebarWidth(storedHistorySidebarWidth);
   const updateSetting = useSettingsStore((s) => s.update);
   const projects = useProjectStore((s) => s.projects);
@@ -739,6 +768,39 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     [closeHistory, createSession, projects, t]
   );
 
+  const convertSession = useCallback(
+    async (session: HistorySessionView | HistorySessionDetail, targetSource?: HistoryTargetSource | null) => {
+      const target = targetSource ?? oppositeHistorySource(session.source);
+      if (!target) {
+        toast.error(t("history.toast.convertFailed"), { description: t("history.toast.convertUnsupported") });
+        return;
+      }
+
+      try {
+        const result = await invoke<HistoryConversionResult>("history_convert_session", {
+          filePath: session.file_path,
+          source: session.source,
+          projectKey: session.project_key,
+          targetSource: target,
+          claudeConfigDir: claudeConfigDir?.trim() || null,
+          codexConfigDir: codexConfigDir?.trim() || null,
+        });
+
+        const sessionKey = addConvertedSession(result.summary);
+        await openSession(sessionKey || makeConvertedSessionKey(result));
+        toast.success(t("history.toast.convertSuccess", {
+          source: session.source === "claude" ? "Claude" : "Codex",
+          target: result.targetSource === "claude" ? "Claude" : "Codex",
+        }), {
+          description: result.resumeCommand,
+        });
+      } catch (err) {
+        toast.error(t("history.toast.convertFailed"), { description: String(err) });
+      }
+    },
+    [addConvertedSession, claudeConfigDir, codexConfigDir, openSession, t]
+  );
+
   const jumpToMessage = async (messageIndex: number) => {
     if (!activeView) return;
     try {
@@ -805,6 +867,9 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           onToggleSessionSelection={handleToggleSessionSelection}
           onOpenSession={openSessionSafe}
           onResumeSession={resumeSessionInTerminal}
+          onConvertSession={(session) => {
+            void convertSession(session);
+          }}
           onDeleteSession={(session) => setDeleteIntent({ type: "single", session })}
           onDeleteSelected={handleRequestBulkDelete}
           onOpenHit={(hit) => {
@@ -857,6 +922,9 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
             onOpenDiff={() => setDiffOpen(true)}
             onResumeSession={() => {
               void resumeConversation();
+            }}
+            onConvertSession={() => {
+              if (activeSession) void convertSession(activeSession);
             }}
             onJumpToMessage={(messageIndex) => {
               void jumpToMessage(messageIndex);
