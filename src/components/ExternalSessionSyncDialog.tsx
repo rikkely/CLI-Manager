@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -7,9 +7,13 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { Select } from "./ui/select";
 import { Check, RefreshCw } from "./icons";
 import { useExternalSessionSyncStore, type ExternalSessionProjectCandidate } from "../stores/externalSessionSyncStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import { useI18n, type TranslationKey } from "../lib/i18n";
+import { getOsPlatform, normalizeShellKey, type OsPlatform } from "../lib/shell";
+import { getEnabledTerminalShellOptions } from "../lib/terminalShellProfiles";
 import type { HistorySource } from "../lib/types";
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string;
@@ -96,12 +100,45 @@ export function ExternalSessionSyncDialog() {
   const syncing = useExternalSessionSyncStore((state) => state.syncingProjects);
   const closeProjectDialog = useExternalSessionSyncStore((state) => state.closeProjectDialog);
   const syncProjectCandidates = useExternalSessionSyncStore((state) => state.syncProjectCandidates);
+  const defaultShell = useSettingsStore((state) => state.defaultShell);
+  const terminalShellProfiles = useSettingsStore((state) => state.terminalShellProfiles);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [osPlatform, setOsPlatform] = useState<OsPlatform>("unknown");
+  const [shell, setShell] = useState("");
+  const shellFieldId = useId();
+
+  const resolveDefaultShell = useCallback((platform: OsPlatform) => {
+    const enabledOptions = getEnabledTerminalShellOptions(platform, terminalShellProfiles);
+    const normalizedDefaultShell = normalizeShellKey(defaultShell);
+    const preferred =
+      enabledOptions.find((option) => option.value === defaultShell)?.value ??
+      enabledOptions.find((option) => normalizeShellKey(option.value) === normalizedDefaultShell)?.value;
+    return preferred ?? enabledOptions[0]?.value ?? "";
+  }, [defaultShell, terminalShellProfiles]);
 
   useEffect(() => {
     if (!open) return;
     setSelectedKeys(new Set(candidates.map((candidate) => candidate.key)));
   }, [candidates, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      const platform = await getOsPlatform();
+      if (cancelled) return;
+      setOsPlatform(platform);
+      setShell(resolveDefaultShell(platform));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, resolveDefaultShell]);
+
+  const shellOptions = useMemo(
+    () => getEnabledTerminalShellOptions(osPlatform, terminalShellProfiles),
+    [osPlatform, terminalShellProfiles]
+  );
 
   const groups = useMemo(() => ({
     codex: candidates.filter((candidate) => candidate.source === "codex"),
@@ -196,13 +233,29 @@ export function ExternalSessionSyncDialog() {
         </div>
 
         <DialogFooter className="border-t border-border/70 px-5 py-4">
+          <div className="mr-auto flex items-center gap-2">
+            <label htmlFor={shellFieldId} className="shrink-0 text-xs text-on-surface-variant">
+              {t("externalSessionSync.shellLabel")}
+            </label>
+            <Select
+              id={shellFieldId}
+              value={shell}
+              disabled={disabled}
+              onChange={(e) => setShell(e.target.value)}
+              className="w-40 text-sm"
+            >
+              {shellOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </Select>
+          </div>
           <Button variant="outline" disabled={disabled} onClick={() => void closeProjectDialog()}>
             {t("externalSessionSync.cancel")}
           </Button>
           <Button
             variant="default"
             disabled={disabled || candidates.length === 0}
-            onClick={() => void syncProjectCandidates(Array.from(selectedKeys))}
+            onClick={() => void syncProjectCandidates(Array.from(selectedKeys), shell.trim() || undefined)}
           >
             {syncing ? t("externalSessionSync.syncing") : t("externalSessionSync.confirm")}
           </Button>

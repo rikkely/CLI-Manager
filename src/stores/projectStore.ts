@@ -353,7 +353,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const rawShell = input.shell?.trim() ?? "";
     const shell =
       normalizeShellForOs(rawShell, os) ??
-      (rawShell && !normalizeShellKey(rawShell) ? rawShell : defaultShellForOs(os));
+      (rawShell && !normalizeShellKey(rawShell)
+        ? rawShell
+        : normalizeShellForOs(useSettingsStore.getState().defaultShell, os) ?? defaultShellForOs(os));
     const project: Project = {
       id,
       name: input.name,

@@ -75,7 +75,7 @@ interface ExternalSessionSyncStore {
   openInitialDialog: () => Promise<void>;
   openManualDialog: () => Promise<void>;
   closeProjectDialog: () => Promise<void>;
-  syncProjectCandidates: (keys: string[]) => Promise<void>;
+  syncProjectCandidates: (keys: string[], shell?: string) => Promise<void>;
   accept: (candidate: ExternalSessionCandidate) => Promise<void>;
   ignore: (candidate: ExternalSessionCandidate) => Promise<void>;
   removeSyncedSessions: (keys: string[]) => Promise<void>;
@@ -446,7 +446,10 @@ function parseProjectGroupKey(key: string): string | null {
   return key.match(/^project:([^:]+)/)?.[1] ?? null;
 }
 
-async function ensureProjectsForExternalSessionGroups(groups: ExternalSessionProjectCandidate[]): Promise<number> {
+async function ensureProjectsForExternalSessionGroups(
+  groups: ExternalSessionProjectCandidate[],
+  shell?: string
+): Promise<number> {
   if (groups.length === 0) return 0;
 
   const projectStore = useProjectStore.getState();
@@ -507,6 +510,7 @@ async function ensureProjectsForExternalSessionGroups(groups: ExternalSessionPro
       cli_tool: cliTool,
       startup_cmd: "",
       env_vars: "{}",
+      shell,
       provider_overrides: "{}",
     });
     projects = [...useProjectStore.getState().projects, created];
@@ -720,7 +724,7 @@ export const useExternalSessionSyncStore = create<ExternalSessionSyncStore>((set
     await persistCurrentState(get());
   },
 
-  syncProjectCandidates: async (keys) => {
+  syncProjectCandidates: async (keys, shell) => {
     const selectedKeys = new Set(keys.map((key) => key.trim()).filter(Boolean));
     const selectedProjects = get().projectCandidates.filter((project) => selectedKeys.has(project.key));
     const candidates = selectedProjects.flatMap((project) => project.sessions);
@@ -735,7 +739,7 @@ export const useExternalSessionSyncStore = create<ExternalSessionSyncStore>((set
 
     set({ syncingProjects: true });
     try {
-      const createdProjects = await ensureProjectsForExternalSessionGroups(selectedProjects);
+      const createdProjects = await ensureProjectsForExternalSessionGroups(selectedProjects, shell);
       const candidateKeys = candidates.map((candidate) => candidate.key);
       candidateKeys.forEach((key) => deletedKeysThisSession.delete(key));
       const nextAccepted = uniqueStrings([
