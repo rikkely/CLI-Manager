@@ -3508,7 +3508,7 @@ export function TerminalTabs({
                 onDragEnd={handleDragEnd}
               >
                 <div
-                  className="ui-terminal-pane-chrome ui-workspan-tabbar flex h-9 shrink-0 items-center overflow-x-auto border-b px-1"
+                  className="ui-terminal-pane-chrome ui-workspan-tabbar flex h-9 shrink-0 items-center overflow-x-auto px-1"
                   role="tablist"
                   aria-label={t("terminal.workspan.tabList")}
                 >
