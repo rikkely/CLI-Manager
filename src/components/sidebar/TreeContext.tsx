@@ -8,6 +8,7 @@ export interface TreeActions {
   selectedId: string | null;
   selectedProjectIds: Set<string>;
   selectedGroupIds: Set<string>;
+  selectedWorktreeIds: Set<string>;
   projectScopedTerminalViewEnabled: boolean;
   terminalScope: TerminalScope;
   newGroupParentId: string | null;
@@ -28,7 +29,7 @@ export interface TreeActions {
   onProjectRenameConfirm: (id: string, newName: string) => void;
   onCancelProjectRename: () => void;
   onContextMenuProject: (e: ReactMouseEvent, p: Project) => void;
-  onSelectWorktree: (worktree: WorktreeRecord) => void;
+  onSelectWorktree: (e: ReactMouseEvent, worktree: WorktreeRecord) => void;
   onOpenWorktree: (project: Project, worktree: WorktreeRecord) => void;
   onContextMenuWorktree: (e: ReactMouseEvent, project: Project, worktree: WorktreeRecord) => void;
   onContextMenuGroup: (e: ReactMouseEvent, groupId: string, groupName: string) => void;

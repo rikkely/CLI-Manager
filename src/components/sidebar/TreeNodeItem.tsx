@@ -113,6 +113,7 @@ function TreeNodeItemImpl({
     const { project, worktree } = node;
     const treeKey = `wt:${worktree.id}`;
     const isSelected = actions.selectedId === worktree.id;
+    const isMultiSelected = actions.selectedWorktreeIds.has(worktree.id);
     const providerBadge = actions.providerBadges[`wt:${worktree.id}`];
 
     return (
@@ -123,7 +124,7 @@ function TreeNodeItemImpl({
         role="treeitem"
         data-tree-key={treeKey}
         aria-level={depth + 1}
-        aria-selected={isSelected}
+        aria-selected={isSelected || isMultiSelected}
         tabIndex={focusedNodeKey === treeKey ? 0 : -1}
         onFocus={() => onFocusNode(treeKey)}
       >
@@ -131,11 +132,11 @@ function TreeNodeItemImpl({
           className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl cursor-pointer group/item ${
             compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
           }`}
-          data-selected={isSelected ? "true" : "false"}
+          data-selected={isSelected || isMultiSelected ? "true" : "false"}
           data-status="idle"
           data-invalid={worktree.status === "missing" ? "true" : "false"}
           style={{ paddingLeft, paddingRight: compact ? 8 : 10 }}
-          onClick={() => actions.onSelectWorktree(worktree)}
+          onClick={(e) => actions.onSelectWorktree(e, worktree)}
           onDoubleClick={() => actions.onOpenWorktree(project, worktree)}
           onContextMenu={(e) => actions.onContextMenuWorktree(e, project, worktree)}
         >

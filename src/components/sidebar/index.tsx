@@ -266,10 +266,13 @@ export function Sidebar({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
+  const [selectedWorktreeIds, setSelectedWorktreeIds] = useState<Set<string>>(new Set());
   // Shift 连续多选的锚点（最近一次非 Shift 的选中项），用于按可见顺序取区间
   const selectionAnchorRef = useRef<string | null>(null);
   // 文件夹（分组）多选独立于项目多选，用单独的锚点跟踪 Shift 区间起点
   const groupSelectionAnchorRef = useRef<string | null>(null);
+  // Worktree 多选独立于项目多选，用单独的锚点跟踪 Shift 区间起点
+  const worktreeSelectionAnchorRef = useRef<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<
     | null
     | { kind: "delete-project"; project: Project }
@@ -290,6 +293,7 @@ export function Sidebar({
   const depsPromptingWorktreeIdsRef = useRef(new Set<string>());
   const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
+  const [discardTargets, setDiscardTargets] = useState<{ project: Project; worktree: WorktreeRecord }[] | null>(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -398,6 +402,23 @@ export function Sidebar({
         if (node.type === "group") {
           ids.push(node.group.id);
           if (!collapsedIds.has(node.group.id)) walk(node.children);
+        }
+      }
+    };
+    walk(tree);
+    return ids;
+  }, [tree, collapsedIds]);
+  // 可见 worktree 的扁平顺序（跳过已折叠分组/项目下隐藏的 worktree），供 Shift 范围多选取区间
+  const visibleWorktreeIds = useMemo(() => {
+    const ids: string[] = [];
+    const walk = (nodes: TNode[]) => {
+      for (const node of nodes) {
+        if (node.type === "group") {
+          if (!collapsedIds.has(node.group.id)) walk(node.children);
+        } else if (node.type === "project") {
+          if (!collapsedIds.has(worktreeListCollapseId(node.project.id))) {
+            for (const worktree of node.worktrees ?? []) ids.push(worktree.id);
+          }
         }
       }
     };
@@ -847,6 +868,16 @@ export function Sidebar({
     });
   }, [groups]);
 
+  // 自愈清理：worktree 被丢弃/标记缺失/同步覆盖后，裁剪掉多选里已不存在的 id。
+  useEffect(() => {
+    setSelectedWorktreeIds((prev) => {
+      if (prev.size === 0) return prev;
+      const valid = new Set(worktrees.map((worktree) => worktree.id));
+      const next = new Set([...prev].filter((id) => valid.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [worktrees]);
+
   const openProjectExternally = useCallback(async (items: Project[]) => {
     if (items.length === 0) return;
     const launchItems = await Promise.all(items.map(async (project) => {
@@ -1083,17 +1114,80 @@ export function Sidebar({
     }
   }, [t]);
 
-  const handleSelectWorktree = useCallback((worktree: WorktreeRecord) => {
+  const handleSelectWorktree = useCallback((e: ReactMouseEvent, worktree: WorktreeRecord) => {
+    const additive = e.ctrlKey || e.metaKey; // Ctrl(Win/Linux) / Cmd(Mac) 切换单项
+    const rangeSelect = e.shiftKey;          // Shift 连续范围选择（Windows 风格）
+    const anchorId = worktreeSelectionAnchorRef.current;
+    // worktree 多选与项目/文件夹多选互斥
+    setSelectedProjectIds((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedGroupIds((prev) => (prev.size === 0 ? prev : new Set()));
+
+    // Shift 范围选择：从锚点到当前项，按可见顺序取区间
+    if (rangeSelect && anchorId && anchorId !== worktree.id) {
+      const order = visibleWorktreeIds;
+      const from = order.indexOf(anchorId);
+      const to = order.indexOf(worktree.id);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from <= to ? [from, to] : [to, from];
+        const range = order.slice(lo, hi + 1);
+        setSelectedWorktreeIds((prev) => {
+          const next = additive ? new Set(prev) : new Set<string>();
+          range.forEach((id) => next.add(id));
+          return next;
+        });
+        return; // 锚点保持不变，便于以同一锚点继续扩展区间
+      }
+    }
+
+    if (additive) {
+      setSelectedWorktreeIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(worktree.id)) next.delete(worktree.id);
+        else next.add(worktree.id);
+        return next;
+      });
+      worktreeSelectionAnchorRef.current = worktree.id;
+      return;
+    }
+
+    // 普通点击：清空 worktree 多选，回到单选 + 聚焦该 worktree 终端
+    setSelectedWorktreeIds((prev) => (prev.size === 0 ? prev : new Set()));
     setSelectedId(worktree.id);
-    setSelectedProjectIds(new Set());
     selectionAnchorRef.current = worktree.project_id;
+    worktreeSelectionAnchorRef.current = worktree.id;
     if (projectScopedTerminalViewEnabled) {
       onTerminalScopeChange?.({ kind: "worktree", projectId: worktree.project_id, worktreeId: worktree.id });
     }
     if (activateFirstWorktreeSession(worktree.id)) {
       closeHistory();
     }
-  }, [activateFirstWorktreeSession, closeHistory, onTerminalScopeChange, projectScopedTerminalViewEnabled]);
+  }, [activateFirstWorktreeSession, closeHistory, onTerminalScopeChange, projectScopedTerminalViewEnabled, visibleWorktreeIds]);
+
+  const handleToggleWorktreeSelection = useCallback((worktree: WorktreeRecord) => {
+    setSelectedProjectIds((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedGroupIds((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedWorktreeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(worktree.id)) next.delete(worktree.id);
+      else next.add(worktree.id);
+      return next;
+    });
+    worktreeSelectionAnchorRef.current = worktree.id;
+  }, []);
+
+  const handleRequestDiscardSelectedWorktrees = useCallback(() => {
+    const items = Array.from(selectedWorktreeIds)
+      .map((id) => {
+        const worktree = worktrees.find((item) => item.id === id);
+        if (!worktree) return null;
+        const project = projects.find((item) => item.id === worktree.project_id);
+        if (!project) return null;
+        return { project, worktree };
+      })
+      .filter((item): item is { project: Project; worktree: WorktreeRecord } => item !== null);
+    if (items.length === 0) return;
+    setDiscardTargets(items);
+  }, [projects, selectedWorktreeIds, worktrees]);
 
   const handleOpenWorktree = useCallback((project: Project, worktree: WorktreeRecord) => {
     void openWorktreeSession(project, worktree).then(() => maybePromptWorktreeDeps(project, worktree));
@@ -1220,6 +1314,7 @@ export function Sidebar({
     setSelectedId(null);
     setSelectedProjectIds(new Set());
     setSelectedGroupIds(new Set());
+    setSelectedWorktreeIds(new Set());
     selectionAnchorRef.current = groupId;
     onTerminalScopeChange?.({ kind: "group", groupId });
     if (activateFirstGroupSession(groupId)) {
@@ -1232,6 +1327,8 @@ export function Sidebar({
     const additive = e.ctrlKey || e.metaKey; // Ctrl(Win/Linux) / Cmd(Mac) 切换单项
     const rangeSelect = e.shiftKey;          // Shift 连续范围选择（Windows 风格）
     const anchorId = groupSelectionAnchorRef.current;
+    // 文件夹多选与 worktree 多选互斥（与项目多选的互斥在各分支内处理）
+    setSelectedWorktreeIds((prev) => (prev.size === 0 ? prev : new Set()));
 
     // Shift 范围选择：从锚点到当前项，按可见顺序取区间
     if (rangeSelect && anchorId && anchorId !== groupId) {
@@ -1276,6 +1373,7 @@ export function Sidebar({
     setSelectedId(null);
     setSelectedProjectIds(new Set());
     setSelectedGroupIds(new Set());
+    setSelectedWorktreeIds(new Set());
     selectionAnchorRef.current = null;
     onTerminalScopeChange?.(ALL_TERMINALS_SCOPE);
   }, [onTerminalScopeChange]);
@@ -1291,6 +1389,7 @@ export function Sidebar({
 
   const handleToggleGroupSelection = useCallback((groupId: string) => {
     setSelectedProjectIds((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedWorktreeIds((prev) => (prev.size === 0 ? prev : new Set()));
     setSelectedGroupIds((prev) => {
       const next = new Set(prev);
       if (next.has(groupId)) next.delete(groupId);
@@ -1447,6 +1546,7 @@ export function Sidebar({
       selectedId,
       selectedProjectIds,
       selectedGroupIds,
+      selectedWorktreeIds,
       projectScopedTerminalViewEnabled,
       terminalScope,
       newGroupParentId,
@@ -1483,6 +1583,7 @@ export function Sidebar({
       selectedId,
       selectedProjectIds,
       selectedGroupIds,
+      selectedWorktreeIds,
       projectScopedTerminalViewEnabled,
       terminalScope,
       newGroupParentId,
@@ -2005,7 +2106,31 @@ export function Sidebar({
                     {t("sidebar.menu.switchProvider")}
                   </button>
                 )}
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    handleToggleWorktreeSelection(contextMenu.worktree);
+                    setContextMenu(null);
+                  }}
+                >
+                  <Check size={14} strokeWidth={1.5} />
+                  {selectedWorktreeIds.has(contextMenu.worktree.id) ? t("sidebar.menu.deselect") : t("sidebar.menu.addToSelection")}
+                </button>
                 <div className="context-menu-separator" role="separator" />
+                {selectedWorktreeIds.size > 0 && (
+                  <button
+                    className="context-menu-item danger"
+                    role="menuitem"
+                    onClick={() => {
+                      handleRequestDiscardSelectedWorktrees();
+                      setContextMenu(null);
+                    }}
+                  >
+                    <Trash2 size={14} strokeWidth={1.5} />
+                    {t("sidebar.menu.discardSelectedWorktrees", { count: selectedWorktreeIds.size })}
+                  </button>
+                )}
                 <button
                   className="context-menu-item danger"
                   role="menuitem"
@@ -2277,6 +2402,40 @@ export function Sidebar({
           setDiscardTarget(null);
         }}
         onClose={() => setDiscardTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={!!discardTargets}
+        title={t("worktree.discard.batchTitle", { count: discardTargets?.length ?? 0 })}
+        message={t("worktree.discard.batchMessage", { count: discardTargets?.length ?? 0 })}
+        confirmText={t("worktree.discard.confirm")}
+        cancelText={t("common.cancel")}
+        danger
+        onConfirm={() => {
+          const targets = discardTargets;
+          setDiscardTargets(null);
+          if (!targets || targets.length === 0) return;
+          void (async () => {
+            let failed = 0;
+            for (const target of targets) {
+              try {
+                await removeWorktree(target.worktree, true);
+              } catch (err) {
+                failed += 1;
+                logError("Failed to discard worktree", err);
+              }
+            }
+            setSelectedWorktreeIds(new Set());
+            if (failed > 0) {
+              toast.error(t("worktree.toast.discardFailed"), {
+                description: t("worktree.toast.batchDiscardPartial", { failed, total: targets.length }),
+              });
+            } else {
+              toast.success(t("worktree.toast.batchDiscardSuccess", { count: targets.length }));
+            }
+          })();
+        }}
+        onClose={() => setDiscardTargets(null)}
       />
 
       {showAdd && (
