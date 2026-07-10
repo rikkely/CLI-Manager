@@ -6377,8 +6377,9 @@
 }
 
 .ui-file-tree-row[data-selected="true"] {
-  background-color: var(--interactive-selected-bg);
-  color: var(--primary);
+  background-color: color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 26%, transparent);
+  color: var(--term-panel-fg, #ececec);
+  box-shadow: inset 2px 0 0 var(--term-panel-cyan, #5AC8E0);
 }
 
 .ui-file-drag-preview {
