@@ -33,6 +33,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "../ui/dialog";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../ui/context-menu";
+import { Portal } from "../ui/Portal";
 import { ChevronRight, Copy, EyeOff, File, FileCode, Folder, FolderOpen, FolderPlus, Pencil, RefreshCw, Search, Trash2, X } from "../icons";
 import { TERM } from "../stats/termStatsUi";
 
@@ -1536,18 +1537,20 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   return (
     <div ref={setMenuPortalContainer} className="ui-file-explorer-sidebar flex h-full min-h-0 flex-col" style={panelStyle} onKeyDown={handleSidebarKeyDown}>
       {dragPreview && (
-        <div
-          className="ui-file-drag-preview"
-          data-over-terminal={dragPreview.overTerminal ? "true" : undefined}
-          style={{ left: dragPreview.x, top: dragPreview.y, width: dragPreview.source.width }}
-          aria-hidden="true"
-        >
+        <Portal>
           <div
-            className={dragPreview.source.className}
-            style={dragPreview.source.paddingLeft ? { paddingLeft: dragPreview.source.paddingLeft } : undefined}
-            dangerouslySetInnerHTML={{ __html: dragPreview.source.html }}
-          />
-        </div>
+            className="ui-file-drag-preview"
+            data-over-terminal={dragPreview.overTerminal ? "true" : undefined}
+            style={{ left: dragPreview.x, top: dragPreview.y, width: dragPreview.source.width }}
+            aria-hidden="true"
+          >
+            <div
+              className={dragPreview.source.className}
+              style={dragPreview.source.paddingLeft ? { paddingLeft: dragPreview.source.paddingLeft } : undefined}
+              dangerouslySetInnerHTML={{ __html: dragPreview.source.html }}
+            />
+          </div>
+        </Portal>
       )}
       <div className="shrink-0 border-b border-border px-2 py-2">
         <div className="mb-2 flex items-center gap-2">
