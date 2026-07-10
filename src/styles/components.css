@@ -2590,6 +2590,25 @@
   line-height: 1.58;
 }
 
+/* Replay lives inside the terminal side-panel theme, while history Markdown normally
+   reads the app-shell palette. Remap those tokens only for this caller. */
+.ai-replay-transcript {
+  --text-primary: var(--term-panel-fg, #ececec);
+  --text-secondary: color-mix(in srgb, var(--term-panel-fg, #ececec) 82%, var(--term-panel-dim, #9ca0a6) 18%);
+  --text-muted: var(--term-panel-dim, #9ca0a6);
+  --border: var(--term-panel-border, #2e2e2e);
+  --bg-secondary: var(--term-panel-card-inner, #181818);
+  --bg-tertiary: var(--term-panel-card, #121212);
+  --surface-container-low: var(--term-panel-card-inner, #181818);
+  --surface-container-high: var(--term-panel-card, #121212);
+  --primary: var(--term-panel-cyan, #5ac8e0);
+  --accent: var(--term-panel-cyan, #5ac8e0);
+  --success: var(--term-panel-green, #3dd68c);
+  --warning: var(--term-panel-yellow, #e5c453);
+  --interactive-hover-bg: color-mix(in srgb, var(--term-panel-cyan, #5ac8e0) 10%, transparent);
+  color: var(--term-panel-fg, #ececec);
+}
+
 .ui-markdown-p {
   margin: 0 0 0.72rem;
   color: var(--md-text);
